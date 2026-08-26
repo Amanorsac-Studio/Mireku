@@ -8,4 +8,5 @@ testdata/*.jmi.zip
 *.log
 .DS_Store
 apps/signature/build*/
+apps/signature/external/
 .vs/

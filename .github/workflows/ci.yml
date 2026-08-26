@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  format-and-capture:
+    name: jmi-format + Capture (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build jmi-format
+        run: npm run build -w @jm/jmi-format
+      - name: Test jmi-format
+        run: npm run test -w @jm/jmi-format
+      - name: Generate placeholder bundles (quick fixtures)
+        run: npm run generate:quick -w @jm/placeholder-gen
+      - name: Validate fixtures
+        run: node packages/jmi-format/dist/cli.js validate testdata/JM_Placeholder_Rhodes.jmi testdata/JM_Placeholder_MKS.jmi testdata/JM_Placeholder_FM.jmi testdata/JM_Placeholder_Strings.jmi
+      - name: Test Capture
+        run: npm run test -w jm-capture
+      - name: Build Capture
+        run: npm run build -w jm-capture
+      - name: Package Capture installers
+        run: npm run package -w jm-capture
+      - name: Upload Capture artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: jm-capture-${{ matrix.os }}
+          path: |
+            apps/capture/release/*.exe
+            apps/capture/release/*.dmg
+            apps/capture/release/*.zip
+          if-no-files-found: warn
+
+  signature:
+    name: JM Signature (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            preset: release
+          - os: windows-latest
+            preset: release
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build jmi-format + quick fixtures
+        run: |
+          npm run build -w @jm/jmi-format
+          npm run generate:quick -w @jm/placeholder-gen
+      - name: Configure
+        run: cmake -S apps/signature -B apps/signature/build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build apps/signature/build --config Release --parallel
+      - name: Unit tests
+        run: ctest --test-dir apps/signature/build -C Release --output-on-failure
+      - name: pluginval (VST3, strictness 8)
+        shell: bash
+        run: |
+          set -e
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            curl -L -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip
+            unzip -o pluginval.zip
+            PV=./pluginval.exe
+            VST3=$(find apps/signature/build -name "*.vst3" -type d | head -n1)
+          else
+            curl -L -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+            unzip -o pluginval.zip
+            PV="./pluginval.app/Contents/MacOS/pluginval"
+            VST3=$(find apps/signature/build -name "*.vst3" -type d | head -n1)
+          fi
+          "$PV" --strictness-level 8 --validate-in-process --skip-gui-tests --validate "$VST3"
+      - name: Zip plugin artifacts
+        shell: bash
+        run: |
+          mkdir -p dist-plugin
+          cd apps/signature/build
+          for d in $(find . \( -name "*.vst3" -o -name "*.component" \) -type d); do
+            base=$(basename "$d")
+            7z a "../../../dist-plugin/${base}-${RUNNER_OS}.zip" "$d" >/dev/null || zip -r "../../../dist-plugin/${base}-${RUNNER_OS}.zip" "$d"
+          done
+      - name: Upload plugin artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: jm-signature-${{ matrix.os }}
+          path: dist-plugin/*.zip
+          if-no-files-found: warn

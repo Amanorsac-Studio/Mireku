@@ -1,0 +1,11 @@
+node_modules/
+dist/
+build/
+out/
+release/
+testdata/*.jmi/
+testdata/*.jmi.zip
+*.log
+.DS_Store
+apps/signature/build*/
+.vs/

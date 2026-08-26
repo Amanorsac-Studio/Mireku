@@ -1,0 +1,30 @@
+appId: studio.jm.capture
+productName: JM Capture
+directories:
+  output: release
+files:
+  - dist/**
+  - dist-electron/**
+  - package.json
+  - node_modules/@jm/jmi-format/dist/**
+  - node_modules/@jm/jmi-format/schema/**
+  - node_modules/@jm/jmi-format/package.json
+  - node_modules/adm-zip/**
+  - node_modules/ajv/**
+  - node_modules/fast-deep-equal/**
+  - node_modules/json-schema-traverse/**
+  - node_modules/fast-uri/**
+asar: true
+mac:
+  category: public.app-category.music
+  target:
+    - dmg
+    - zip
+  artifactName: JM-Capture-${version}-mac.${ext}
+win:
+  target:
+    - nsis
+  artifactName: JM-Capture-${version}-win.${ext}
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true

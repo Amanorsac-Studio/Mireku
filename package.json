@@ -1,0 +1,17 @@
+{
+  "name": "jm-signature",
+  "private": true,
+  "version": "1.0.0",
+  "description": "JM Signature Sound Library — Capture app, Signature instrument, shared .jmi format",
+  "workspaces": [
+    "packages/*",
+    "apps/capture",
+    "tools/*"
+  ],
+  "scripts": {
+    "build:format": "npm run build -w @jm/jmi-format",
+    "gen:placeholders": "npm run generate -w @jm/placeholder-gen",
+    "test": "npm run test -w @jm/jmi-format && npm run test -w jm-capture",
+    "validate:testdata": "node packages/jmi-format/dist/cli.js validate testdata/*.jmi"
+  }
+}

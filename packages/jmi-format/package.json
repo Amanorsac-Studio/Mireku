@@ -1,0 +1,29 @@
+{
+  "name": "@jm/jmi-format",
+  "version": "1.0.0",
+  "description": ".jmi instrument bundle format — JSON Schema, TypeScript types, validator CLI, C++ header",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "jmi": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "schema",
+    "cpp"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-schema.mjs",
+    "test": "vitest run",
+    "validate": "node dist/cli.js validate"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

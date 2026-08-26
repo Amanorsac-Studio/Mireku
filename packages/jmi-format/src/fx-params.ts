@@ -1,0 +1,233 @@
+/**
+ * Canonical FX rack parameter registry — the single source of truth for
+ * parameter names, ranges, and defaults shared by JM Capture (Web Audio)
+ * and JM Signature (JUCE). Preset JSON written against this registry is
+ * portable between the two apps. Spec §4.
+ */
+
+import type { FxType, FxUnitState, World } from './types.js';
+
+export type ParamKind = 'float' | 'int' | 'enum' | 'bool';
+
+export interface ParamSpec {
+  id: string;
+  label: string;
+  kind: ParamKind;
+  min?: number;
+  max?: number;
+  default: number | string | boolean;
+  /** enum choices when kind === 'enum' */
+  choices?: string[];
+  unit?: string;
+  /** parameter supports host/internal tempo sync */
+  syncable?: boolean;
+  /** log-taper knob (frequencies, times) */
+  log?: boolean;
+}
+
+export interface FxSpec {
+  type: FxType;
+  name: string;
+  params: ParamSpec[];
+}
+
+export const FX_REGISTRY: Record<FxType, FxSpec> = {
+  jmChorus: {
+    type: 'jmChorus',
+    name: 'JM Chorus',
+    params: [
+      { id: 'mode', label: 'Mode', kind: 'enum', choices: ['I', 'II', 'I+II'], default: 'I' },
+      { id: 'rate', label: 'Rate', kind: 'float', min: 0.1, max: 5, default: 0.5, unit: 'Hz', log: true },
+      { id: 'depth', label: 'Depth', kind: 'float', min: 0, max: 100, default: 60 },
+      { id: 'width', label: 'Width', kind: 'float', min: 0, max: 100, default: 80 },
+      { id: 'mix', label: 'Mix', kind: 'float', min: 0, max: 100, default: 50 },
+    ],
+  },
+  tremoloAutoPan: {
+    type: 'tremoloAutoPan',
+    name: 'Tremolo/Auto-Pan',
+    params: [
+      { id: 'rate', label: 'Rate', kind: 'float', min: 0.1, max: 12, default: 4.5, unit: 'Hz', syncable: true, log: true },
+      { id: 'depth', label: 'Depth', kind: 'float', min: 0, max: 100, default: 50 },
+      { id: 'shape', label: 'Shape', kind: 'enum', choices: ['sine', 'tri', 'square'], default: 'sine' },
+      { id: 'spread', label: 'Spread', kind: 'float', min: 0, max: 100, default: 70 },
+    ],
+  },
+  phaser: {
+    type: 'phaser',
+    name: 'Phaser',
+    params: [
+      { id: 'rate', label: 'Rate', kind: 'float', min: 0.05, max: 4, default: 0.3, unit: 'Hz', log: true },
+      { id: 'depth', label: 'Depth', kind: 'float', min: 0, max: 100, default: 60 },
+      { id: 'feedback', label: 'Feedback', kind: 'float', min: 0, max: 90, default: 40 },
+      { id: 'stages', label: 'Stages', kind: 'enum', choices: ['2', '4', '6'], default: '4' },
+    ],
+  },
+  flanger: {
+    type: 'flanger',
+    name: 'Flanger',
+    params: [
+      { id: 'rate', label: 'Rate', kind: 'float', min: 0.05, max: 2, default: 0.2, unit: 'Hz', log: true },
+      { id: 'depth', label: 'Depth', kind: 'float', min: 0, max: 100, default: 50 },
+      { id: 'feedback', label: 'Feedback', kind: 'float', min: -90, max: 90, default: 30 },
+      { id: 'manual', label: 'Manual', kind: 'float', min: 0.1, max: 10, default: 2, unit: 'ms', log: true },
+    ],
+  },
+  epPreamp: {
+    type: 'epPreamp',
+    name: 'EP Preamp/Drive',
+    params: [
+      { id: 'drive', label: 'Drive', kind: 'float', min: 0, max: 100, default: 20 },
+      { id: 'tone', label: 'Tone', kind: 'float', min: -100, max: 100, default: 0 },
+      { id: 'output', label: 'Output', kind: 'float', min: -24, max: 12, default: 0, unit: 'dB' },
+    ],
+  },
+  vintageEq: {
+    type: 'vintageEq',
+    name: 'Vintage EQ',
+    params: [
+      { id: 'bass', label: 'Bass', kind: 'float', min: -15, max: 15, default: 0, unit: 'dB' },
+      { id: 'midFreq', label: 'Mid Freq', kind: 'float', min: 200, max: 5000, default: 1000, unit: 'Hz', log: true },
+      { id: 'midGain', label: 'Mid Gain', kind: 'float', min: -15, max: 15, default: 0, unit: 'dB' },
+      { id: 'treble', label: 'Treble', kind: 'float', min: -15, max: 15, default: 0, unit: 'dB' },
+      { id: 'lowCut', label: 'Low Cut', kind: 'enum', choices: ['off', '40', '80', '120'], default: 'off' },
+    ],
+  },
+  compressor: {
+    type: 'compressor',
+    name: 'Compressor',
+    params: [
+      { id: 'amount', label: 'Amount', kind: 'float', min: 0, max: 100, default: 30 },
+      { id: 'attack', label: 'Attack', kind: 'float', min: 1, max: 100, default: 15, unit: 'ms', log: true },
+      { id: 'release', label: 'Release', kind: 'float', min: 30, max: 800, default: 200, unit: 'ms', log: true },
+    ],
+  },
+  tapeDelay: {
+    type: 'tapeDelay',
+    name: 'Tape Delay',
+    params: [
+      { id: 'time', label: 'Time', kind: 'float', min: 20, max: 1500, default: 375, unit: 'ms', syncable: true, log: true },
+      { id: 'sync', label: 'Sync', kind: 'bool', default: true },
+      { id: 'syncDivision', label: 'Division', kind: 'enum', choices: ['1/32', '1/16', '3/32', '1/8', '3/16', '1/4', '1/4d', '1/2'], default: '3/16' },
+      { id: 'feedback', label: 'Feedback', kind: 'float', min: 0, max: 90, default: 35 },
+      { id: 'tone', label: 'Tone', kind: 'float', min: 1000, max: 12000, default: 5000, unit: 'Hz', log: true },
+      { id: 'wowFlutter', label: 'Wow/Flutter', kind: 'float', min: 0, max: 100, default: 25 },
+      { id: 'pingpong', label: 'Ping-Pong', kind: 'bool', default: false },
+      { id: 'mix', label: 'Mix', kind: 'float', min: 0, max: 100, default: 25 },
+    ],
+  },
+  digitalDelay: {
+    type: 'digitalDelay',
+    name: 'Digital Delay',
+    params: [
+      { id: 'timeL', label: 'Time L', kind: 'float', min: 20, max: 2000, default: 500, unit: 'ms', syncable: true, log: true },
+      { id: 'timeR', label: 'Time R', kind: 'float', min: 20, max: 2000, default: 750, unit: 'ms', syncable: true, log: true },
+      { id: 'sync', label: 'Sync', kind: 'bool', default: true },
+      { id: 'syncDivisionL', label: 'Div L', kind: 'enum', choices: ['1/32', '1/16', '3/32', '1/8', '3/16', '1/4', '1/4d', '1/2'], default: '1/4' },
+      { id: 'syncDivisionR', label: 'Div R', kind: 'enum', choices: ['1/32', '1/16', '3/32', '1/8', '3/16', '1/4', '1/4d', '1/2'], default: '1/4d' },
+      { id: 'feedback', label: 'Feedback', kind: 'float', min: 0, max: 90, default: 30 },
+      { id: 'filterHp', label: 'HP', kind: 'float', min: 20, max: 500, default: 20, unit: 'Hz', log: true },
+      { id: 'filterLp', label: 'LP', kind: 'float', min: 2000, max: 20000, default: 20000, unit: 'Hz', log: true },
+      { id: 'mix', label: 'Mix', kind: 'float', min: 0, max: 100, default: 20 },
+    ],
+  },
+  plateReverb: {
+    type: 'plateReverb',
+    name: 'Plate Reverb',
+    params: [
+      { id: 'size', label: 'Size', kind: 'float', min: 0, max: 100, default: 50 },
+      { id: 'decay', label: 'Decay', kind: 'float', min: 0.3, max: 8, default: 2.2, unit: 's', log: true },
+      { id: 'predelay', label: 'Pre-Delay', kind: 'float', min: 0, max: 200, default: 20, unit: 'ms' },
+      { id: 'damp', label: 'Damp', kind: 'float', min: 0, max: 100, default: 40 },
+      { id: 'mix', label: 'Mix', kind: 'float', min: 0, max: 100, default: 25 },
+    ],
+  },
+  hallShimmer: {
+    type: 'hallShimmer',
+    name: 'Hall/Shimmer',
+    params: [
+      { id: 'size', label: 'Size', kind: 'float', min: 0, max: 100, default: 70 },
+      { id: 'decay', label: 'Decay', kind: 'float', min: 0.5, max: 20, default: 4, unit: 's', log: true },
+      { id: 'shimmer', label: 'Shimmer', kind: 'float', min: 0, max: 100, default: 0 },
+      { id: 'mod', label: 'Mod', kind: 'float', min: 0, max: 100, default: 30 },
+      { id: 'mix', label: 'Mix', kind: 'float', min: 0, max: 100, default: 25 },
+    ],
+  },
+  widener: {
+    type: 'widener',
+    name: 'Widener/Ensemble',
+    params: [
+      { id: 'width', label: 'Width', kind: 'float', min: 0, max: 200, default: 120 },
+      { id: 'ensemble', label: 'Ensemble', kind: 'float', min: 0, max: 100, default: 0 },
+    ],
+  },
+};
+
+/** Default FX racks per world, spec §4 footer. */
+export const DEFAULT_RACKS: Record<World, FxType[]> = {
+  'rhodes-ep': ['epPreamp', 'tremoloAutoPan', 'phaser', 'tapeDelay', 'plateReverb'],
+  mks: ['jmChorus', 'vintageEq', 'widener', 'hallShimmer'],
+  fm: ['compressor', 'jmChorus', 'digitalDelay', 'plateReverb'],
+  strings: ['widener', 'vintageEq', 'hallShimmer'],
+};
+
+/** World-specific overrides applied on top of registry defaults for default racks. */
+const DEFAULT_RACK_OVERRIDES: Record<World, Partial<Record<FxType, Record<string, number | string | boolean>>>> = {
+  'rhodes-ep': {},
+  mks: {},
+  fm: {},
+  strings: { hallShimmer: { shimmer: 30 } },
+};
+
+export function defaultParams(type: FxType): Record<string, number | string | boolean> {
+  const out: Record<string, number | string | boolean> = {};
+  for (const p of FX_REGISTRY[type].params) out[p.id] = p.default;
+  return out;
+}
+
+export function buildDefaultRack(world: World): FxUnitState[] {
+  return DEFAULT_RACKS[world].map((type) => ({
+    type,
+    bypassed: false,
+    params: { ...defaultParams(type), ...(DEFAULT_RACK_OVERRIDES[world][type] ?? {}) },
+  }));
+}
+
+/** Model-page engine control ids per world, spec §5.2 (normalized 0..100 unless enum). */
+export const WORLD_ENGINE_CONTROLS: Record<World, ParamSpec[]> = {
+  'rhodes-ep': [
+    { id: 'bark', label: 'Bark', kind: 'float', min: 0, max: 100, default: 30 },
+    { id: 'tine', label: 'Tine', kind: 'float', min: 0, max: 100, default: 50 },
+    { id: 'body', label: 'Body', kind: 'float', min: 0, max: 100, default: 50 },
+    { id: 'tremolo', label: 'Tremolo', kind: 'float', min: 0, max: 100, default: 40 },
+    { id: 'space', label: 'Space', kind: 'float', min: 0, max: 100, default: 30 },
+  ],
+  mks: [
+    { id: 'chorusMode', label: 'Chorus Mode', kind: 'enum', choices: ['I', 'II', 'I+II'], default: 'I' },
+    { id: 'chorusDepth', label: 'Chorus Depth', kind: 'float', min: 0, max: 100, default: 60 },
+    { id: 'width', label: 'Width', kind: 'float', min: 0, max: 100, default: 60 },
+    { id: 'ensemble', label: 'Ensemble', kind: 'float', min: 0, max: 100, default: 30 },
+    { id: 'warmth', label: 'Warmth', kind: 'float', min: 0, max: 100, default: 40 },
+    { id: 'air', label: 'Air', kind: 'float', min: 0, max: 100, default: 30 },
+  ],
+  fm: [
+    { id: 'brightness', label: 'Brightness', kind: 'float', min: 0, max: 100, default: 60 },
+    { id: 'attack', label: 'Attack', kind: 'float', min: 0, max: 100, default: 20 },
+    { id: 'glass', label: 'Glass', kind: 'float', min: 0, max: 100, default: 40 },
+    { id: 'chorusDepth', label: 'Chorus Depth', kind: 'float', min: 0, max: 100, default: 40 },
+    { id: 'echo', label: 'Echo', kind: 'float', min: 0, max: 100, default: 25 },
+  ],
+  strings: [
+    { id: 'swell', label: 'Swell', kind: 'float', min: 0, max: 100, default: 30 },
+    { id: 'ensemble', label: 'Ensemble', kind: 'float', min: 0, max: 100, default: 50 },
+    { id: 'shimmer', label: 'Shimmer', kind: 'float', min: 0, max: 100, default: 20 },
+    { id: 'warmth', label: 'Warmth', kind: 'float', min: 0, max: 100, default: 40 },
+    { id: 'motion', label: 'Motion', kind: 'float', min: 0, max: 100, default: 30 },
+  ],
+};
+
+export function defaultEngineParams(world: World): Record<string, number | string | boolean> {
+  const out: Record<string, number | string | boolean> = {};
+  for (const p of WORLD_ENGINE_CONTROLS[world]) out[p.id] = p.default;
+  return out;
+}

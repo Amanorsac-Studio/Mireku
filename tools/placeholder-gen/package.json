@@ -1,0 +1,14 @@
+{
+  "name": "@jm/placeholder-gen",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Synthesizes the 4 placeholder .jmi bundles (honest stand-ins, one per world)",
+  "scripts": {
+    "generate": "node src/generate.mjs",
+    "generate:quick": "node src/generate.mjs --quick"
+  },
+  "dependencies": {
+    "@jm/jmi-format": "*"
+  }
+}

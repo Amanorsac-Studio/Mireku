@@ -2,6 +2,10 @@
 
 Log of choices made where the spec left room for interpretation, per the brief's instruction.
 
+App-level logs (kept next to this file, same format):
+- **[DECISIONS-capture.md](DECISIONS-capture.md)** — 17 entries: React choice, renderer-captures/main-writes IPC split, midpoint key-range fill generalization, ±3 dB guided peak rule, smart-RR handling, mono fold at export, Freeverb-class reverbs + shimmer worklet, compressor macro mapping, Auto Mode testing seam, browser-safe `/web` imports, ESM main.
+- **[DECISIONS-signature.md](DECISIONS-signature.md)** — JUCE 8.0.15 pin, attack-preload/tail-streaming design + 640 MB cache, testdata dev fallback, voice stealing order, block-start MIDI timing, model-page↔slot binding rule, learned-CC message-thread router vs RT pre-maps, host parameter surface, pluginval first-run flake note.
+
 ## Repo / tooling
 
 - **Repo root is `C:\JM VST`** (the working directory given), laid out exactly as §1's `jm-signature/` tree. The folder name differs; the structure does not.

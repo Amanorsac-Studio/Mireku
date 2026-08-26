@@ -5,7 +5,7 @@
  * Trim leading silence keeping a 5 ms pre-attack pad; fade out last 20 ms.
  */
 
-import { dbToLin, mixToMono } from './level.js';
+import { dbToLin, mixToMono } from './level';
 
 export const SILENCE_THRESHOLD_DB = -60;
 export const SILENCE_HOLD_MS = 500;

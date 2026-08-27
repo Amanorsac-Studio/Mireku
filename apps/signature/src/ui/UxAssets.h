@@ -50,16 +50,18 @@ inline std::unique_ptr<juce::Drawable> parseSvgTinted (const char* data, int siz
     return nullptr;
 }
 
-enum class Mark { crossKnot = 0, fourPetal, spiralUnity, starWeave, tripleRing };
-inline std::unique_ptr<juce::Drawable> makeMark (Mark m, juce::Colour tint)
+// JM engraved motif family (UX pack V2 tokens.symbolPolicy): original geometric
+// engravings — never identified as, or named after, traditional symbols.
+enum class Motif { flow = 0, petal, knot, orbit, weave };
+inline std::unique_ptr<juce::Drawable> makeMotif (Motif m, juce::Colour tint)
 {
     switch (m)
     {
-        case Mark::crossKnot:  return parseSvgTinted (JMAssets::adinkramarkcrossknot_svg, JMAssets::adinkramarkcrossknot_svgSize, tint);
-        case Mark::fourPetal:  return parseSvgTinted (JMAssets::adinkramarkfourpetal_svg, JMAssets::adinkramarkfourpetal_svgSize, tint);
-        case Mark::spiralUnity:return parseSvgTinted (JMAssets::adinkramarkspiralunity_svg, JMAssets::adinkramarkspiralunity_svgSize, tint);
-        case Mark::starWeave:  return parseSvgTinted (JMAssets::adinkramarkstarweave_svg, JMAssets::adinkramarkstarweave_svgSize, tint);
-        default:               return parseSvgTinted (JMAssets::adinkramarktriplering_svg, JMAssets::adinkramarktriplering_svgSize, tint);
+        case Motif::flow:  return parseSvgTinted (JMAssets::engravedmarkflow_svg, JMAssets::engravedmarkflow_svgSize, tint);
+        case Motif::petal: return parseSvgTinted (JMAssets::engravedmarkpetal_svg, JMAssets::engravedmarkpetal_svgSize, tint);
+        case Motif::knot:  return parseSvgTinted (JMAssets::engravedmarkknot_svg, JMAssets::engravedmarkknot_svgSize, tint);
+        case Motif::orbit: return parseSvgTinted (JMAssets::engravedmarkorbit_svg, JMAssets::engravedmarkorbit_svgSize, tint);
+        default:           return parseSvgTinted (JMAssets::engravedmarkweave_svg, JMAssets::engravedmarkweave_svgSize, tint);
     }
 }
 
@@ -105,6 +107,122 @@ inline void drawCover (juce::Graphics& g, const juce::Image& img, juce::Rectangl
     g.setOpacity (alpha);
     g.drawImageTransformed (img, t);
     g.setOpacity (1.0f);
+}
+
+//====================================================== V2 graded backdrop
+/// Kente raster pre-graded per V2 tokens.materials.kenteBackdrop
+/// (saturation 1.18, contrast 1.16, brightness 0.74). Computed once, cached.
+inline const juce::Image& kenteGraded (int world)
+{
+    static juce::Image cache[4];
+    world = juce::jlimit (0, 3, world);
+    if (! cache[world].isValid())
+    {
+        auto src = kenteRaster (world);
+        if (! src.isValid()) return cache[world];
+        juce::Image img = src.convertedToFormat (juce::Image::ARGB);
+        juce::Image::BitmapData bd (img, juce::Image::BitmapData::readWrite);
+        auto grade = [] (float v, float grey)
+        {
+            v = grey + (v - grey) * Theme::V2::backdropSat;              // saturation
+            v = 0.5f + (v - 0.5f) * Theme::V2::backdropCon;              // contrast
+            v *= Theme::V2::backdropBri;                                 // brightness
+            return juce::jlimit (0.0f, 1.0f, v);
+        };
+        for (int y = 0; y < bd.height; ++y)
+            for (int x = 0; x < bd.width; ++x)
+            {
+                auto c = bd.getPixelColour (x, y);
+                const float r = c.getFloatRed(), g = c.getFloatGreen(), b = c.getFloatBlue();
+                const float grey = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+                bd.setPixelColour (x, y, juce::Colour::fromFloatRGBA (grade (r, grey), grade (g, grey), grade (b, grey), 1.0f));
+            }
+        cache[world] = img;
+    }
+    return cache[world];
+}
+
+/// Full V2 world backdrop, transcribed from assets/surfaces/{world}-backdrop-v2.svg:
+/// graded kente cover (opacity .92) + radial vignette (0@.35 -> .7 black) +
+/// recessed control surface (#080604 @.93, #8A5B17 2px, inner #E3A92B @.22).
+/// `area` is the content rect (16,74,968,630); surface coords are relative to it.
+inline void drawWorldBackdropV2 (juce::Graphics& g, juce::Rectangle<float> area, int world)
+{
+    juce::Path clip;
+    clip.addRoundedRectangle (area, (float) Theme::V2::contentR);
+    juce::Graphics::ScopedSaveState ss (g);
+    g.reduceClipRegion (clip);
+    g.setColour (Theme::chassis);
+    g.fillRect (area);
+    auto& img = kenteGraded (world);
+    if (img.isValid())
+        drawCover (g, img, area, Theme::V2::backdropOpacity);
+    else
+        KenteTexture::fill (g, area, KenteTexture::Style::Weave, Theme::worldAccent (world), 0.8f,
+                            (float) Theme::V2::contentR, world);
+    // vignette
+    juce::ColourGradient vig (juce::Colours::transparentBlack, area.getCentreX(), area.getCentreY(),
+                              juce::Colours::black.withAlpha (0.7f), area.getX(), area.getY(), true);
+    vig.addColour (0.35, juce::Colours::transparentBlack);
+    g.setGradientFill (vig);
+    g.fillRect (area);
+    // recessed control surface (174,76,652,454 rx14 in backdrop space)
+    auto surf = juce::Rectangle<float> (area.getX() + 174.0f, area.getY() + 76.0f, 652.0f, 454.0f);
+    g.setColour (juce::Colour (0xff080604).withAlpha (0.93f));
+    g.fillRoundedRectangle (surf, 14.0f);
+    g.setColour (juce::Colour (0xff8A5B17));
+    g.drawRoundedRectangle (surf, 14.0f, 2.0f);
+    g.setColour (juce::Colour (0xffE3A92B).withAlpha (0.22f));
+    g.drawRoundedRectangle (surf.reduced (10.0f), 10.0f, 1.0f);
+}
+
+/// V2 fx faceplate microtexture tile (transcribed from fx-module-*-v2.svg
+/// <pattern>: 24px, rotated 45deg, gold weft bars + dark warp lines).
+inline const juce::Image& fxMicroTile()
+{
+    static juce::Image tile = []
+    {
+        juce::Image img (juce::Image::ARGB, 34, 34, true);   // 24px pattern drawn rotated
+        juce::Graphics g (img);
+        g.addTransform (juce::AffineTransform::rotation (juce::MathConstants<float>::pi * 0.25f, 17.0f, 17.0f));
+        g.setColour (juce::Colour (0xffF6C65C).withAlpha (0.16f));
+        for (int y = -34; y < 68; y += 24) { g.fillRect (-34, y, 136, 8); g.fillRect (-34, y + 16, 136, 4); }
+        g.setColour (juce::Colour (0xff111111).withAlpha (0.28f));
+        for (int x = -34; x < 68; x += 24) { g.fillRect (x + 8, -34, 3, 136); g.fillRect (x + 16, -34, 3, 136); }
+        return img;
+    }();
+    return tile;
+}
+
+/// V2 FX module faceplate (fx-module-*-v2.svg): #050505 outer w/ 8px #090909
+/// frame, color->#120D08 plate w/ gold .42 stroke, visible kente microtexture,
+/// inner #FFE08A .2 line. (soft-light approximated with low-alpha normal blend.)
+inline void drawFxModuleFrameV2 (juce::Graphics& g, juce::Rectangle<float> area, juce::Colour top,
+                                 bool goldOverlay = false)
+{
+    g.setColour (juce::Colour (0xff050505));
+    g.fillRoundedRectangle (area, 8.0f);
+    g.setColour (juce::Colour (0xff090909));
+    g.drawRoundedRectangle (area.reduced (3.0f), 7.0f, 6.0f);
+    auto plate = area.reduced (6.0f);
+    juce::ColourGradient grad (top, plate.getX(), plate.getY(),
+                               juce::Colour (0xff120D08), plate.getX(), plate.getBottom(), false);
+    g.setGradientFill (grad);
+    g.fillRoundedRectangle (plate, 5.0f);
+    if (goldOverlay)
+    {
+        g.setColour (Theme::gold.withAlpha (0.25f));
+        g.fillRoundedRectangle (plate, 5.0f);
+    }
+    {   // kente microtexture — intentionally visible (tokens.materials.fxKenteMicrotexture)
+        juce::Graphics::ScopedSaveState ss (g);
+        g.setTiledImageFill (fxMicroTile(), 0, 0, Theme::V2::fxMicroOpacity);
+        g.fillRoundedRectangle (plate, 5.0f);
+    }
+    g.setColour (Theme::gold.withAlpha (0.42f));
+    g.drawRoundedRectangle (plate, 5.0f, 1.0f);
+    g.setColour (juce::Colour (0xffFFE08A).withAlpha (0.2f));
+    g.drawRoundedRectangle (plate.reduced (8.0f), 3.0f, 1.0f);
 }
 
 //===================================================== world panel backdrop

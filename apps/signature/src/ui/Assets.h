@@ -1,8 +1,7 @@
-// Assets.h — client UX asset pack (docs/jm-design-reference/kente/assets/*.svg)
-// embedded as inline string constants and loaded via juce::Drawable::createFromSVG.
+// Assets.h — interim icon set (docs/jm-design-reference/kente/assets/*.svg)
+// kept for icons the V2 pack ships no counterpart for (search, filter, ...).
 // Icons ship with a gold #D9A648 stroke; they are retinted programmatically so
-// Theme.h stays the single colour source. The knob engraving is a swappable
-// asset (client will deliver more adinkra symbols).
+// Theme.h stays the single colour source.
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "../Theme.h"
@@ -29,34 +28,6 @@ inline const char* iconSvg (Icon ic)
     }
 }
 
-// client logo.svg (kept verbatim incl. its own gold gradient)
-inline const char* logoSvg()
-{
-    return R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 120" width="100" height="120">
-  <defs><linearGradient id="gold-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#F2D06B"/><stop offset="45%" stop-color="#D9A648"/><stop offset="100%" stop-color="#8C6222"/>
-  </linearGradient></defs>
-  <path d="M50 4 L94 20 L94 65 C94 95 50 116 50 116 C50 116 6 95 6 65 L6 20 Z" fill="none" stroke="url(#gold-grad)" stroke-width="3"/>
-  <path d="M50 12 L86 25 L86 63 C86 87 50 105 50 105 C50 105 14 87 14 63 L14 25 Z" fill="none" stroke="url(#gold-grad)" stroke-width="1.5" stroke-dasharray="4 2"/>
-  <text x="50" y="72" font-family="Times New Roman, serif" font-weight="bold" font-size="42" letter-spacing="-2" fill="url(#gold-grad)" text-anchor="middle">JM</text>
-</svg>)svg";
-}
-
-// client adinkra-symbol.svg — the current knob engraving. Swappable: the client
-// will deliver more symbols; assign per-control by replacing/extending this.
-inline juce::String& knobEngravingSvg()
-{
-    static juce::String svg = R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
-  <g stroke="#D9A648" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M50 45 C50 45 35 20 50 15 C65 10 70 25 50 45 Z"/>
-    <path d="M50 55 C50 55 65 80 50 85 C35 90 30 75 50 55 Z"/>
-    <path d="M45 50 C45 50 20 65 15 50 C10 35 25 30 45 50 Z"/>
-    <path d="M55 50 C55 50 80 35 85 50 C90 65 75 70 55 50 Z"/>
-    <circle cx="50" cy="50" r="4" fill="#D9A648"/>
-  </g>
-</svg>)svg";
-    return svg;
-}
 
 //==============================================================================
 inline std::unique_ptr<juce::Drawable> drawableFromSvg (const juce::String& svg)
@@ -77,12 +48,7 @@ inline std::unique_ptr<juce::Drawable> makeIcon (Icon ic, juce::Colour tint = Th
     return makeTinted (iconSvg (ic), tint);
 }
 
-inline std::unique_ptr<juce::Drawable> makeLogo() { return drawableFromSvg (logoSvg()); }
 
-inline std::unique_ptr<juce::Drawable> makeEngraving (juce::Colour tint)
-{
-    return makeTinted (knobEngravingSvg(), tint);
-}
 
 /// Icon button with normal/over/down tints from Theme.
 inline std::unique_ptr<juce::DrawableButton> makeIconButton (const juce::String& name, Icon ic,

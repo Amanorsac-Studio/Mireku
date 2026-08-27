@@ -1,0 +1,221 @@
+{
+  "schemaVersion": 2,
+  "viewport": {
+    "reference": {
+      "width": 1000,
+      "height": 720,
+      "aspectRatio": "25:18"
+    },
+    "minimum": {
+      "width": 750,
+      "height": 540
+    },
+    "maximum": {
+      "width": 2000,
+      "height": 1440
+    },
+    "scaleMode": "uniform-contain",
+    "letterbox": "chassis",
+    "breakpoints": []
+  },
+  "header": {
+    "x": 16,
+    "y": 12,
+    "width": 968,
+    "height": 52,
+    "brandWidth": 230,
+    "nav": {
+      "x": 270,
+      "y": 18,
+      "width": 462,
+      "height": 40,
+      "itemWidth": 92
+    },
+    "master": {
+      "x": 760,
+      "y": 18,
+      "width": 208,
+      "height": 40
+    }
+  },
+  "content": {
+    "x": 16,
+    "y": 74,
+    "width": 968,
+    "height": 630,
+    "outerPadding": 10,
+    "radius": 8
+  },
+  "model": {
+    "titleY": 96,
+    "controlSurface": {
+      "x": 190,
+      "y": 150,
+      "width": 620,
+      "height": 430,
+      "radius": 12
+    },
+    "knob": {
+      "diameter": 112,
+      "topCenters": [
+        [
+          340,
+          284
+        ],
+        [
+          500,
+          284
+        ],
+        [
+          660,
+          284
+        ]
+      ],
+      "bottomCenters": [
+        [
+          420,
+          456
+        ],
+        [
+          580,
+          456
+        ]
+      ],
+      "labelOffsetY": -74,
+      "valueOffsetY": 68
+    },
+    "sixKnob": {
+      "diameter": 96,
+      "centers": [
+        [
+          320,
+          270
+        ],
+        [
+          500,
+          270
+        ],
+        [
+          680,
+          270
+        ],
+        [
+          320,
+          445
+        ],
+        [
+          500,
+          445
+        ],
+        [
+          680,
+          445
+        ]
+      ]
+    },
+    "output": {
+      "x": 830,
+      "y": 185,
+      "width": 54,
+      "height": 330
+    }
+  },
+  "perform": {
+    "slotGrid": {
+      "x": 94,
+      "y": 116,
+      "columnWidth": 390,
+      "rowHeight": 132,
+      "columnGap": 28,
+      "rowGap": 16
+    },
+    "mode": {
+      "x": 236,
+      "y": 412,
+      "width": 184,
+      "height": 46
+    },
+    "transpose": {
+      "x": 480,
+      "y": 395,
+      "width": 284,
+      "height": 78
+    },
+    "macros": {
+      "diameter": 116,
+      "centers": [
+        [
+          230,
+          594
+        ],
+        [
+          410,
+          594
+        ],
+        [
+          590,
+          594
+        ],
+        [
+          770,
+          594
+        ]
+      ]
+    }
+  },
+  "materials": {
+    "kenteBackdrop": {
+      "opacity": 0.92,
+      "saturation": 1.18,
+      "contrast": 1.16,
+      "brightness": 0.74,
+      "blend": "normal"
+    },
+    "backdropVignette": {
+      "opacity": 0.46,
+      "blend": "multiply"
+    },
+    "controlSurface": {
+      "fill": "#0C0906",
+      "opacity": 0.94,
+      "stroke": "#7A531A",
+      "strokeWidth": 2,
+      "innerShadow": "0 8 24 rgba(0,0,0,.72)"
+    },
+    "fxKenteMicrotexture": {
+      "opacity": 0.18,
+      "blend": "soft-light",
+      "scale": 0.32
+    }
+  },
+  "zOrder": [
+    "chassis",
+    "world-kente-backdrop",
+    "backdrop-vignette",
+    "recessed-control-surface",
+    "hardware-shadows",
+    "hardware",
+    "labels-values",
+    "interaction-focus"
+  ],
+  "colors": {
+    "bg": "#050505",
+    "chassis": "#090908",
+    "panel": "#100E0B",
+    "panelDeep": "#080706",
+    "gold": "#D9A648",
+    "goldBright": "#FFD77A",
+    "goldHot": "#FFB11B",
+    "goldDark": "#6B4612",
+    "cream": "#F4EAD5",
+    "muted": "#A59A87",
+    "rhodes": "#E66F17",
+    "mks": "#A9D62E",
+    "fm": "#39B8FF",
+    "strings": "#D85CE8"
+  },
+  "symbolPolicy": {
+    "name": "JM engraved motif family",
+    "claim": "Original geometric engravings; not identified or marketed as authentic Adinkra symbols."
+  }
+}

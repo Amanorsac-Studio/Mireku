@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+<title>JM primary knob</title><desc>96px primary rotary. Rotate the indicator group from -135deg to +135deg around 48,48.</desc>
+<defs><radialGradient id="face"><stop stop-color="#2A2925"/><stop offset=".55" stop-color="#11110F"/><stop offset="1" stop-color="#050505"/></radialGradient>
+<linearGradient id="gold" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#FFF0A6"/><stop offset=".35" stop-color="#F3C868"/><stop offset=".7" stop-color="#D9A648"/><stop offset="1" stop-color="#7B551A"/></linearGradient>
+<filter id="glow"><feGaussianBlur stdDeviation="2.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
+<circle cx="48" cy="48" r="44" fill="#070707" stroke="#2B2418" stroke-width="2"/>
+<path d="M18.3 79.7 A42 42 0 1 1 77.7 79.7" fill="none" stroke="#4F3A16" stroke-width="3" stroke-linecap="round"/>
+<path d="M18.3 79.7 A42 42 0 0 1 20.5 18" fill="none" stroke="#D9A648" stroke-width="3" stroke-linecap="round" filter="url(#glow)"/>
+<circle cx="48" cy="48" r="34" fill="url(#gold)"/><circle cx="48" cy="48" r="29" fill="url(#face)" stroke="#050505" stroke-width="2"/>
+<g id="indicator" transform="rotate(0 48 48)"><rect x="46.75" y="16" width="2.5" height="15" rx="1.25" fill="#F3C868"/></g>
+<circle cx="48" cy="48" r="18" fill="#0A0A09" stroke="#5B431B"/>
+</svg>

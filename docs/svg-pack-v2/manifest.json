@@ -1,0 +1,271 @@
+{
+  "package": "JM-SIGNATURE-SVG-PACK-V2",
+  "version": "2.0.0",
+  "sourceOfTruth": [
+    "CLAUDE-IMPLEMENTATION-V2.md",
+    "tokens/design-tokens.json",
+    "specs/screen-layouts.json",
+    "manifest.json"
+  ],
+  "referenceViewport": {
+    "width": 1000,
+    "height": 720,
+    "aspectRatio": "25:18"
+  },
+  "functionalAuthority": "reference/JM-BUILD-SPEC.md",
+  "worlds": {
+    "rhodes": {
+      "asset": "assets/screens/rhodes-model-layout.svg",
+      "backdrop": "assets/surfaces/rhodes-backdrop-v2.svg",
+      "controls": [
+        "BARK",
+        "TINE",
+        "BODY",
+        "TREMOLO",
+        "SPACE"
+      ],
+      "controlCenters": [
+        [
+          340,
+          284
+        ],
+        [
+          500,
+          284
+        ],
+        [
+          660,
+          284
+        ],
+        [
+          420,
+          456
+        ],
+        [
+          580,
+          456
+        ]
+      ],
+      "knobDiameter": 112,
+      "visibleStatusIndicators": [],
+      "prohibitedVisibleLabels": [
+        "DECAYING"
+      ]
+    },
+    "mks": {
+      "asset": "assets/screens/mks-model-layout.svg",
+      "backdrop": "assets/surfaces/mks-backdrop-v2.svg",
+      "controls": [
+        "CHORUS MODE",
+        "DEPTH",
+        "WIDTH",
+        "ENSEMBLE",
+        "WARMTH",
+        "AIR"
+      ],
+      "controlCenters": [
+        [
+          320,
+          270
+        ],
+        [
+          500,
+          270
+        ],
+        [
+          680,
+          270
+        ],
+        [
+          320,
+          445
+        ],
+        [
+          500,
+          445
+        ],
+        [
+          680,
+          445
+        ]
+      ],
+      "knobDiameter": 96,
+      "visibleStatusIndicators": [],
+      "prohibitedVisibleLabels": [
+        "DECAYING"
+      ]
+    },
+    "fm": {
+      "asset": "assets/screens/fm-model-layout.svg",
+      "backdrop": "assets/surfaces/fm-backdrop-v2.svg",
+      "controls": [
+        "BRIGHTNESS",
+        "ATTACK",
+        "GLASS",
+        "CHORUS",
+        "ECHO"
+      ],
+      "controlCenters": [
+        [
+          340,
+          284
+        ],
+        [
+          500,
+          284
+        ],
+        [
+          660,
+          284
+        ],
+        [
+          420,
+          456
+        ],
+        [
+          580,
+          456
+        ]
+      ],
+      "knobDiameter": 112,
+      "visibleStatusIndicators": [],
+      "prohibitedVisibleLabels": [
+        "DECAYING"
+      ]
+    },
+    "strings": {
+      "asset": "assets/screens/strings-model-layout.svg",
+      "backdrop": "assets/surfaces/strings-backdrop-v2.svg",
+      "controls": [
+        "SWELL",
+        "ENSEMBLE",
+        "SHIMMER",
+        "WARMTH",
+        "MOTION"
+      ],
+      "controlCenters": [
+        [
+          340,
+          284
+        ],
+        [
+          500,
+          284
+        ],
+        [
+          660,
+          284
+        ],
+        [
+          420,
+          456
+        ],
+        [
+          580,
+          456
+        ]
+      ],
+      "knobDiameter": 112,
+      "visibleStatusIndicators": [],
+      "prohibitedVisibleLabels": [
+        "DECAYING"
+      ]
+    },
+    "perform": {
+      "asset": "assets/screens/perform-layout.svg",
+      "slots": [
+        {
+          "id": "A",
+          "world": "rhodes",
+          "x": 94,
+          "y": 116
+        },
+        {
+          "id": "B",
+          "world": "mks",
+          "x": 512,
+          "y": 116
+        },
+        {
+          "id": "C",
+          "world": "fm",
+          "x": 94,
+          "y": 264
+        },
+        {
+          "id": "D",
+          "world": "strings",
+          "x": 512,
+          "y": 264
+        }
+      ],
+      "slotSize": [
+        390,
+        132
+      ],
+      "macroCenters": [
+        [
+          230,
+          594
+        ],
+        [
+          410,
+          594
+        ],
+        [
+          590,
+          594
+        ],
+        [
+          770,
+          594
+        ]
+      ],
+      "macroDiameter": 116,
+      "transposeRangeSemitones": [
+        -12,
+        12
+      ],
+      "octaveRange": [
+        -2,
+        2
+      ]
+    }
+  },
+  "assets": {
+    "screens": [
+      "assets/screens/rhodes-model-layout.svg",
+      "assets/screens/mks-model-layout.svg",
+      "assets/screens/fm-model-layout.svg",
+      "assets/screens/strings-model-layout.svg",
+      "assets/screens/perform-layout.svg"
+    ],
+    "surfaces": [
+      "assets/surfaces/rhodes-backdrop-v2.svg",
+      "assets/surfaces/mks-backdrop-v2.svg",
+      "assets/surfaces/fm-backdrop-v2.svg",
+      "assets/surfaces/strings-backdrop-v2.svg"
+    ],
+    "engravedMarks": [
+      "assets/controls/engraved-mark-flow.svg",
+      "assets/controls/engraved-mark-weave.svg",
+      "assets/controls/engraved-mark-orbit.svg",
+      "assets/controls/engraved-mark-petal.svg",
+      "assets/controls/engraved-mark-knot.svg"
+    ],
+    "fxFrames": [
+      "assets/frames/fx-module-teal-v2.svg",
+      "assets/frames/fx-module-orange-v2.svg",
+      "assets/frames/fx-module-purple-v2.svg",
+      "assets/frames/fx-module-blue-v2.svg",
+      "assets/frames/fx-module-red-v2.svg",
+      "assets/frames/fx-module-green-v2.svg"
+    ]
+  },
+  "integrityRules": [
+    "Use supplied assets verbatim.",
+    "No DECAYING indicator on model pages.",
+    "Do not call engraved marks authentic Adinkra.",
+    "Do not add DSP controls absent from JM-BUILD-SPEC.md."
+  ]
+}

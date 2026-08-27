@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="56" height="56" viewBox="0 0 56 56">
+<title>JM secondary knob</title><desc>56px rotary; rotate indicator -135 to +135 degrees around 28,28.</desc><defs><radialGradient id="f"><stop stop-color="#2A2925"/><stop offset="1" stop-color="#060606"/></radialGradient></defs>
+<circle cx="28" cy="28" r="25" fill="#070707" stroke="#5A421A" stroke-width="2"/><circle cx="28" cy="28" r="20" fill="url(#f)" stroke="#D9A648" stroke-width="1.5"/>
+<g id="indicator"><rect x="27" y="8" width="2" height="10" rx="1" fill="#F3C868"/></g><circle cx="28" cy="28" r="4" fill="#111"/>
+</svg>

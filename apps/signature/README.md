@@ -57,14 +57,20 @@ src/
 │  ├─ PluginProcessor.*     4 slot engines + racks + master rack, APVTS params,
 │  │                        parameter router (path strings), macro apply,
 │  │                        MIDI handling (CC64/CC1/CC11 + learn), state I/O
-│  └─ PluginEditor.*        resizable editor, approved-reference layout
+│  └─ PluginEditor.*        UX-pack-V2 editor: fixed 1000x720 root, uniform
+│                           scaling, chassis letterbox
 └─ ui/
-   ├─ Widgets.h             JmLookAndFeel (gold medallion knobs), ParamKnob,
-   │                        ParamChoiceButton, LevelMeter
-   ├─ Panels.h              PresetBrowser, ModelPagePanel (Main/AmpEnv/EQ/
-   │                        Settings/Info), FxUnitPanel, FxRackStrip
-   └─ Perform.h             SlotStrip, PerformDock, macros, TopBar, StatusBar
+   ├─ Widgets.h             JmLookAndFeel (V2 hero knobs + engraved motifs),
+   │                        ParamKnob, ParamChoiceButton, PillToggle, PowerButton
+   ├─ UxAssets.h            V2 pack assets: graded kente backdrops, FX faceplates,
+   │                        JM engraved motif family, pack icons
+   ├─ Panels.h              PresetBrowser, V2 ModelPagePanel (exact knob grid +
+   │                        AmpEnv/EQ/FX/Settings/Info overlays), FxUnitPanel/Strip
+   └─ Perform.h             V2 HeaderBar + PERFORM central page (2x2 slots,
+   │                        mode/transpose, 4 macros)
 tests/EngineTests.cpp       console unit tests (ctest target)
+tests/SnapshotCheck.cpp     V2 acceptance self-check (1000x720 offscreen render,
+                            control-centre measurement vs specs, PNG snapshots)
 ```
 
 ### Parameter router paths

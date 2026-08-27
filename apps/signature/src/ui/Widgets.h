@@ -36,91 +36,85 @@ public:
         setColour (juce::AlertWindow::backgroundColourId, Theme::deepPanel);
     }
 
-    // UX pack knob shells, transcribed 1:1 from assets/controls/knob-primary.svg
-    // (>=72 px) and knob-secondary.svg (smaller). The shell is fixed; only the
-    // indicator rotates (-135..+135 deg). The engraved adinkra mark sits in the
-    // centre hub and never rotates with value. Marks are cached drawables; the
-    // per-control assignment comes from the slider property "jmMark".
+    // UX pack V2 knob, transcribed 1:1 from assets/screens/*-layout.svg knob
+    // groups (for a 112 token knob: accent glow ring r63 @.35, gold rim r58
+    // stroke 6 (#FFF0A1 -> #FFBE2E .35 -> #784500), face r48 radial
+    // (#211D16 -> #0B0A08 .65 -> #020202) stroke #3A2B15, rotating #FFD77A
+    // indicator r30..r44, fixed engraved motif). Shell fixed; indicator only
+    // rotates. Slider properties: "jmMotif" 0..4, "jmAccent" argb (glow ring).
     void drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h,
                            float pos, float startAngle, float endAngle, juce::Slider& slider) override
     {
-        auto bounds = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h).reduced (2.0f);
+        auto bounds = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h);
         const float size = juce::jmin (bounds.getWidth(), bounds.getHeight());
-        auto r = juce::Rectangle<float> (size, size).withCentre (bounds.getCentre());
-        const auto c = r.getCentre();
+        const auto c = bounds.getCentre();
         const float angle = startAngle + pos * (endAngle - startAngle);
+        const bool hover = slider.isMouseOverOrDragging() && slider.isEnabled();
 
-        if (size >= 72.0f)   // ---- primary shell (96 px reference)
+        if (size >= 100.0f)   // ---- V2 primary (model heroes + macros)
         {
-            const float u = size / 96.0f;
-            g.setColour (Theme::knobOuter);
-            g.fillEllipse (juce::Rectangle<float> (88 * u, 88 * u).withCentre (c));
-            g.setColour (Theme::knobOuterRim);
-            g.drawEllipse (juce::Rectangle<float> (88 * u, 88 * u).withCentre (c), 2.0f * u);
-
-            juce::Path track, arc;                                   // r42 arcs
-            track.addCentredArc (c.x, c.y, 42 * u, 42 * u, 0, startAngle, endAngle, true);
-            g.setColour (Theme::knobTrack);
-            g.strokePath (track, juce::PathStrokeType (3.0f * u, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-            arc.addCentredArc (c.x, c.y, 42 * u, 42 * u, 0, startAngle, angle, true);
-            g.setColour (Theme::knobArc.withAlpha (0.35f));          // glow halo
-            g.strokePath (arc, juce::PathStrokeType (6.5f * u, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-            g.setColour (Theme::knobArc);
-            g.strokePath (arc, juce::PathStrokeType (3.0f * u, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-
-            juce::ColourGradient goldRing (Theme::knobGold0, c.x - 34 * u, c.y - 34 * u,
-                                           Theme::knobGold100, c.x + 34 * u, c.y + 34 * u, false);
-            goldRing.addColour (0.35, Theme::knobGold35);
-            goldRing.addColour (0.70, Theme::knobGold70);
+            const float u = size / 130.0f;      // 130px box == the 112-token knob
+            const juce::Colour accent { (juce::uint32) (juce::int64) slider.getProperties()
+                                            .getWithDefault ("jmAccent", (juce::int64) Theme::gold.getARGB()) };
+            // soft hardware drop shadow
+            g.setColour (juce::Colours::black.withAlpha (0.45f));
+            g.fillEllipse (juce::Rectangle<float> (118 * u, 118 * u).withCentre ({ c.x, c.y + 7 * u }));
+            // accent glow ring
+            g.setColour (accent.withAlpha (hover ? 0.5f : 0.35f));
+            g.drawEllipse (juce::Rectangle<float> (126 * u, 126 * u).withCentre (c), 4.0f * u);
+            // gold rim
+            auto rim = juce::Rectangle<float> (116 * u, 116 * u).withCentre (c);
+            g.setColour (juce::Colour (0xff070604));
+            g.fillEllipse (rim);
+            juce::ColourGradient goldRing (juce::Colour (0xffFFF0A1), c.x, rim.getY(),
+                                           juce::Colour (0xff784500), c.x, rim.getBottom(), false);
+            goldRing.addColour (0.35, juce::Colour (0xffFFBE2E));
             g.setGradientFill (goldRing);
-            g.fillEllipse (juce::Rectangle<float> (68 * u, 68 * u).withCentre (c));
-
-            juce::ColourGradient face (Theme::knobFace0, c.x, c.y, Theme::knobFace100, c.x + 29 * u, c.y + 29 * u, true);
-            face.addColour (0.55, Theme::knobFace55);
+            g.drawEllipse (rim.reduced (3.0f * u), 6.0f * u);
+            // face
+            juce::ColourGradient face (juce::Colour (0xff211D16), c.x, c.y, juce::Colour (0xff020202),
+                                       c.x + 48 * u, c.y + 48 * u, true);
+            face.addColour (0.65, juce::Colour (0xff0B0A08));
             g.setGradientFill (face);
-            g.fillEllipse (juce::Rectangle<float> (58 * u, 58 * u).withCentre (c));
-            g.setColour (Theme::knobFace100);
-            g.drawEllipse (juce::Rectangle<float> (58 * u, 58 * u).withCentre (c), 2.0f * u);
-
-            {   // rotating indicator only (rect x46.75 y16 w2.5 h15 in shell space)
+            g.fillEllipse (juce::Rectangle<float> (96 * u, 96 * u).withCentre (c));
+            g.setColour (juce::Colour (0xff3A2B15));
+            g.drawEllipse (juce::Rectangle<float> (96 * u, 96 * u).withCentre (c), 2.0f * u);
+            // engraved motif (fixed)
+            if (auto* motif = motifFor (slider))
+                motif->drawWithin (g, juce::Rectangle<float> (58 * u, 58 * u).withCentre (c),
+                                   juce::RectanglePlacement::centred, 0.86f);
+            // rotating indicator only
+            {
                 juce::Graphics::ScopedSaveState ss (g);
                 g.addTransform (juce::AffineTransform::rotation (angle, c.x, c.y));
-                g.setColour (Theme::knobIndicator);
-                g.fillRoundedRectangle (c.x - 1.25f * u, c.y - 32 * u, 2.5f * u, 15 * u, 1.25f * u);
+                g.setColour (Theme::goldHi);
+                juce::Path ind;
+                ind.startNewSubPath (c.x, c.y - 44 * u);
+                ind.lineTo (c.x, c.y - 30 * u);
+                g.strokePath (ind, juce::PathStrokeType (4.0f * u, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
             }
-
-            g.setColour (Theme::knobHub);                            // fixed hub r18
-            g.fillEllipse (juce::Rectangle<float> (36 * u, 36 * u).withCentre (c));
-            g.setColour (Theme::knobHubRim);
-            g.drawEllipse (juce::Rectangle<float> (36 * u, 36 * u).withCentre (c), 1.0f * u);
-
-            if (auto* mark = markFor (slider))                       // engraved, non-rotating
+            if (hover)
             {
-                auto markArea = juce::Rectangle<float> (26 * u, 26 * u).withCentre (c);
-                mark->drawWithin (g, markArea.translated (0.7f * u, 0.7f * u), juce::RectanglePlacement::centred, 0.35f);
-                mark->drawWithin (g, markArea, juce::RectanglePlacement::centred, 0.55f);
+                g.setColour (Theme::gold.withAlpha (0.18f));
+                g.fillEllipse (juce::Rectangle<float> (96 * u, 96 * u).withCentre (c));
             }
         }
-        else                 // ---- secondary shell (56 px reference)
+        else                 // ---- V2 secondary (slot vol/pan, FX, header master)
         {
-            const float u = size / 56.0f;
-            g.setColour (Theme::knobOuter);
-            g.fillEllipse (juce::Rectangle<float> (50 * u, 50 * u).withCentre (c));
-            g.setColour (Theme::knobSecRim);
-            g.drawEllipse (juce::Rectangle<float> (50 * u, 50 * u).withCentre (c), 2.0f * u);
-            juce::ColourGradient face (Theme::knobFace0, c.x, c.y, juce::Colour (0xff060606), c.x + 20 * u, c.y + 20 * u, true);
-            g.setGradientFill (face);
+            const float u = size / 44.0f;
+            g.setColour (juce::Colour (0xff080706));
             g.fillEllipse (juce::Rectangle<float> (40 * u, 40 * u).withCentre (c));
-            g.setColour (Theme::gold);
-            g.drawEllipse (juce::Rectangle<float> (40 * u, 40 * u).withCentre (c), 1.5f * u);
+            g.setColour (hover ? Theme::goldHi : Theme::gold);
+            g.drawEllipse (juce::Rectangle<float> (40 * u, 40 * u).withCentre (c), 2.0f * u);
             {
                 juce::Graphics::ScopedSaveState ss (g);
                 g.addTransform (juce::AffineTransform::rotation (angle, c.x, c.y));
-                g.setColour (Theme::knobIndicator);
-                g.fillRoundedRectangle (c.x - 1.0f * u, c.y - 20 * u, 2.0f * u, 10 * u, 1.0f * u);
+                g.setColour (Theme::goldHi);
+                juce::Path ind;
+                ind.startNewSubPath (c.x, c.y - 16 * u);
+                ind.lineTo (c.x, c.y - 8 * u);
+                g.strokePath (ind, juce::PathStrokeType (2.5f * u, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
             }
-            g.setColour (juce::Colour (0xff111111));
-            g.fillEllipse (juce::Rectangle<float> (8 * u, 8 * u).withCentre (c));
         }
     }
 
@@ -143,14 +137,15 @@ public:
         g.strokePath (ch, juce::PathStrokeType (1.7f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
 
-    /// Cached engraved-mark drawable for a slider ("jmMark" property, 0..4).
-    juce::Drawable* markFor (juce::Slider& s)
+    /// Cached engraved-motif drawable for a slider ("jmMotif" property, 0..4).
+    /// JM engraved motif family — original geometric marks (tokens.symbolPolicy).
+    juce::Drawable* motifFor (juce::Slider& s)
     {
-        const int idx = (int) s.getProperties().getWithDefault ("jmMark", -1);
+        const int idx = (int) s.getProperties().getWithDefault ("jmMotif", -1);
         if (idx < 0 || idx > 4) return nullptr;
-        if (marks_[(size_t) idx] == nullptr)
-            marks_[(size_t) idx] = ux::makeMark ((ux::Mark) idx, Theme::gold);
-        return marks_[(size_t) idx].get();
+        if (motifs_[(size_t) idx] == nullptr)
+            motifs_[(size_t) idx] = ux::makeMotif ((ux::Motif) idx, Theme::gold);
+        return motifs_[(size_t) idx].get();
     }
 
     void drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour&,
@@ -174,7 +169,7 @@ public:
     juce::Font getPopupMenuFont() override { return Theme::ui (14.0f); }
 
 private:
-    std::array<std::unique_ptr<juce::Drawable>, 5> marks_;
+    std::array<std::unique_ptr<juce::Drawable>, 5> motifs_;
 };
 
 //==============================================================================
@@ -249,11 +244,27 @@ public:
     void setShowValue (bool b) { value_.setVisible (b); }
     const juce::String& path() const { return path_; }
 
-    /// Engraved adinkra mark index (0..4, ux::Mark) shown in the primary hub.
-    void setMark (int idx) { slider_.getProperties().set ("jmMark", idx); }
-    /// Bounds of the rotary itself (for macro ring overlays).
+    /// Engraved motif index (0..4, ux::Motif — JM engraved motif family).
+    void setMotif (int idx) { slider_.getProperties().set ("jmMotif", idx); }
+    /// Accent colour of the V2 glow ring.
+    void setAccent (juce::Colour c) { slider_.getProperties().set ("jmAccent", (juce::int64) c.getARGB()); }
+    /// Bounds of the rotary itself (for ring overlays).
     juce::Rectangle<int> knobBounds() const { return slider_.getBounds(); }
     float normValue() const { return (float) slider_.getValue(); }
+
+    /// V2 exact placement: token knob diameter + label/value Y offsets from the
+    /// knob centre (design-tokens model.knob). Component centre == knob centre.
+    void setV2 (int tokenDiameter, int labelOffY, int valueOffY)
+    {
+        v2Diameter_ = tokenDiameter;
+        v2LabelOff_ = labelOffY;
+        v2ValueOff_ = valueOffY;
+        name_.setFont (Theme::display (14.0f));
+        name_.setColour (juce::Label::textColourId, Theme::cream);
+        value_.setFont (Theme::value (13.0f));
+        value_.setColour (juce::Label::textColourId, Theme::goldHi);
+        resized();
+    }
 
     void refresh()
     {
@@ -264,6 +275,15 @@ public:
 
     void resized() override
     {
+        if (v2Diameter_ > 0)
+        {
+            const auto c = getLocalBounds().getCentre();
+            const int box = juce::roundToInt ((float) v2Diameter_ * 130.0f / 112.0f);
+            slider_.setBounds (juce::Rectangle<int> (box, box).withCentre (c));
+            name_.setBounds (juce::Rectangle<int> (getWidth(), 18).withCentre ({ c.x, c.y + v2LabelOff_ }));
+            value_.setBounds (juce::Rectangle<int> (getWidth(), 16).withCentre ({ c.x, c.y + v2ValueOff_ }));
+            return;
+        }
         auto r = getLocalBounds();
         name_.setBounds (r.removeFromTop (15));
         if (value_.isVisible()) value_.setBounds (r.removeFromBottom (15));
@@ -345,6 +365,7 @@ private:
     ParamSpec spec_ { nullptr, "", ParamKind::Float, 0, 1, 0 };
     PathSlider slider_;
     juce::Label name_, value_;
+    int v2Diameter_ = 0, v2LabelOff_ = -74, v2ValueOff_ = 68;
 };
 
 //==============================================================================

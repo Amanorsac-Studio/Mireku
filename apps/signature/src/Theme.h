@@ -1,5 +1,5 @@
 // Theme.h — the ONE place for every colour, font and layout metric in JM Signature.
-// The later UX pass (kente textures, adinkra engravings) restyles by editing this
+// The UX passes (kente materials, JM engraved motif family) restyle by editing this
 // file + the LookAndFeel only. Spec §5 / design-reference README "Core tokens".
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -8,25 +8,27 @@ namespace jm {
 
 struct Theme
 {
-    // ------------------------- core tokens (UX pack v1.0.0 manifest.json)
+    // -------------- core tokens (UX pack V2 tokens/design-tokens.json colors)
     static inline const juce::Colour bg           { 0xff050505 };
-    static inline const juce::Colour chassis      { 0xff0A0A09 };
-    static inline const juce::Colour deepPanel    { 0xff10100E };  // "panel"
+    static inline const juce::Colour chassis      { 0xff090908 };
+    static inline const juce::Colour deepPanel    { 0xff100E0B };  // "panel"
+    static inline const juce::Colour panelDeep    { 0xff080706 };
     static inline const juce::Colour panelRaised  { 0xff15130F };
     static inline const juce::Colour line         { 0xff3B2A13 };
     static inline const juce::Colour black        { 0xff050505 };  // recesses (= bg)
-    static inline const juce::Colour chassisBase  { 0xff080807 };  // model-panel layer 1
+    static inline const juce::Colour chassisBase  { 0xff080807 };
     static inline const juce::Colour gold         { 0xffD9A648 };
-    static inline const juce::Colour goldHi       { 0xffF3C868 };  // "goldBright"
-    static inline const juce::Colour goldDark     { 0xff7B551A };
-    static inline const juce::Colour cream        { 0xffEFE7D4 };
-    static inline const juce::Colour muted        { 0xff9C9485 };
+    static inline const juce::Colour goldHi       { 0xffFFD77A };  // "goldBright"
+    static inline const juce::Colour goldHot      { 0xffFFB11B };  // hot edge
+    static inline const juce::Colour goldDark     { 0xff6B4612 };
+    static inline const juce::Colour cream        { 0xffF4EAD5 };
+    static inline const juce::Colour muted        { 0xffA59A87 };
 
-    // world ACCENTS (edges/glows/labels/macro rings; cloth comes from the panel rasters)
-    static inline const juce::Colour rhodesAccent { 0xffD36B18 };
-    static inline const juce::Colour mksAccent    { 0xffA7D61A };
-    static inline const juce::Colour fmAccent     { 0xff2FA8FF };
-    static inline const juce::Colour stringsAccent{ 0xffC150D8 };
+    // world ACCENTS (V2)
+    static inline const juce::Colour rhodesAccent { 0xffE66F17 };
+    static inline const juce::Colour mksAccent    { 0xffA9D62E };
+    static inline const juce::Colour fmAccent     { 0xff39B8FF };
+    static inline const juce::Colour stringsAccent{ 0xffD85CE8 };
     static inline const juce::Colour masterAccent { 0xffD9A648 };
 
     // FX faceplate family (fx-module-*.svg) — its own JM hardware family,
@@ -95,25 +97,51 @@ struct Theme
     // All in "design units" at the 1380x900 reference size; the editor scales.
     struct M
     {
-        // UX pack v1.0.0 reference viewport 1536x1024
-        static constexpr int designW        = 1536;
-        static constexpr int designH        = 1024;
-        static constexpr int topBarH        = 60;
-        static constexpr int statusBarH     = 26;
-        static constexpr int leftColW       = 260;   // preset-browser-frame width
-        static constexpr int rightColW      = 356;
-        static constexpr int fxStripH       = 268;   // fx-module frame 250 + strip chrome
-        static constexpr int knobPrimary    = 96;    // manifest controlSizes
-        static constexpr int knobSecondary  = 56;
-        static constexpr int knobMacro      = 104;
-        static constexpr int knobLarge      = 96;    // legacy aliases
-        static constexpr int knobMedium     = 72;
-        static constexpr int knobSmall      = 44;
-        static constexpr int powerButton    = 48;
-        static constexpr int slotW          = 520, slotH = 92;   // perform slot reference
+        // UX pack V2 reference viewport: 1000x720 (25:18), uniform-contain
+        static constexpr int designW        = 1000;
+        static constexpr int designH        = 720;
+        static constexpr int minW = 750, minH = 540, maxW = 2000, maxH = 1440;
         static constexpr int pad            = 8;
         static constexpr int corner         = 6;
-        static constexpr float arcThickness = 3.0f;  // knob shell arc stroke
+        static constexpr float arcThickness = 3.0f;
+        // legacy aliases still referenced by generic panels
+        static constexpr int knobLarge      = 112;
+        static constexpr int knobMedium     = 72;
+        static constexpr int knobSmall      = 44;
+        static constexpr int topBarH = 74, statusBarH = 0, leftColW = 0, rightColW = 0, fxStripH = 0;
+    };
+
+    // ------------------------- V2 exact geometry (tokens/design-tokens.json)
+    struct V2
+    {
+        // header
+        static constexpr int headerX = 16, headerY = 12, headerW = 968, headerH = 52;
+        static constexpr int brandW = 230;
+        static constexpr int navX = 270, navY = 18, navW = 462, navH = 40, navItemW = 92, navCellW = 88;
+        static constexpr int masterX = 760, masterY = 18, masterW = 208, masterH = 40;
+        // content
+        static constexpr int contentX = 16, contentY = 74, contentW = 968, contentH = 630, contentR = 8;
+        // model page
+        static constexpr int titleY = 96;
+        static constexpr int surfX = 190, surfY = 150, surfW = 620, surfH = 430, surfR = 12;
+        static constexpr int knobD = 112, knob6D = 96;
+        static constexpr int labelOffsetY = -74, valueOffsetY = 68;
+        static constexpr int outX = 830, outY = 185, outW = 54, outH = 330;
+        // perform page
+        static constexpr int slotW = 390, slotH = 132;
+        static constexpr int modeX = 236, modeY = 412, modeW = 184, modeH = 46;
+        static constexpr int transX = 480, transY = 395, transW = 284, transH = 78;
+        static constexpr int macroD = 116, macroY = 594;
+        static constexpr int macroX[4] = { 230, 410, 590, 770 };
+        static constexpr int slotX[4] = { 94, 512, 94, 512 };
+        static constexpr int slotY[4] = { 116, 116, 264, 264 };
+        // model knob centers (5-control worlds / MKS 6-control)
+        static constexpr int five[5][2] = { { 340, 284 }, { 500, 284 }, { 660, 284 }, { 420, 456 }, { 580, 456 } };
+        static constexpr int six[6][2]  = { { 320, 270 }, { 500, 270 }, { 680, 270 }, { 320, 445 }, { 500, 445 }, { 680, 445 } };
+        // materials
+        static constexpr float backdropOpacity = 0.92f, backdropSat = 1.18f, backdropCon = 1.16f, backdropBri = 0.74f;
+        static constexpr float vignetteOpacity = 0.46f;
+        static constexpr float fxMicroOpacity = 0.18f, fxMicroScale = 0.32f;
     };
 
     // ---------------------------------------------------- kente texture params

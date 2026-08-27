@@ -53,11 +53,11 @@ juce_add_binary_data(JMAssets HEADER_NAME JMAssets.h NAMESPACE JMAssets SOURCES
     resources/kente_fm.jpeg
     resources/kente_strings.jpeg
     resources/svg/jm-shield-reference.svg
-    resources/svg/adinkra-mark-cross-knot.svg
-    resources/svg/adinkra-mark-four-petal.svg
-    resources/svg/adinkra-mark-spiral-unity.svg
-    resources/svg/adinkra-mark-star-weave.svg
-    resources/svg/adinkra-mark-triple-ring.svg
+    resources/svg/engraved-mark-flow.svg
+    resources/svg/engraved-mark-knot.svg
+    resources/svg/engraved-mark-orbit.svg
+    resources/svg/engraved-mark-petal.svg
+    resources/svg/engraved-mark-weave.svg
     resources/svg/chevron-left.svg
     resources/svg/chevron-right.svg
     resources/svg/gear.svg
@@ -95,6 +95,27 @@ target_link_libraries(JMSignatureTests PRIVATE
     juce::juce_audio_formats
     juce::juce_dsp
     juce::juce_events
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags)
+
+# ---------------------------------------------- V2 acceptance self-check
+# Offscreen 1000x720 render + control-centre measurement vs specs/screen-layouts.json.
+juce_add_console_app(JMSignatureSnapshot PRODUCT_NAME "JMSignatureSnapshot")
+target_sources(JMSignatureSnapshot PRIVATE
+    tests/SnapshotCheck.cpp
+    src/plugin/PluginProcessor.cpp
+    src/plugin/PluginEditor.cpp)
+target_include_directories(JMSignatureSnapshot PRIVATE src "${JMI_FORMAT_INCLUDE}"
+    "${CMAKE_CURRENT_BINARY_DIR}/juce_binarydata_JMAssets/JuceLibraryCode")
+target_compile_definitions(JMSignatureSnapshot PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_MODAL_LOOPS_PERMITTED=1
+    JM_SNAPSHOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/build/snapshots")
+target_link_libraries(JMSignatureSnapshot PRIVATE
+    JMAssets
+    juce::juce_audio_utils
+    juce::juce_dsp
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags)
 

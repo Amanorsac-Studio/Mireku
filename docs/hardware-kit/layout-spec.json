@@ -1,0 +1,77 @@
+{
+  "referenceCanvas": {
+    "width": 2048,
+    "height": 2048,
+    "aspectRatio": "1:1"
+  },
+  "layout": {
+    "outerPadding": 224,
+    "moduleGrid": {
+      "columns": 3,
+      "rows": 2,
+      "gap": 20,
+      "moduleWidth": 512,
+      "moduleHeight": 670,
+      "aspectRatio": "0.764:1"
+    },
+    "masterPanel": {
+      "x": 224,
+      "y": 1510,
+      "width": 1600,
+      "height": 400,
+      "aspectRatio": "4:1"
+    }
+  },
+  "controls": {
+    "largeKnob": {
+      "displayDiameter": 112,
+      "hitTarget": 128,
+      "gridColumnCenters": [
+        0.3,
+        0.7
+      ],
+      "rowCenters": [
+        0.34,
+        0.66
+      ]
+    },
+    "smallKnob": {
+      "displayDiameter": 82,
+      "hitTarget": 96
+    },
+    "bypassButton": {
+      "width": 184,
+      "height": 58,
+      "cornerRadius": 15
+    },
+    "powerButton": {
+      "diameter": 42
+    },
+    "cornerScrew": {
+      "diameter": 34,
+      "inset": 24
+    },
+    "meter": {
+      "width": 32,
+      "height": 210
+    }
+  },
+  "typography": {
+    "recommendedFont": "Bahnschrift Condensed SemiBold",
+    "openSourceAlternatives": [
+      "Oswald SemiBold",
+      "Barlow Condensed SemiBold"
+    ],
+    "moduleTitlePxAt2048": 42,
+    "controlLabelPxAt2048": 25,
+    "trackingEm": 0.04,
+    "note": "Use live text in the app; the included font PNG is a visual reference only."
+  },
+  "responsiveFormula": "scale = min(viewportWidth / 2048, viewportHeight / 2048); multiply every reference px value by scale",
+  "implementationNotes": [
+    "Rotate a knob image around its exact center; map values to -135deg through +135deg.",
+    "Use transparent PNG controls above the panel PNGs.",
+    "For responsive layouts, preserve module aspect ratio and never stretch knobs non-uniformly.",
+    "Use pointer hit targets larger than the visible knob artwork."
+  ]
+}

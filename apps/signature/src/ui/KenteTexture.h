@@ -19,24 +19,27 @@ class KenteTexture
 public:
     enum class Style { Weave, Flat };
 
-    /// Cached tileable cloth image for a style+tint.
-    static const juce::Image& get (Style style, juce::Colour tint)
+    /// Cached tileable cloth image for a style+tint. `dna` selects the client's
+    /// per-world pattern geometry (0 rhodes, 1 mks, 2 fm, 3 strings,
+    /// -1 generic patchwork) — transcribed from assets/pattern-*.svg.
+    static const juce::Image& get (Style style, juce::Colour tint, int dna = -1)
     {
         static std::map<juce::uint64, juce::Image> cache;
         static juce::CriticalSection lock;
-        const juce::uint64 key = ((juce::uint64) (style == Style::Flat ? 1 : 0) << 32) | tint.getARGB();
+        const juce::uint64 key = ((juce::uint64) (juce::uint8) (dna + 1) << 40)
+                               | ((juce::uint64) (style == Style::Flat ? 1 : 0) << 32) | tint.getARGB();
         const juce::ScopedLock sl (lock);
         auto it = cache.find (key);
         if (it != cache.end()) return it->second;
-        return cache.emplace (key, render (style, tint)).first->second;
+        return cache.emplace (key, render (style, tint, dna)).first->second;
     }
 
     /// Fill a rounded rect with tiled cloth (anchored at the component origin).
     static void fill (juce::Graphics& g, juce::Rectangle<float> area, Style style,
-                      juce::Colour tint, float alpha = 1.0f, float cornerSize = 6.0f)
+                      juce::Colour tint, float alpha = 1.0f, float cornerSize = 6.0f, int dna = -1)
     {
         g.saveState();
-        g.setTiledImageFill (get (style, tint), 0, 0, alpha);
+        g.setTiledImageFill (get (style, tint, dna), 0, 0, alpha);
         g.fillRoundedRectangle (area, cornerSize);
         g.restoreState();
     }
@@ -51,12 +54,15 @@ private:
         return juce::Colour::fromHSV (h, s, b, 1.0f);
     }
 
-    static juce::Image render (Style style, juce::Colour tint)
+    static juce::Image render (Style style, juce::Colour tint, int dna = -1)
     {
         const bool flat = style == Style::Flat;
+        const float maxBri = flat ? Theme::Kente::flatMaxBri : Theme::Kente::weaveMaxBri;
+        if (dna >= 0 && dna <= 3)
+            return renderWorldPattern (dna, tint, maxBri);
+
         const int T = flat ? Theme::Kente::flatTile : Theme::Kente::weaveTile;
         const int B = flat ? Theme::Kente::flatBlock : Theme::Kente::weaveBlock;
-        const float maxBri = flat ? Theme::Kente::flatMaxBri : Theme::Kente::weaveMaxBri;
 
         juce::Image img (juce::Image::RGB, T, T, true);
         juce::Graphics g (img);
@@ -114,6 +120,126 @@ private:
                 g.setColour (juce::Colours::black.withAlpha (0.04f));
                 g.fillRect (0, y, T, 1);
             }
+        return img;
+    }
+
+    //================================================ client world patterns
+    // Geometry transcribed from docs/jm-design-reference/kente/assets/
+    // pattern-{rhodes,mks,fm,strings}.svg (decision logged: transcription, not
+    // SVG parsing, so the clampCloth ≤35%-contrast pipeline and warp/weft
+    // threadwork still apply, and each world keeps its Theme tint identity).
+    static juce::Image renderWorldPattern (int dna, juce::Colour tint, float maxBri)
+    {
+        // pull the SVG palette toward the module tint, then clamp to the cloth law
+        auto P = [&] (juce::Colour c) { return clampCloth (c.interpolatedWith (tint, 0.35f), maxBri); };
+        const auto gold = P (Theme::patGold),  green = P (Theme::patGreen), red = P (Theme::patRed),
+                   burg = P (Theme::patBurgundy), dark = clampCloth (Theme::patDark, maxBri * 0.6f),
+                   cream = P (Theme::patCream), blue = P (Theme::patBlue),  blk = clampCloth (Theme::patBlack, maxBri * 0.6f);
+
+        const int T = dna == 0 ? 150 : dna == 1 ? 100 : 120;
+        juce::Image img (juce::Image::RGB, T, T, true);
+        juce::Graphics g (img);
+        auto tri = [&] (float x1, float y1, float x2, float y2, float x3, float y3, juce::Colour c)
+        {
+            juce::Path p; p.addTriangle (x1, y1, x2, y2, x3, y3);
+            g.setColour (c); g.fillPath (p);
+        };
+        auto quad = [&] (float x1, float y1, float x2, float y2, float x3, float y3, float x4, float y4, juce::Colour c)
+        {
+            juce::Path p; p.startNewSubPath (x1, y1); p.lineTo (x2, y2); p.lineTo (x3, y3); p.lineTo (x4, y4); p.closeSubPath();
+            g.setColour (c); g.fillPath (p);
+        };
+        auto dashedH = [&] (float x0, float x1, float y, float wth, juce::Colour c)
+        {
+            g.setColour (c);
+            for (float x = x0; x < x1; x += 6.0f) g.fillRect (x, y - wth * 0.5f, 4.0f, wth);
+        };
+
+        if (dna == 0)            // RHODES: royal weave stripe bands + split diamonds
+        {
+            g.fillAll (gold);
+            auto stripeBand = [&] (float y0)
+            {
+                g.setColour (dark); g.fillRect (0.0f, y0, 150.0f, 40.0f);
+                g.setColour (green); g.fillRect (0.0f, y0 + 7.0f, 150.0f, 6.0f);
+                g.setColour (red);   g.fillRect (0.0f, y0 + 17.0f, 150.0f, 6.0f);
+                g.setColour (gold);  g.fillRect (0.0f, y0 + 27.0f, 150.0f, 6.0f);
+            };
+            stripeBand (0.0f);
+            g.setColour (green); g.fillRect (0.0f, 45.0f, 150.0f, 60.0f);
+            quad (37.5f, 45, 75, 75, 37.5f, 105, 0, 75, red);      // split diamond 1
+            tri (37.5f, 45, 75, 75, 37.5f, 105, dark);
+            quad (112.5f, 45, 150, 75, 112.5f, 105, 75, 75, gold); // split diamond 2
+            tri (112.5f, 45, 150, 75, 112.5f, 105, dark);
+            stripeBand (110.0f);
+            g.setColour (burg);
+            g.fillRect (0.0f, 40.0f, 150.0f, 5.0f);
+            g.fillRect (0.0f, 105.0f, 150.0f, 5.0f);
+        }
+        else if (dna == 1)       // MKS: checker/diamond column + zigzag column
+        {
+            g.fillAll (gold);
+            g.setColour (burg); g.fillRect (0.0f, 0.0f, 50.0f, 100.0f);
+            quad (25, 10, 45, 25, 25, 40, 5, 25, green);
+            quad (25, 60, 45, 75, 25, 90, 5, 75, dark);
+            g.setColour (gold); g.fillRect (0.0f, 45.0f, 50.0f, 10.0f);
+            tri (50, 10, 75, 20, 50, 30, green);
+            tri (50, 50, 75, 60, 50, 70, green);
+            tri (100, 25, 75, 35, 100, 45, dark);
+            tri (100, 75, 75, 85, 100, 95, dark);
+            g.setColour (cream.withAlpha (0.55f)); g.fillRect (49.0f, 0.0f, 1.5f, 100.0f);
+        }
+        else if (dna == 2)       // FM: vertical stripes + offset colored blocks
+        {
+            g.fillAll (gold);
+            g.setColour (dark);
+            for (float x : { 15.0f, 45.0f, 75.0f, 105.0f }) g.fillRect (x - 3.0f, 0.0f, 6.0f, 120.0f);
+            g.setColour (blue); g.fillRect (0.0f, 20.0f, 60.0f, 40.0f);
+            g.setColour (gold); g.fillRect (0.0f, 35.0f, 60.0f, 10.0f);
+            g.setColour (red);  g.fillRect (60.0f, 60.0f, 60.0f, 40.0f);
+            g.setColour (green); g.fillRect (60.0f, 75.0f, 60.0f, 10.0f);
+            dashedH (0, 60, 25.0f, 2.0f, dark);
+            dashedH (60, 120, 65.0f, 2.0f, dark);
+        }
+        else                     // STRINGS: radial anansi-web with shards
+        {                        // (fine threadwork — abstract hub, no literal spider)
+            g.fillAll (dark);
+            tri (0, 0, 60, 60, 0, 60, red);
+            tri (120, 0, 60, 60, 120, 60, green);
+            tri (60, 60, 0, 120, 120, 120, gold);
+            tri (0, 0, 120, 0, 60, 60, blk);
+            g.setColour (gold);
+            auto dashedLine = [&] (float x0, float y0, float x1, float y1)
+            {
+                const float len = std::hypot (x1 - x0, y1 - y0);
+                const float dx = (x1 - x0) / len, dy = (y1 - y0) / len;
+                for (float d = 0; d < len; d += 4.0f)
+                    g.drawLine (x0 + dx * d, y0 + dy * d, x0 + dx * juce::jmin (d + 2.5f, len), y0 + dy * juce::jmin (d + 2.5f, len), 1.1f);
+            };
+            dashedLine (60, 60, 0, 0);   dashedLine (60, 60, 120, 0);
+            dashedLine (60, 60, 0, 120); dashedLine (60, 60, 120, 120);
+            g.drawLine (60, 0, 60, 120, 1.0f);
+            g.drawLine (0, 60, 120, 60, 1.0f);
+            auto octagon = [&] (const float* pts, float thickness)
+            {
+                juce::Path p;
+                p.startNewSubPath (pts[0], pts[1]);
+                for (int i = 1; i < 8; ++i) p.lineTo (pts[i * 2], pts[i * 2 + 1]);
+                p.closeSubPath();
+                g.strokePath (p, juce::PathStrokeType (thickness));
+            };
+            const float o1[] = { 60, 25, 85, 35, 95, 60, 85, 85, 60, 95, 35, 85, 25, 60, 35, 35 };
+            const float o2[] = { 60, 10, 95, 25, 110, 60, 95, 95, 60, 110, 25, 95, 10, 60, 25, 25 };
+            octagon (o1, 1.2f);
+            octagon (o2, 0.9f);
+            g.fillEllipse (56.0f, 56.0f, 8.0f, 8.0f);   // web hub
+        }
+
+        // shared woven threadwork over the pattern (keeps it reading as cloth)
+        g.setColour (clampCloth (Theme::goldDark.interpolatedWith (tint, 0.3f), maxBri).withAlpha (Theme::Kente::warpAlpha * 0.9f));
+        for (int x = 0; x < T; x += 2) g.fillRect (x, 0, 1, T);
+        g.setColour (juce::Colours::black.withAlpha (Theme::Kente::warpAlpha));
+        for (int y = 1; y < T; y += 3) g.fillRect (0, y, T, 1);
         return img;
     }
 

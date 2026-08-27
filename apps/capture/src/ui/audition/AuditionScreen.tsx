@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useApp } from '../../state/appStore';
 import { services } from '../../state/services';
-import { Label, Panel } from '../common';
+import { Button, Label, Panel } from '../common';
+import { IconKeyboard } from '../assets/icons';
 import { FxRackView } from '../fx/FxRackView';
 import { Keyboard } from './Keyboard';
 import { LoopEditor } from './LoopEditor';
@@ -11,6 +12,7 @@ export function AuditionScreen() {
   const session = useApp((s) => s.session);
   const presets = useApp((s) => s.presets);
   const [ready, setReady] = useState(false);
+  const [showKeyboard, setShowKeyboard] = useState(true);
 
   useEffect(() => {
     if (!session) return;
@@ -37,13 +39,20 @@ export function AuditionScreen() {
     <div className="jm-col" style={{ maxWidth: '1200px', margin: '0 auto' }}>
       <Panel>
         <div className="jm-col">
-          <Label>
-            Audition — MIDI in plays the sampled instrument{ready ? '' : ' (loading samples…)'} · CC64 sustain supported
-          </Label>
-          <Keyboard
-            onNoteOn={(n, v) => services.voices?.noteOn(n, v)}
-            onNoteOff={(n) => services.voices?.noteOff(n)}
-          />
+          <div className="jm-row" style={{ justifyContent: 'space-between' }}>
+            <Label>
+              Audition — MIDI in plays the sampled instrument{ready ? '' : ' (loading samples…)'} · CC64 sustain supported
+            </Label>
+            <Button primary={showKeyboard} onClick={() => setShowKeyboard(!showKeyboard)}>
+              <IconKeyboard size={16} /> Keyboard
+            </Button>
+          </div>
+          {showKeyboard && (
+            <Keyboard
+              onNoteOn={(n, v) => services.voices?.noteOn(n, v)}
+              onNoteOff={(n) => services.voices?.noteOff(n)}
+            />
+          )}
         </div>
       </Panel>
       <LoopEditor />

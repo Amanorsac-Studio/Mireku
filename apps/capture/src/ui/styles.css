@@ -160,6 +160,86 @@ body {
   border-color: var(--jm-color-gold-dark);
 }
 
+/* select dressed with the client chevron */
+.jm-select-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.jm-select-wrap .jm-select {
+  appearance: none;
+  padding-right: calc(var(--jm-size-gap-unit) * 4);
+}
+
+.jm-select-chev {
+  position: absolute;
+  right: calc(var(--jm-size-gap-unit) * 1.25);
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: var(--jm-color-gold);
+}
+
+/* buttons compose text + icon */
+.jm-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--jm-size-gap-unit) * 0.75);
+}
+
+/* client pill toggle */
+.jm-toggle {
+  width: calc(var(--jm-size-gap-unit) * 6);
+  height: calc(var(--jm-size-gap-unit) * 3);
+  border-radius: calc(var(--jm-size-gap-unit) * 1.5);
+  background: var(--jm-color-chassis);
+  border: 2px solid var(--jm-color-gold);
+  position: relative;
+  transition: border-color 0.15s;
+  flex-shrink: 0;
+}
+
+.jm-toggle-thumb {
+  position: absolute;
+  top: 50%;
+  left: calc(var(--jm-size-gap-unit) * 0.4);
+  transform: translateY(-50%);
+  width: calc(var(--jm-size-gap-unit) * 2);
+  height: calc(var(--jm-size-gap-unit) * 2);
+  border-radius: 50%;
+  background: var(--jm-color-gold-dark);
+  transition: left 0.15s, background 0.15s;
+}
+
+.jm-toggle.on .jm-toggle-thumb {
+  left: calc(100% - var(--jm-size-gap-unit) * 2.4);
+  background: var(--jm-color-gold);
+  box-shadow: 0 0 8px var(--jm-color-gold-glow);
+}
+
+/* LED level meter (client led-meter.svg zones) — generic level meters only */
+.jm-led-meter {
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 2px;
+  width: calc(var(--jm-size-gap-unit) * 1.75);
+  padding: calc(var(--jm-size-gap-unit) * 0.5);
+  background: var(--jm-color-black);
+  border: 1px solid var(--jm-color-panel-border-soft);
+  border-radius: var(--jm-size-radius-cell);
+}
+
+.jm-led-seg {
+  flex: 1;
+  border-radius: 1px;
+  opacity: 0.18;
+}
+
+.jm-led-seg.lit {
+  opacity: 1;
+}
+
 /* Guided screen */
 
 .jm-note-hero {

@@ -3,7 +3,7 @@ import { nudgeLoop } from '../../engine/dsp/loop';
 import { acceptTake, serializeSession, type TakeRecord } from '../../engine/session';
 import { useApp } from '../../state/appStore';
 import { bridge, services } from '../../state/services';
-import { Button, Label, Panel } from '../common';
+import { Button, Label, Panel, Select } from '../common';
 
 /** Loop audition + manual nudge (§3.5) for sustaining takes. */
 export function LoopEditor() {
@@ -30,13 +30,13 @@ export function LoopEditor() {
       <div className="jm-col">
         <Label>Loop Editor — audition plays attack then loop ×4</Label>
         <div className="jm-row">
-          <select className="jm-select" style={{ maxWidth: '320px' }} value={take?.file ?? ''} onChange={(e) => setSelected(e.target.value)}>
+          <Select style={{ maxWidth: '320px' }} value={take?.file ?? ''} onChange={(e) => setSelected(e.target.value)}>
             {looped.map((t) => (
               <option key={t.file} value={t.file}>
                 {t.file}
               </option>
             ))}
-          </select>
+          </Select>
           {take && (
             <Button primary onClick={() => void services.auditionLoop(session, take.file)}>
               Audition Loop

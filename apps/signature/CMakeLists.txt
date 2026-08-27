@@ -45,6 +45,27 @@ target_sources(JMSignature PRIVATE
     src/plugin/PluginProcessor.cpp
     src/plugin/PluginEditor.cpp)
 
+# Client UX pack assets (docs/svg-pack): kente panel rasters extracted from the
+# *-panel.svg data URIs (per the pack's JUCE note) + vector marks/icons/branding.
+juce_add_binary_data(JMAssets HEADER_NAME JMAssets.h NAMESPACE JMAssets SOURCES
+    resources/kente_rhodes.png
+    resources/kente_mks.jpeg
+    resources/kente_fm.jpeg
+    resources/kente_strings.jpeg
+    resources/svg/jm-shield-reference.svg
+    resources/svg/adinkra-mark-cross-knot.svg
+    resources/svg/adinkra-mark-four-petal.svg
+    resources/svg/adinkra-mark-spiral-unity.svg
+    resources/svg/adinkra-mark-star-weave.svg
+    resources/svg/adinkra-mark-triple-ring.svg
+    resources/svg/chevron-left.svg
+    resources/svg/chevron-right.svg
+    resources/svg/gear.svg
+    resources/svg/heart.svg
+    resources/svg/kebab.svg
+    resources/svg/star.svg)
+target_link_libraries(JMSignature PRIVATE JMAssets)
+
 target_include_directories(JMSignature PRIVATE src "${JMI_FORMAT_INCLUDE}")
 
 target_compile_definitions(JMSignature PUBLIC

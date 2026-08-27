@@ -6,9 +6,8 @@ import { midi, type MidiDeviceInfo } from '../../engine/midi';
 import { createSession, planFromRange, serializeSession, type SessionConfig } from '../../engine/session';
 import { useApp } from '../../state/appStore';
 import { bridge } from '../../state/services';
-import { Button, Field, Label, Panel } from '../common';
-import { worldTint } from '../theme/tokens';
-import { clothBackground } from '../theme/weave';
+import { Button, Field, Label, Panel, Select, Toggle, useWorldCloth } from '../common';
+import { IconLeft, IconRight } from '../assets/icons';
 
 const WORLDS: { id: World; label: string }[] = [
   { id: 'rhodes-ep', label: 'Rhodes / EP' },
@@ -98,14 +97,7 @@ export function SetupWizard() {
           <Field label="World">
             <div className="jm-row">
               {WORLDS.map((w) => (
-                <div
-                  key={w.id}
-                  className={`jm-world-card jm-cloth${world === w.id ? ' selected' : ''}`}
-                  style={clothBackground(worldTint[w.id])}
-                  onClick={() => setWorld(w.id)}
-                >
-                  {w.label}
-                </div>
+                <WorldCard key={w.id} id={w.id} label={w.label} selected={world === w.id} onSelect={() => setWorld(w.id)} />
               ))}
             </div>
           </Field>
@@ -128,12 +120,11 @@ export function SetupWizard() {
         {step === 3 && (
           <Field label="Channels">
             <div className="jm-row">
-              <Button primary={channels === 'stereo'} onClick={() => setChannels('stereo')}>
-                Stereo (default)
-              </Button>
-              <Button primary={channels === 'mono'} onClick={() => setChannels('mono')}>
-                Mono
-              </Button>
+              <Toggle
+                checked={channels === 'mono'}
+                onChange={(mono) => setChannels(mono ? 'mono' : 'stereo')}
+                label={channels === 'mono' ? 'Mono' : 'Stereo (default) — switch for mono'}
+              />
             </div>
           </Field>
         )}
@@ -152,36 +143,36 @@ export function SetupWizard() {
         {step === 5 && (
           <div className="jm-col">
             <Field label="Audio Input Device">
-              <select className="jm-select" value={audioInputId ?? ''} onChange={(e) => setAudioInputId(e.target.value || null)}>
+              <Select value={audioInputId ?? ''} onChange={(e) => setAudioInputId(e.target.value || null)}>
                 <option value="">System default</option>
                 {audioInputs.map((d) => (
                   <option key={d.id} value={d.id}>
                     {d.label}
                   </option>
                 ))}
-              </select>
+              </Select>
             </Field>
             {mode === 'guided' ? (
               <Field label="MIDI Input Device">
-                <select className="jm-select" value={midiInputId ?? ''} onChange={(e) => setMidiInputId(e.target.value || null)}>
+                <Select value={midiInputId ?? ''} onChange={(e) => setMidiInputId(e.target.value || null)}>
                   <option value="">None detected</option>
                   {midiInputs.map((d) => (
                     <option key={d.id} value={d.id}>
                       {d.name}
                     </option>
                   ))}
-                </select>
+                </Select>
               </Field>
             ) : (
               <Field label="MIDI Output Device">
-                <select className="jm-select" value={midiOutputId ?? ''} onChange={(e) => setMidiOutputId(e.target.value || null)}>
+                <Select value={midiOutputId ?? ''} onChange={(e) => setMidiOutputId(e.target.value || null)}>
                   <option value="">None detected</option>
                   {midiOutputs.map((d) => (
                     <option key={d.id} value={d.id}>
                       {d.name}
                     </option>
                   ))}
-                </select>
+                </Select>
               </Field>
             )}
           </div>
@@ -224,10 +215,12 @@ export function SetupWizard() {
         )}
       </Panel>
       <div className="jm-row" style={{ justifyContent: 'space-between' }}>
-        <Button onClick={() => (step === 0 ? useApp.getState().setScreen('home') : setStep(step - 1))}>Back</Button>
+        <Button onClick={() => (step === 0 ? useApp.getState().setScreen('home') : setStep(step - 1))}>
+          <IconLeft size={14} /> Back
+        </Button>
         {step < STEPS.length - 1 ? (
           <Button primary onClick={() => setStep(step + 1)} disabled={step === 6 && !plan}>
-            Next
+            Next <IconRight size={14} />
           </Button>
         ) : (
           <Button primary onClick={() => void start()}>
@@ -235,6 +228,25 @@ export function SetupWizard() {
           </Button>
         )}
       </div>
+    </div>
+  );
+}
+
+function WorldCard({
+  id,
+  label,
+  selected,
+  onSelect,
+}: {
+  id: World;
+  label: string;
+  selected: boolean;
+  onSelect(): void;
+}) {
+  const cloth = useWorldCloth(id);
+  return (
+    <div className={`jm-world-card jm-cloth${selected ? ' selected' : ''}`} style={cloth} onClick={onSelect}>
+      {label}
     </div>
   );
 }

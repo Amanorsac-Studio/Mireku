@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useApp } from '../state/appStore';
+import { Logo } from './assets/Logo';
 import { bridge } from '../state/services';
 import { HomeScreen } from './home/HomeScreen';
 import { SetupWizard } from './wizard/SetupWizard';
@@ -25,7 +26,10 @@ export function App() {
   return (
     <div className="jm-app">
       <div className="jm-nav">
-        <div className="jm-logo">JM Capture</div>
+        <div className="jm-row" style={{ gap: 'calc(var(--jm-size-gap-unit) * 1.5)' }}>
+          <Logo height={36} />
+          <div className="jm-logo">JM Capture</div>
+        </div>
         <div className="jm-nav-center">{navCenter}</div>
         <div className="jm-row">
           {session && screen !== 'home' && (

@@ -5,7 +5,9 @@
  * at close look, well under ~35% perceived contrast against the chassis.
  */
 
-import { weave } from './tokens';
+import type { World } from '@jm/jmi-format/web';
+import { WORLD_PATTERN_SVG } from '../assets/patterns';
+import { color, patternDarken, weave } from './tokens';
 
 const cache = new Map<string, string>();
 
@@ -100,6 +102,54 @@ export function weaveDataUrl(tint?: string, alpha: number = weave.panelAlpha): s
   const url = `url("${canvas.toDataURL('image/png')}")`;
   cache.set(key, url);
   return url;
+}
+
+/* ------------------------------------------------------------------ */
+/* Client world-pattern darkening pipeline                             */
+/* ------------------------------------------------------------------ */
+
+const patternCache = new Map<string, string>();
+const patternPending = new Map<string, Promise<string>>();
+
+/**
+ * Rasterize a client pattern SVG (bright gold-base) through the darkening
+ * pipeline: brightness/saturation pull-down + a chassis-colored veil, so the
+ * geometry survives at ≤ ~35% perceived contrast against the chassis.
+ * Async (SVG → Image decode); result cached as a data URL.
+ */
+export function worldPatternDataUrl(world: World): Promise<string> {
+  const hit = patternCache.get(world);
+  if (hit) return Promise.resolve(hit);
+  const pending = patternPending.get(world);
+  if (pending) return pending;
+  if (typeof document === 'undefined') return Promise.resolve('');
+
+  const { tile, brightness, saturate, veilAlpha } = patternDarken;
+  const p = new Promise<string>((resolve) => {
+    const svg = WORLD_PATTERN_SVG[world];
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = tile;
+      canvas.height = tile;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return resolve('');
+      ctx.filter = `brightness(${brightness}) saturate(${saturate})`;
+      ctx.drawImage(img, 0, 0, tile, tile);
+      ctx.filter = 'none';
+      const n = parseInt(color.chassis.slice(1), 16);
+      ctx.fillStyle = `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${veilAlpha})`;
+      ctx.fillRect(0, 0, tile, tile);
+      const url = `url("${canvas.toDataURL('image/png')}")`;
+      patternCache.set(world, url);
+      patternPending.delete(world);
+      resolve(url);
+    };
+    img.onerror = () => resolve('');
+    img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  });
+  patternPending.set(world, p);
+  return p;
 }
 
 /** CSS background shorthand values for a cloth surface. */

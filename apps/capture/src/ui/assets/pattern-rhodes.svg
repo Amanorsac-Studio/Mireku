@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
+  <defs>
+    <pattern id="royal-weave" patternUnits="userSpaceOnUse" width="150" height="150">
+      <!-- Base Gold -->
+      <rect width="150" height="150" fill="#D9A648"/>
+      
+      <!-- Top Striped Section -->
+      <rect x="0" y="0" width="150" height="40" fill="#0C0A07"/>
+      <line x1="0" y1="10" x2="150" y2="10" stroke="#274E27" stroke-width="6"/>
+      <line x1="0" y1="20" x2="150" y2="20" stroke="#8B1A1A" stroke-width="6"/>
+      <line x1="0" y1="30" x2="150" y2="30" stroke="#D9A648" stroke-width="6"/>
+
+      <!-- Middle Diamond Section -->
+      <rect x="0" y="45" width="150" height="60" fill="#274E27"/>
+      <!-- Split Diamond 1 -->
+      <polygon points="37.5,45 75,75 37.5,105 0,75" fill="#8B1A1A"/>
+      <polygon points="37.5,45 75,75 37.5,105" fill="#0C0A07"/>
+      <!-- Split Diamond 2 -->
+      <polygon points="112.5,45 150,75 112.5,105 75,75" fill="#D9A648"/>
+      <polygon points="112.5,45 150,75 112.5,105" fill="#0C0A07"/>
+      
+      <!-- Bottom Striped Section -->
+      <rect x="0" y="110" width="150" height="40" fill="#0C0A07"/>
+      <line x1="0" y1="120" x2="150" y2="120" stroke="#274E27" stroke-width="6"/>
+      <line x1="0" y1="130" x2="150" y2="130" stroke="#8B1A1A" stroke-width="6"/>
+      <line x1="0" y1="140" x2="150" y2="140" stroke="#D9A648" stroke-width="6"/>
+      
+      <!-- Geometric Borders -->
+      <rect x="0" y="40" width="150" height="5" fill="#6B1A1A"/>
+      <rect x="0" y="105" width="150" height="5" fill="#6B1A1A"/>
+    </pattern>
+  </defs>
+  <rect width="100%" height="100%" fill="url(#royal-weave)"/>
+</svg>

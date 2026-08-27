@@ -18,11 +18,9 @@ public:
         letter_.setJustificationType (juce::Justification::centred);
         addAndMakeVisible (letter_);
 
-        power_.setButtonText (juce::String::fromUTF8 ("\xE2\x8F\xBB"));
-        power_.setClickingTogglesState (true);
-        power_.onClick = [this]
+        power_.onToggle = [this] (bool on)
         {
-            proc_.setParamNormalized ("host.slotEnable" + juce::String (slot_), power_.getToggleState() ? 1.0f : 0.0f);
+            proc_.setParamNormalized ("host.slotEnable" + juce::String (slot_), on ? 1.0f : 0.0f);
         };
         addAndMakeVisible (power_);
 
@@ -40,6 +38,31 @@ public:
         pan_->setShowValue (false);
         addAndMakeVisible (*pan_);
         addAndMakeVisible (meter_);
+
+        moreBtn_ = ux::makePackIconButton ("more", ux::PackIcon::kebab, Theme::muted);
+        moreBtn_->onClick = [this]
+        {
+            juce::PopupMenu m;
+            m.addItem (1, "Reset volume && pan");
+            m.addItem (2, proc_.getParamNormalized ("host.slotEnable" + juce::String (slot_)) >= 0.5f
+                              ? "Disable slot" : "Enable slot");
+            m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (moreBtn_.get()), [this] (int r)
+            {
+                if (r == 1)
+                {
+                    if (auto* p = proc_.apvts.getParameter ("slotVol" + juce::String (slot_)))
+                        p->setValueNotifyingHost (p->getDefaultValue());
+                    if (auto* p = proc_.apvts.getParameter ("slotPan" + juce::String (slot_)))
+                        p->setValueNotifyingHost (p->getDefaultValue());
+                }
+                else if (r == 2)
+                {
+                    const bool en = proc_.getParamNormalized ("host.slotEnable" + juce::String (slot_)) >= 0.5f;
+                    proc_.setParamNormalized ("host.slotEnable" + juce::String (slot_), en ? 0.0f : 1.0f);
+                }
+            });
+        };
+        addAndMakeVisible (*moreBtn_);
         rebuild();
     }
 
@@ -61,12 +84,16 @@ public:
 
     void refresh()
     {
-        power_.setToggleState (proc_.getParamNormalized ("host.slotEnable" + juce::String (slot_)) >= 0.5f,
-                               juce::dontSendNotification);
+        const bool on = proc_.getParamNormalized ("host.slotEnable" + juce::String (slot_)) >= 0.5f;
+        power_.setState (on);
+        setAlpha (on ? 1.0f : 0.45f);                    // pack OFF rule: 45% opacity
         vol_->refresh();
         pan_->refresh();
-        const float pk = proc_.slotPeak[(size_t) slot_].load();
+        const float pk = on ? proc_.slotPeak[(size_t) slot_].load() : 0.0f;   // dead meter when OFF
         meter_.setLevel (pk, pk);
+        const bool sel = proc_.state.currentPage <= 3
+                      && slotForWorld (proc_.state, proc_.state.currentPage) == slot_;
+        if (sel != selected_ || on != enabled_) { selected_ = sel; enabled_ = on; repaint(); }
     }
 
     void resized() override
@@ -74,6 +101,7 @@ public:
         auto r = getLocalBounds().reduced (4);
         letter_.setBounds (r.removeFromLeft (24));
         power_.setBounds (r.removeFromLeft (30).withSizeKeepingCentre (26, 26));
+        moreBtn_->setBounds (r.removeFromRight (18).withSizeKeepingCentre (16, 22));
         meter_.setBounds (r.removeFromRight (10));
         auto knobs = r.removeFromRight (92);
         vol_->setBounds (knobs.removeFromLeft (46));
@@ -85,16 +113,26 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        // UX pack perform-slot-{world}.svg backdrop + state rules:
+        // OFF = 45% (component alpha) · ON = accent 1.6px edge · SELECTED = +2px gold inner line
+        const int world = proc_.state.slots[(size_t) slot_].world;
         auto r = getLocalBounds().toFloat().reduced (1.0f);
-        // flat-graphic kente strip in the hosted world's cloth
-        g.setColour (Theme::black);
-        g.fillRoundedRectangle (r, 5.0f);
-        KenteTexture::fill (g, r.reduced (0.5f), KenteTexture::Style::Flat,
-                            Theme::worldAccent (proc_.state.slots[(size_t) slot_].world), 1.0f, 5.0f);
-        g.setColour (juce::Colours::black.withAlpha (0.22f));      // readability scrim
-        g.fillRoundedRectangle (r.reduced (0.5f), 5.0f);
-        g.setColour (Theme::goldDark.withAlpha (0.6f));
-        g.drawRoundedRectangle (r, 5.0f, 1.0f);
+        ux::drawPerformSlot (g, r, world, 6.0f);
+        if (enabled_)
+        {
+            g.setColour (Theme::worldAccent (world));
+            g.drawRoundedRectangle (r.reduced (0.8f), 6.0f, 1.6f);
+        }
+        else
+        {
+            g.setColour (Theme::line.withAlpha (0.7f));
+            g.drawRoundedRectangle (r.reduced (0.8f), 6.0f, 1.0f);
+        }
+        if (selected_)
+        {
+            g.setColour (Theme::gold);
+            g.drawRoundedRectangle (r.reduced (3.5f), 4.5f, 2.0f);
+        }
     }
 
 private:
@@ -130,10 +168,12 @@ private:
 
     JMSignatureProcessor& proc_;
     int slot_;
+    bool selected_ = false, enabled_ = true;
     juce::Label letter_;
-    juce::TextButton power_;
+    PowerButton power_;
     juce::ComboBox world_, patch_;
     std::unique_ptr<ParamKnob> vol_, pan_;
+    std::unique_ptr<juce::DrawableButton> moreBtn_;
     LevelMeter meter_;
 };
 
@@ -145,6 +185,7 @@ public:
     {
         knob_ = std::make_unique<ParamKnob> (proc_, "host.macro" + juce::String (idx_ + 1),
                                              proc_.state.macros[(size_t) idx_].name);
+        knob_->setMark ((int) ux::Mark::spiralUnity);        // macro engraving (logged)
         addAndMakeVisible (*knob_);
         learn_.setButtonText ("LEARN");
         learn_.setClickingTogglesState (true);
@@ -172,6 +213,15 @@ public:
         learn_.setBounds (btns.removeFromLeft (btns.getWidth() / 2).reduced (1, 0));
         targets_.setBounds (btns.reduced (1, 0));
         knob_->setBounds (r);
+    }
+
+    void paintOverChildren (juce::Graphics& g) override
+    {
+        // macro-ring-{world}.svg: semantic colored ring (macro 1..4 -> world accents)
+        auto kb = knob_->knobBounds().translated (knob_->getX(), knob_->getY()).toFloat();
+        const float size = juce::jmin (kb.getWidth(), kb.getHeight());
+        auto ring = juce::Rectangle<float> (size, size).withCentre (kb.getCentre()).expanded (size * 0.045f);
+        ux::drawMacroRing (g, ring, Theme::worldAccent (idx_), knob_->normValue());
     }
 
 private:
@@ -208,6 +258,74 @@ private:
 };
 
 //==============================================================================
+// Transpose per UX pack transpose.svg (220x62 ref): framed, stage-legible,
+// front-and-center. Live text; chevron hit zones step the host parameter.
+class TransposeControl : public juce::Component
+{
+public:
+    explicit TransposeControl (JMSignatureProcessor& p) : proc_ (p) {}
+
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        if (e.mouseWasDraggedSinceMouseDown()) return;
+        const int third = getWidth() / 3;
+        if (e.x < third) step (-1);
+        else if (e.x > 2 * third) step (1);
+    }
+    void refresh()
+    {
+        if (auto* p = dynamic_cast<juce::AudioParameterInt*> (proc_.apvts.getParameter ("transpose")))
+            if (p->get() != value_) { value_ = p->get(); repaint(); }
+    }
+    void paint (juce::Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat();
+        const float u = r.getHeight() / 62.0f;
+        g.setColour (juce::Colour (0xff0B0B0A));
+        g.fillRoundedRectangle (r.reduced (1.0f), 5.0f);
+        g.setColour (juce::Colour (0xff4A3518));
+        g.drawRoundedRectangle (r.reduced (1.0f), 5.0f, 1.0f);
+        g.setColour (Theme::gold);
+        g.setFont (Theme::ui (10.0f * u));
+        g.drawText ("T R A N S P O S E", r.withTrimmedTop (4.0f * u).withHeight (14.0f * u),
+                    juce::Justification::centred);
+        g.setColour (Theme::muted);
+        g.setFont (Theme::ui (12.0f * u));
+        auto lower = r.withTrimmedTop (r.getHeight() * 0.42f);
+        g.drawText ("-12", lower.withWidth (r.getWidth() * 0.22f), juce::Justification::centred);
+        g.drawText ("+12", lower.withTrimmedLeft (r.getWidth() * 0.78f), juce::Justification::centred);
+        g.setColour (Theme::cream);
+        g.setFont (Theme::value (18.0f * u));
+        g.drawText ((value_ > 0 ? "+" : "") + juce::String (value_), lower, juce::Justification::centred);
+        auto chevron = [&] (float cx, bool left)
+        {
+            juce::Path p;
+            const float s = 7.0f * u, cy = lower.getCentreY();
+            p.startNewSubPath (cx + (left ? s : -s) * 0.5f, cy - s);
+            p.lineTo (cx - (left ? s : -s) * 0.5f, cy);
+            p.lineTo (cx + (left ? s : -s) * 0.5f, cy + s);
+            g.setColour (Theme::goldHi);
+            g.strokePath (p, juce::PathStrokeType (2.0f * u, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        };
+        chevron (r.getWidth() * 0.335f, true);
+        chevron (r.getWidth() * 0.665f, false);
+    }
+
+private:
+    void step (int delta)
+    {
+        if (auto* p = dynamic_cast<juce::AudioParameterInt*> (proc_.apvts.getParameter ("transpose")))
+        {
+            p->beginChangeGesture();
+            *p = juce::jlimit (-12, 12, p->get() + delta);
+            p->endChangeGesture();
+        }
+    }
+    JMSignatureProcessor& proc_;
+    int value_ = 0;
+};
+
+//==============================================================================
 class PerformDock : public juce::Component
 {
 public:
@@ -224,16 +342,21 @@ public:
             slots_[(size_t) i] = std::make_unique<SlotStrip> (proc_, i);
             addAndMakeVisible (*slots_[(size_t) i]);
         }
-        solo_.setButtonText ("SOLO");
-        poly_.setButtonText ("POLY");
-        for (auto* b : { &solo_, &poly_ })
+        // SOLO <pill> POLY (client toggle.svg; thumb right = POLY)
+        for (auto* l : { &soloLbl_, &polyLbl_ })
         {
-            b->setClickingTogglesState (true);
-            b->setRadioGroupId (555);
-            addAndMakeVisible (*b);
+            l->setFont (Theme::ui (12.0f));
+            l->setColour (juce::Label::textColourId, Theme::muted);
+            addAndMakeVisible (*l);
         }
-        solo_.onClick = [this] { if (solo_.getToggleState()) proc_.setParamNormalized ("host.solo", 1.0f); };
-        poly_.onClick = [this] { if (poly_.getToggleState()) proc_.setParamNormalized ("host.solo", 0.0f); };
+        soloLbl_.setText ("SOLO", juce::dontSendNotification);
+        soloLbl_.setJustificationType (juce::Justification::centredRight);
+        polyLbl_.setText ("POLY", juce::dontSendNotification);
+        polyLbl_.setJustificationType (juce::Justification::centredLeft);
+        soloPill_.thumbColour = juce::Colour (0xffB4E51A);   // toggle-solo-poly.svg thumb
+        soloPill_.thumbRim = juce::Colour (0xffDDFE63);
+        soloPill_.onToggle = [this] (bool poly) { proc_.setParamNormalized ("host.solo", poly ? 0.0f : 1.0f); };
+        addAndMakeVisible (soloPill_);
 
         auto stepper = [this] (juce::Label& lbl, juce::TextButton& dn, juce::TextButton& up, const char* pid, int lo, int hi)
         {
@@ -257,8 +380,9 @@ public:
             addAndMakeVisible (dn);
             addAndMakeVisible (up);
         };
-        stepper (transposeVal_, transDn_, transUp_, "transpose", -12, 12);
         stepper (octaveVal_, octDn_, octUp_, "octave", -2, 2);
+        transpose_ = std::make_unique<TransposeControl> (proc_);   // front-and-center (UX pack)
+        addAndMakeVisible (*transpose_);
 
         for (int i = 0; i < 4; ++i)
         {
@@ -274,10 +398,10 @@ public:
         for (auto& s : slots_) s->refresh();
         for (auto& m : macros_) m->refresh();
         const bool solo = proc_.getParamNormalized ("host.solo") >= 0.5f;
-        solo_.setToggleState (solo, juce::dontSendNotification);
-        poly_.setToggleState (! solo, juce::dontSendNotification);
-        if (auto* p = dynamic_cast<juce::AudioParameterInt*> (proc_.apvts.getParameter ("transpose")))
-            transposeVal_.setText ((p->get() > 0 ? "+" : "") + juce::String (p->get()) + " st", juce::dontSendNotification);
+        soloPill_.setState (! solo);
+        soloLbl_.setColour (juce::Label::textColourId, solo ? Theme::goldHi : Theme::muted);
+        polyLbl_.setColour (juce::Label::textColourId, solo ? Theme::muted : Theme::goldHi);
+        transpose_->refresh();
         if (auto* p = dynamic_cast<juce::AudioParameterInt*> (proc_.apvts.getParameter ("octave")))
             octaveVal_.setText ((p->get() > 0 ? "+" : "") + juce::String (p->get()) + " oct", juce::dontSendNotification);
     }
@@ -289,16 +413,14 @@ public:
         for (auto& s : slots_)
             s->setBounds (r.removeFromTop (64).reduced (0, 2));
         r.removeFromTop (4);
-        auto row = r.removeFromTop (26);
+        transpose_->setBounds (r.removeFromTop (48).withSizeKeepingCentre (juce::jmin (220, r.getWidth()), 46));
+        r.removeFromTop (2);
+        auto row = r.removeFromTop (24);
         auto sp = row.removeFromLeft (row.getWidth() / 2);
-        solo_.setBounds (sp.removeFromLeft (sp.getWidth() / 2).reduced (2, 0));
-        poly_.setBounds (sp.reduced (2, 0));
-        auto tr = row;
-        transDn_.setBounds (tr.removeFromLeft (22));
-        transUp_.setBounds (tr.removeFromRight (22));
-        transposeVal_.setBounds (tr);
-        auto row2 = r.removeFromTop (26).reduced (0, 1);
-        auto or2 = row2.removeFromRight (row2.getWidth() / 2);
+        soloLbl_.setBounds (sp.removeFromLeft (44));
+        soloPill_.setBounds (sp.removeFromLeft (46).withSizeKeepingCentre (44, 22));
+        polyLbl_.setBounds (sp);
+        auto or2 = row;
         octDn_.setBounds (or2.removeFromLeft (22));
         octUp_.setBounds (or2.removeFromRight (22));
         octaveVal_.setBounds (or2);
@@ -311,21 +433,20 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto r = getLocalBounds().toFloat();
-        g.setColour (Theme::deepPanel);
-        g.fillRoundedRectangle (r, (float) Theme::M::corner);
-        // faint chassis weave; the cloth statements are the slot strips themselves
-        KenteTexture::fill (g, r.reduced (1.0f), KenteTexture::Style::Weave, Theme::chassisCloth,
-                            0.5f, (float) Theme::M::corner);
-        g.setColour (Theme::goldDark.withAlpha (0.4f));
-        g.drawRoundedRectangle (r.reduced (0.5f), (float) Theme::M::corner, 1.0f);
+        // frame language; the cloth statements are the slot strips themselves
+        ux::drawFrame (g, r, true, (float) Theme::M::corner, 7.0f);
+        ux::drawMicroWeave (g, r.reduced (2.0f), 0.20f, (float) Theme::M::corner);
     }
 
 private:
     JMSignatureProcessor& proc_;
     juce::Label title_;
     std::array<std::unique_ptr<SlotStrip>, 4> slots_;
-    juce::TextButton solo_, poly_, transDn_, transUp_, octDn_, octUp_;
-    juce::Label transposeVal_, octaveVal_;
+    juce::Label soloLbl_, polyLbl_;
+    PillToggle soloPill_;
+    std::unique_ptr<TransposeControl> transpose_;
+    juce::TextButton octDn_, octUp_;
+    juce::Label octaveVal_;
     std::array<std::unique_ptr<MacroKnobUnit>, 4> macros_;
 };
 
@@ -386,18 +507,12 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto r = getLocalBounds().toFloat();
-        // master section: royal gold/burgundy weave framing a recessed panel
-        g.setColour (Theme::black);
-        g.fillRoundedRectangle (r, (float) Theme::M::corner);
-        KenteTexture::fill (g, r.reduced (1.5f), KenteTexture::Style::Weave, Theme::masterCloth,
-                            1.0f, (float) Theme::M::corner);
+        // master section: master-fx-frame language + micro weave
+        ux::drawFrame (g, r, true, (float) Theme::M::corner, 7.0f);
+        ux::drawMicroWeave (g, r.reduced (2.0f), 0.30f, (float) Theme::M::corner);
         auto inner = getLocalBounds().reduced (Theme::M::pad * 2 + 6).toFloat();
-        g.setColour (Theme::deepPanel.withAlpha (0.88f));
+        g.setColour (juce::Colour (0xff050505).withAlpha (0.40f));
         g.fillRoundedRectangle (inner, (float) Theme::M::corner);
-        g.setColour (juce::Colours::black.withAlpha (0.55f));
-        g.drawRoundedRectangle (inner, (float) Theme::M::corner, 1.5f);
-        g.setColour (Theme::gold.withAlpha (0.5f));
-        g.drawRoundedRectangle (r.reduced (1.0f), (float) Theme::M::corner, 1.2f);
     }
 
 private:
@@ -443,7 +558,8 @@ public:
         logoArea_ = r.removeFromLeft (250);
         meter_.setBounds (r.removeFromRight (46).reduced (0, 4));
         master_->setBounds (r.removeFromRight (66));
-        r.removeFromRight (10);
+        cartArea_ = r.removeFromRight (26).reduced (2, 10);
+        r.removeFromRight (6);
         auto tabs = r.withSizeKeepingCentre (juce::jmin (620, r.getWidth()), r.getHeight());
         const int tw = tabs.getWidth() / 5;
         for (auto& b : navs_) b.setBounds (tabs.removeFromLeft (tw).reduced (2, 2));
@@ -453,20 +569,13 @@ public:
     {
         g.setColour (Theme::black);
         g.fillRect (getLocalBounds());
-        // gold shield mark placeholder + wordmark
+        // client vector shield logo (assets/logo.svg), crisp at any scale
         auto la = logoArea_.toFloat();
-        auto shield = la.removeFromLeft (36.0f).reduced (4.0f);
-        juce::Path ph;
-        ph.startNewSubPath (shield.getX(), shield.getY());
-        ph.lineTo (shield.getRight(), shield.getY());
-        ph.lineTo (shield.getRight(), shield.getCentreY() + shield.getHeight() * 0.2f);
-        ph.lineTo (shield.getCentreX(), shield.getBottom());
-        ph.lineTo (shield.getX(), shield.getCentreY() + shield.getHeight() * 0.2f);
-        ph.closeSubPath();
-        g.setColour (Theme::gold);
-        g.strokePath (ph, juce::PathStrokeType (1.6f));
-        g.setFont (Theme::display (12.0f));
-        g.drawText ("JM", shield, juce::Justification::centred);
+        auto shield = la.removeFromLeft (40.0f).reduced (2.0f);
+        if (logo_ != nullptr)
+            logo_->drawWithin (g, shield, juce::RectanglePlacement::centred, 1.0f);
+        if (cart_ != nullptr && ! cartArea_.isEmpty())      // decorative per reference
+            cart_->drawWithin (g, cartArea_.toFloat(), juce::RectanglePlacement::centred, 0.55f);
         g.setColour (Theme::goldHi);
         g.setFont (Theme::display (17.0f));
         g.drawText ("JM SIGNATURE", la.reduced (6.0f, 0.0f).removeFromTop (la.getHeight() * 0.62f),
@@ -482,7 +591,9 @@ private:
     std::array<juce::TextButton, 5> navs_;
     std::unique_ptr<ParamKnob> master_;
     LevelMeter meter_;
-    juce::Rectangle<int> logoArea_;
+    juce::Rectangle<int> logoArea_, cartArea_;
+    std::unique_ptr<juce::Drawable> logo_ { ux::makeShield() };   // jm-shield-reference.svg
+    std::unique_ptr<juce::Drawable> cart_ { assets::makeIcon (assets::Icon::cart, Theme::muted) };
 };
 
 //==============================================================================
@@ -492,17 +603,17 @@ public:
     StatusBar (JMSignatureProcessor& p, std::function<void()> onKeyboard)
         : proc_ (p)
     {
-        kbBtn_.setButtonText ("KEYBOARD");
-        kbBtn_.setClickingTogglesState (true);
-        kbBtn_.onClick = std::move (onKeyboard);
-        addAndMakeVisible (kbBtn_);
+        kbBtn_ = assets::makeIconButton ("keyboard", assets::Icon::keyboard, Theme::muted);
+        kbBtn_->setClickingTogglesState (true);
+        kbBtn_->onClick = std::move (onKeyboard);
+        addAndMakeVisible (*kbBtn_);
     }
 
     void refresh() { repaint(); }
 
     void resized() override
     {
-        kbBtn_.setBounds (getLocalBounds().withSizeKeepingCentre (110, getHeight() - 6));
+        kbBtn_->setBounds (getLocalBounds().withSizeKeepingCentre (34, getHeight() - 4));
     }
 
     void paint (juce::Graphics& g) override
@@ -521,7 +632,7 @@ public:
 
 private:
     JMSignatureProcessor& proc_;
-    juce::TextButton kbBtn_;
+    std::unique_ptr<juce::DrawableButton> kbBtn_;
 };
 
 } // namespace jm

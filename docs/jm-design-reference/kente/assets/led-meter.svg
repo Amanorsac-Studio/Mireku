@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 120" width="30" height="120">
+  <rect x="5" y="5" width="20" height="110" fill="#0C0A07" rx="2" stroke="#2A2622" stroke-width="1"/>
+  <!-- Peak (Red) -->
+  <rect x="8" y="10" width="14" height="15" fill="#8B1A1A" rx="1"/>
+  <!-- Warning (Gold) -->
+  <rect x="8" y="28" width="14" height="25" fill="#D9A648" rx="1"/>
+  <!-- Safe (Green) -->
+  <rect x="8" y="56" width="14" height="54" fill="#274E27" rx="1"/>
+</svg>

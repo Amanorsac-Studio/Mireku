@@ -1,0 +1,125 @@
+{
+  "package": "JM-SIGNATURE-SVG-PACK",
+  "version": "1.0.0",
+  "referenceViewport": {
+    "width": 1536,
+    "height": 1024
+  },
+  "principle": "Kente is material; Adinkra-inspired marks are engraving; gold is hardware; black is architecture; glow is feedback.",
+  "colors": {
+    "bg": "#050505",
+    "chassis": "#0A0A09",
+    "panel": "#10100E",
+    "panelRaised": "#15130F",
+    "line": "#3B2A13",
+    "gold": "#D9A648",
+    "goldBright": "#F3C868",
+    "goldDark": "#7B551A",
+    "cream": "#EFE7D4",
+    "muted": "#9C9485",
+    "rhodes": "#D36B18",
+    "mks": "#A7D61A",
+    "fm": "#2FA8FF",
+    "strings": "#C150D8",
+    "fxTeal": "#0B655F",
+    "fxOrange": "#B85B09",
+    "fxPurple": "#5A315C",
+    "fxBlue": "#1B536F",
+    "fxRed": "#8A2B17",
+    "fxGreen": "#25583C"
+  },
+  "worlds": {
+    "rhodes": {
+      "accent": "#D36B18",
+      "patternExact": "assets/kente/kente-rhodes-exact.svg",
+      "patternPanel": "assets/kente/kente-rhodes-panel.svg",
+      "controls": [
+        "Bark",
+        "Tine",
+        "Body",
+        "Tremolo",
+        "Space"
+      ]
+    },
+    "mks": {
+      "accent": "#A7D61A",
+      "patternExact": "assets/kente/kente-mks-exact.svg",
+      "patternPanel": "assets/kente/kente-mks-panel.svg",
+      "controls": [
+        "Chorus",
+        "Depth",
+        "Width",
+        "Ensemble",
+        "Warmth",
+        "Air"
+      ]
+    },
+    "fm": {
+      "accent": "#2FA8FF",
+      "patternExact": "assets/kente/kente-fm-exact.svg",
+      "patternPanel": "assets/kente/kente-fm-panel.svg",
+      "controls": [
+        "Brightness",
+        "Attack",
+        "Glass",
+        "Chorus",
+        "Echo"
+      ]
+    },
+    "strings": {
+      "accent": "#C150D8",
+      "patternExact": "assets/kente/kente-strings-exact.svg",
+      "patternPanel": "assets/kente/kente-strings-panel.svg",
+      "controls": [
+        "Swell",
+        "Ensemble",
+        "Shimmer",
+        "Warmth",
+        "Motion"
+      ]
+    }
+  },
+  "controlSizes": {
+    "primaryKnob": 96,
+    "secondaryKnob": 56,
+    "macroKnob": 104,
+    "powerButton": 48,
+    "toggleSoloPoly": [
+      124,
+      32
+    ],
+    "transpose": [
+      220,
+      62
+    ]
+  },
+  "rotation": {
+    "knobs": {
+      "minDeg": -135,
+      "maxDeg": 135,
+      "defaultDeg": 0
+    }
+  },
+  "usage": {
+    "performSlots": [
+      "assets/frames/perform-slot-rhodes.svg",
+      "assets/frames/perform-slot-mks.svg",
+      "assets/frames/perform-slot-fm.svg",
+      "assets/frames/perform-slot-strings.svg"
+    ],
+    "fxModuleFrames": [
+      "assets/frames/fx-module-teal.svg",
+      "assets/frames/fx-module-orange.svg",
+      "assets/frames/fx-module-purple.svg",
+      "assets/frames/fx-module-blue.svg",
+      "assets/frames/fx-module-red.svg",
+      "assets/frames/fx-module-green.svg"
+    ]
+  },
+  "notes": [
+    "Files named *-exact.svg embed the supplied raster Kente source inside SVG for exact visual fidelity.",
+    "Files named *-panel.svg are darkened/graded versions intended behind controls.",
+    "Adinkra marks are original Adinkra-inspired geometric motifs, not claims of exact traditional symbols.",
+    "For JUCE, rasterize exact/panel SVG at target DPI if the SVG loader does not support embedded data URIs; do not redraw them."
+  ]
+}

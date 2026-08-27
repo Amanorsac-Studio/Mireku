@@ -2,6 +2,7 @@
 import { useApp } from '../../state/appStore';
 import { services } from '../../state/services';
 import { Button, Label, Panel } from '../common';
+import { IconFilter, IconHeart, IconMore, IconStar } from '../assets/icons';
 
 /** Preset lanes (§3.6): create / rename / duplicate / delete presets
  * (params + FX only) on the current bundle. */
@@ -69,10 +70,18 @@ export function PresetLanes() {
           ))}
         </div>
         <div className="jm-row">
-          <Button onClick={create}>New</Button>
-          <Button onClick={saveCurrent}>Save Rack Into Preset</Button>
-          <Button onClick={rename}>Rename</Button>
-          <Button onClick={duplicate}>Duplicate</Button>
+          <Button onClick={create}>
+            <IconStar size={14} /> New
+          </Button>
+          <Button onClick={saveCurrent}>
+            <IconHeart size={14} /> Save Rack Into Preset
+          </Button>
+          <Button onClick={rename}>
+            <IconMore size={14} /> Rename
+          </Button>
+          <Button onClick={duplicate}>
+            <IconFilter size={14} /> Duplicate
+          </Button>
           <Button onClick={remove} disabled={presets.length <= 1}>
             Delete
           </Button>

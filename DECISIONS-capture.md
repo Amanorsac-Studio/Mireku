@@ -102,7 +102,33 @@ to log anything the spec left open.
     (#5B3A6F). If the Signature side later publishes a canonical table, only
     `fxTint`/`worldTint` in tokens.ts need updating.
 
-19. **Electron main is bundled as ESM (`.mjs`)** with `@jm/jmi-format` kept external
+19. **Client UX asset pack integration** (docs/jm-design-reference/kente/assets):
+    - Icons + logo transcribed as React components (`src/ui/assets/icons.tsx`,
+      `Logo.tsx`) rather than ?raw file imports — strokes/fills converted from
+      the delivered hard-coded #D9A648 to `currentColor` (icons) and to the
+      `goldGradient` token (logo/knob), keeping tokens.ts authoritative.
+      icon-cart was delivered but has no purchasable surface in Capture — left
+      unused. The ✕ on FX-unit removal stays a text glyph (no matching icon in
+      the pack).
+    - Knob restyled to the exact knob-recipe.svg (radial body, gold rim
+      gradient, inner ridge, gold pointer + lit tip); value arc + tabular
+      readout kept per the design law. Gradient stops live in tokens (`knob`).
+      The adinkra-symbol engraving is drawn faintly on the knob face from
+      swappable path data (`ADINKRA_PATHS`) — identity only, never the value.
+    - led-meter.svg zones (green/gold/red) became the `meter` tokens, applied
+      to a new generic input LED meter on the guided screen. The red segment
+      exists ONLY there; the guided arc meter keeps its gold coaching zone
+      (no-warning-red rule).
+    - toggle.svg became the `Toggle` component, used for FX boolean params
+      (sync, ping-pong) and the wizard stereo/mono switch.
+    - pattern-\*.svg (bright gold-base) are vendored into src/ui/assets and run
+      through a darkening pipeline (`worldPatternDataUrl` in theme/weave.ts):
+      rasterized with brightness/saturation pulled down + a chassis-colored
+      veil (params in `patternDarken` tokens), then used as the wizard world
+      cards' cloth. Measured in-browser to sit within the ~35% contrast law;
+      the procedural weave remains the fallback while the raster decodes.
+
+20. **Electron main is bundled as ESM (`.mjs`)** with `@jm/jmi-format` kept external
     so its `import.meta.url`-relative JSON-schema lookup keeps resolving from
     `node_modules`. Preload is CJS for sandbox compatibility.
 

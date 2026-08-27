@@ -4,7 +4,7 @@ import { FX_REGISTRY } from '@jm/jmi-format/web';
 import { MAX_SLOTS } from '../../engine/fx/rack';
 import { useApp } from '../../state/appStore';
 import { services } from '../../state/services';
-import { Button, Label, Panel } from '../common';
+import { Button, Label, Panel, Select, Toggle } from '../common';
 import { fxTint } from '../theme/tokens';
 import { clothBackground } from '../theme/weave';
 import { Knob } from './Knob';
@@ -111,8 +111,7 @@ export function FxRackView() {
                   if (spec.kind === 'enum') {
                     return (
                       <div key={spec.id} className="jm-knob">
-                        <select
-                          className="jm-select"
+                        <Select
                           value={String(val)}
                           onChange={(e) => {
                             unit.setParam(spec.id, e.target.value);
@@ -124,7 +123,7 @@ export function FxRackView() {
                               {c}
                             </option>
                           ))}
-                        </select>
+                        </Select>
                         <div className="jm-label">{spec.label}</div>
                       </div>
                     );
@@ -132,15 +131,13 @@ export function FxRackView() {
                   if (spec.kind === 'bool') {
                     return (
                       <div key={spec.id} className="jm-knob">
-                        <Button
-                          primary={val === true}
-                          onClick={() => {
-                            unit.setParam(spec.id, !(val === true));
+                        <Toggle
+                          checked={val === true}
+                          onChange={(next) => {
+                            unit.setParam(spec.id, next);
                             bump();
                           }}
-                        >
-                          {val === true ? 'On' : 'Off'}
-                        </Button>
+                        />
                         <div className="jm-label">{spec.label}</div>
                       </div>
                     );

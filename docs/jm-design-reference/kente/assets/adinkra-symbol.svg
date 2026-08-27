@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <g stroke="#D9A648" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Top Loop -->
+    <path d="M50 45 C50 45 35 20 50 15 C65 10 70 25 50 45 Z"/>
+    <!-- Bottom Loop -->
+    <path d="M50 55 C50 55 65 80 50 85 C35 90 30 75 50 55 Z"/>
+    <!-- Left Loop -->
+    <path d="M45 50 C45 50 20 65 15 50 C10 35 25 30 45 50 Z"/>
+    <!-- Right Loop -->
+    <path d="M55 50 C55 50 80 35 85 50 C90 65 75 70 55 50 Z"/>
+    <!-- Center Dot -->
+    <circle cx="50" cy="50" r="4" fill="#D9A648"/>
+  </g>
+</svg>

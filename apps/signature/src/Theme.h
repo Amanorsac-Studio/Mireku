@@ -8,45 +8,76 @@ namespace jm {
 
 struct Theme
 {
-    // ---------------------------------------------------------- core tokens
-    static inline const juce::Colour chassis      { 0xff0C0A07 };
-    static inline const juce::Colour deepPanel    { 0xff11100D };
-    static inline const juce::Colour black        { 0xff080807 };
+    // ------------------------- core tokens (UX pack v1.0.0 manifest.json)
+    static inline const juce::Colour bg           { 0xff050505 };
+    static inline const juce::Colour chassis      { 0xff0A0A09 };
+    static inline const juce::Colour deepPanel    { 0xff10100E };  // "panel"
+    static inline const juce::Colour panelRaised  { 0xff15130F };
+    static inline const juce::Colour line         { 0xff3B2A13 };
+    static inline const juce::Colour black        { 0xff050505 };  // recesses (= bg)
+    static inline const juce::Colour chassisBase  { 0xff080807 };  // model-panel layer 1
     static inline const juce::Colour gold         { 0xffD9A648 };
-    static inline const juce::Colour goldHi       { 0xffF1C66A };
-    static inline const juce::Colour goldDark     { 0xff725322 };
+    static inline const juce::Colour goldHi       { 0xffF3C868 };  // "goldBright"
+    static inline const juce::Colour goldDark     { 0xff7B551A };
     static inline const juce::Colour cream        { 0xffEFE7D4 };
-    static inline const juce::Colour muted        { 0xff9B9383 };
+    static inline const juce::Colour muted        { 0xff9C9485 };
 
-    // module accents (flat placeholders for the future kente cloth tints)
-    static inline const juce::Colour rhodesAccent { 0xff7A3B22 };  // rust/amber
-    static inline const juce::Colour mksAccent    { 0xff2E4A2B };  // forest/gold
-    static inline const juce::Colour fmAccent     { 0xff23305C };  // indigo
-    static inline const juce::Colour stringsAccent{ 0xff4A2B5C };  // violet
-    static inline const juce::Colour masterAccent { 0xff5C3A16 };  // royal gold/burgundy
+    // world ACCENTS (edges/glows/labels/macro rings; cloth comes from the panel rasters)
+    static inline const juce::Colour rhodesAccent { 0xffD36B18 };
+    static inline const juce::Colour mksAccent    { 0xffA7D61A };
+    static inline const juce::Colour fmAccent     { 0xff2FA8FF };
+    static inline const juce::Colour stringsAccent{ 0xffC150D8 };
+    static inline const juce::Colour masterAccent { 0xffD9A648 };
 
-    // FX unit cloth tints (per design reference)
-    static inline const juce::Colour fxChorus     { 0xff1E4A44 };  // teal
-    static inline const juce::Colour fxTremolo    { 0xff4A3A1E };
-    static inline const juce::Colour fxPhaser     { 0xff45265C };  // violet
-    static inline const juce::Colour fxFlanger    { 0xff26455C };
-    static inline const juce::Colour fxDrive      { 0xff5C3A26 };
-    static inline const juce::Colour fxEq         { 0xff3A4A2E };
-    static inline const juce::Colour fxComp       { 0xff5C2626 };  // crimson
-    static inline const juce::Colour fxTapeDelay  { 0xff5C4526 };  // ember
-    static inline const juce::Colour fxDigDelay   { 0xff26305C };
-    static inline const juce::Colour fxPlate      { 0xff2E3E4A };
-    static inline const juce::Colour fxHall       { 0xff2E4A38 };  // forest / indigo shimmer
-    static inline const juce::Colour fxWidener    { 0xff44265C };
+    // FX faceplate family (fx-module-*.svg) — its own JM hardware family,
+    // never the world colors
+    static inline const juce::Colour fxTeal       { 0xff0B655F };
+    static inline const juce::Colour fxOrange     { 0xffB85B09 };
+    static inline const juce::Colour fxPurple     { 0xff5A315C };
+    static inline const juce::Colour fxBlue       { 0xff1B536F };
+    static inline const juce::Colour fxRed        { 0xff8A2B17 };
+    static inline const juce::Colour fxGreen      { 0xff25583C };
 
-    // master section cloth (royal gold/burgundy weave)
+    // legacy interim tokens (procedural KenteTexture fallback only)
     static inline const juce::Colour masterCloth  { 0xff5C2A20 };
-    // near-black weave for chassis-level panels (browser, dock)
     static inline const juce::Colour chassisCloth { 0xff17130E };
 
-    static inline const juce::Colour okGreen      { 0xff6FBF5A };
-    static inline const juce::Colour warnRed      { 0xffC24A3A };
-    static inline const juce::Colour meterGreen   { 0xff7FCC5E };
+    static inline const juce::Colour okGreen      { 0xff68F02A };
+    static inline const juce::Colour warnRed      { 0xffF07229 };
+
+    // LED meter (UX pack vertical-meter.svg)
+    static inline const juce::Colour meterSafe    { 0xff68F02A };  // green segments
+    static inline const juce::Colour meterWarn    { 0xffE0C024 };  // yellow segments
+    static inline const juce::Colour meterPeak    { 0xffF07229 };  // orange segments
+    static inline const juce::Colour meterBorder  { 0xff392A17 };
+    static inline const juce::Colour meterTrack   { 0xff070707 };
+
+    // knob shells (UX pack knob-primary.svg / knob-secondary.svg)
+    static inline const juce::Colour knobOuter    { 0xff070707 };  // shell base
+    static inline const juce::Colour knobOuterRim { 0xff2B2418 };  // shell stroke
+    static inline const juce::Colour knobTrack    { 0xff4F3A16 };  // value track arc
+    static inline const juce::Colour knobArc      { 0xffD9A648 };  // value arc (glow)
+    static inline const juce::Colour knobGold0    { 0xffFFF0A6 };  // gold ring stops
+    static inline const juce::Colour knobGold35   { 0xffF3C868 };
+    static inline const juce::Colour knobGold70   { 0xffD9A648 };
+    static inline const juce::Colour knobGold100  { 0xff7B551A };
+    static inline const juce::Colour knobFace0    { 0xff2A2925 };  // face radial stops
+    static inline const juce::Colour knobFace55   { 0xff11110F };
+    static inline const juce::Colour knobFace100  { 0xff050505 };
+    static inline const juce::Colour knobIndicator{ 0xffF3C868 };
+    static inline const juce::Colour knobHub      { 0xff0A0A09 };  // center hub (engraving bed)
+    static inline const juce::Colour knobHubRim   { 0xff5B431B };
+    static inline const juce::Colour knobSecRim   { 0xff5A421A };  // secondary shell stroke
+
+    // legacy pattern palette (procedural fallback only)
+    static inline const juce::Colour patGold      { 0xffD9A648 };
+    static inline const juce::Colour patGreen     { 0xff274E27 };
+    static inline const juce::Colour patRed       { 0xff8B1A1A };
+    static inline const juce::Colour patBurgundy  { 0xff6B1A1A };
+    static inline const juce::Colour patDark      { 0xff0C0A07 };
+    static inline const juce::Colour patCream     { 0xffEFE7D4 };
+    static inline const juce::Colour patBlue      { 0xff2A5B84 };
+    static inline const juce::Colour patBlack     { 0xff1A1510 };
 
     static juce::Colour worldAccent (int worldIndex)
     {
@@ -64,19 +95,25 @@ struct Theme
     // All in "design units" at the 1380x900 reference size; the editor scales.
     struct M
     {
-        static constexpr int designW        = 1380;
-        static constexpr int designH        = 900;
-        static constexpr int topBarH        = 56;
+        // UX pack v1.0.0 reference viewport 1536x1024
+        static constexpr int designW        = 1536;
+        static constexpr int designH        = 1024;
+        static constexpr int topBarH        = 60;
         static constexpr int statusBarH     = 26;
-        static constexpr int leftColW       = 240;
-        static constexpr int rightColW      = 330;
-        static constexpr int fxStripH       = 240;
-        static constexpr int knobLarge      = 108;
+        static constexpr int leftColW       = 260;   // preset-browser-frame width
+        static constexpr int rightColW      = 356;
+        static constexpr int fxStripH       = 268;   // fx-module frame 250 + strip chrome
+        static constexpr int knobPrimary    = 96;    // manifest controlSizes
+        static constexpr int knobSecondary  = 56;
+        static constexpr int knobMacro      = 104;
+        static constexpr int knobLarge      = 96;    // legacy aliases
         static constexpr int knobMedium     = 72;
         static constexpr int knobSmall      = 44;
+        static constexpr int powerButton    = 48;
+        static constexpr int slotW          = 520, slotH = 92;   // perform slot reference
         static constexpr int pad            = 8;
         static constexpr int corner         = 6;
-        static constexpr float arcThickness = 3.5f;
+        static constexpr float arcThickness = 3.0f;  // knob shell arc stroke
     };
 
     // ---------------------------------------------------- kente texture params

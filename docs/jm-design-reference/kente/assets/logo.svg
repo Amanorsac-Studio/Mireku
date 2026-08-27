@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 120" width="100" height="120">
+  <defs>
+    <linearGradient id="gold-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F2D06B" />
+      <stop offset="45%" stop-color="#D9A648" />
+      <stop offset="100%" stop-color="#8C6222" />
+    </linearGradient>
+  </defs>
+  <!-- Outer Shield -->
+  <path d="M50 4 L94 20 L94 65 C94 95 50 116 50 116 C50 116 6 95 6 65 L6 20 Z" fill="none" stroke="url(#gold-grad)" stroke-width="3"/>
+  <!-- Inner Shield Echo -->
+  <path d="M50 12 L86 25 L86 63 C86 87 50 105 50 105 C50 105 14 87 14 63 L14 25 Z" fill="none" stroke="url(#gold-grad)" stroke-width="1.5" stroke-dasharray="4 2"/>
+  <!-- JM Monogram Text -->
+  <text x="50" y="72" font-family="Times New Roman, serif" font-weight="bold" font-size="42" letter-spacing="-2" fill="url(#gold-grad)" text-anchor="middle">JM</text>
+</svg>

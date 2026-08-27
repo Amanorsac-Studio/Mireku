@@ -38,6 +38,19 @@ HTML/CSS concept renders built on the build's actual design tokens (see the mock
 - **fx-rack.png** — six cloth-backed FX machines, gold hardware, bypass, JM maker's mark
 - **capture-guided-meter.png** — JM Capture guided screen: huge note, layer strip, gold target zone + needle, take dots, 30×4 session map
 
+## kente/assets/ — client UX asset pack (delivered Aug 27)
+
+First concrete UX deliverables from the client, normalized names (originals in Downloads):
+
+- **Icons** `icon-*.svg` — gold stroke/fill 24px set: search, filter, star (favorite), heart, left, down, more (⋮), keyboard, cart. Retint via theme tokens, not the hardcoded #D9A648.
+- **logo.svg** — vector JM shield + monogram with the official gold gradient (#F2D06B→#D9A648→#8C6222). Replaces bitmap logo usage.
+- **knob-recipe.svg** — canonical knob rendering: radial dark body, gold rim gradient (#F2D06B→#D9A648 30%→#8C6222 70%→#4A3412), inner ridge, gold pointer + lit tip.
+- **led-meter.svg** — meter zone colors: safe #274E27 · warning #D9A648 · peak #8B1A1A on near-black.
+- **toggle.svg** — pill switch: black body, 2px gold border, gold thumb.
+- **adinkra-symbol.svg** — first knob-engraving symbol (swappable; more to come from James).
+- **pattern-{rhodes,mks,fm,strings}.svg** — per-world kente pattern geometry (rhodes royal weave + split diamonds · mks checker/diamond + zigzag columns · fm vertical stripes + offset blocks · strings radial anansi web). Ship at full brightness — ALWAYS render through the darkening clamp (≤35% contrast law) before use as backdrops.
+- `04–09` reference images — bright cloth/backdrop references for the same worlds (pattern DNA only, never used raw).
+
 ## Core tokens
 
 chassis #0C0A07 · deep panel #11100D · black #080807 · gold #D9A648 · highlight gold #F1C66A · dark gold #725322 · cream #EFE7D4 · muted #9B9383. Display type: condensed uppercase (Oswald-class); UI/body: clean geometric sans; values: tabular.

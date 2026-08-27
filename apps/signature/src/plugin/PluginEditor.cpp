@@ -31,7 +31,7 @@ JMSignatureEditor::JMSignatureEditor (JMSignatureProcessor& p)
     proc_.stateChanged.addChangeListener (this);
 
     setResizable (true, true);
-    setResizeLimits (1035, 675, 2760, 1800);
+    setResizeLimits (1152, 768, 3072, 2048);   // UX pack reference viewport 1536x1024
     getConstrainer()->setFixedAspectRatio ((double) Theme::M::designW / (double) Theme::M::designH);
     setSize (Theme::M::designW, Theme::M::designH);
     setPage (juce::jlimit (0, 4, proc_.state.currentPage));

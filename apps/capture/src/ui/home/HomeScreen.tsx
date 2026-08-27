@@ -3,6 +3,7 @@ import { useApp } from '../../state/appStore';
 import { bridge } from '../../state/services';
 import { deserializeSession, sessionStats } from '../../engine/session';
 import { Button, Label, Panel } from '../common';
+import { IconMore, IconRight, IconStar } from '../assets/icons';
 
 export function HomeScreen() {
   const saved = useApp((s) => s.savedSessions);
@@ -27,7 +28,7 @@ export function HomeScreen() {
         <div className="jm-col">
           <Label>New Session</Label>
           <Button primary onClick={() => setScreen('wizard')}>
-            Start a New Session
+            <IconStar size={14} /> Start a New Session
           </Button>
         </div>
       </Panel>
@@ -54,9 +55,11 @@ export function HomeScreen() {
                 </div>
                 <div className="jm-row">
                   <Button primary onClick={() => resume(json)}>
-                    Resume
+                    Resume <IconRight size={14} />
                   </Button>
-                  <Button onClick={() => void remove(id)}>Delete</Button>
+                  <Button onClick={() => void remove(id)}>
+                    <IconMore size={14} /> Delete
+                  </Button>
                 </div>
               </div>
             );

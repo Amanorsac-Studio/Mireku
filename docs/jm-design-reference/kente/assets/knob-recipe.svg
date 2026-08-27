@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <defs>
+    <!-- Base Body Gradient -->
+    <radialGradient id="knob-body" cx="50%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#2A2622"/>
+      <stop offset="70%" stop-color="#0C0A07"/>
+      <stop offset="100%" stop-color="#050403"/>
+    </radialGradient>
+    <!-- Outer Gold Ring -->
+    <linearGradient id="gold-ring" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F2D06B"/>
+      <stop offset="30%" stop-color="#D9A648"/>
+      <stop offset="70%" stop-color="#8C6222"/>
+      <stop offset="100%" stop-color="#4A3412"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Outer Shadow -->
+  <circle cx="60" cy="62" r="56" fill="#000" opacity="0.6" filter="blur(4px)"/>
+  
+  <!-- Metallic Gold Rim -->
+  <circle cx="60" cy="60" r="56" fill="url(#gold-ring)"/>
+  
+  <!-- Main Dark Knob Body -->
+  <circle cx="60" cy="60" r="52" fill="url(#knob-body)"/>
+  
+  <!-- Inner Detail Ridge -->
+  <circle cx="60" cy="60" r="48" fill="none" stroke="#1A1510" stroke-width="1.5"/>
+
+  <!-- Value Indicator (Points straight up to 12 o'clock) -->
+  <g transform="rotate(0 60 60)">
+    <line x1="60" y1="50" x2="60" y2="14" stroke="#D9A648" stroke-width="4" stroke-linecap="round"/>
+    <circle cx="60" cy="14" r="2" fill="#F2D06B"/>
+  </g>
+</svg>

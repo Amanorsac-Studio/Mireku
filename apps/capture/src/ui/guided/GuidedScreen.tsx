@@ -5,6 +5,7 @@ import { useApp } from '../../state/appStore';
 import { bridge, services } from '../../state/services';
 import { Button, Panel } from '../common';
 import { ArcMeter } from './ArcMeter';
+import { LedMeter } from './LedMeter';
 import { ProgressMap } from './ProgressMap';
 
 export function GuidedScreen() {
@@ -75,7 +76,12 @@ export function GuidedScreen() {
       </div>
 
       <Panel variant="recessed">
-        <ArcMeter layer={layer} />
+        <div className="jm-row" style={{ alignItems: 'stretch' }}>
+          <div style={{ flex: 1 }}>
+            <ArcMeter layer={layer} />
+          </div>
+          <LedMeter />
+        </div>
         <div className="jm-col" style={{ alignItems: 'center', gap: 'calc(var(--jm-size-gap-unit) * 1.5)' }}>
           <div className={`jm-verdict ${verdict?.kind ?? ''}`}>
             {done

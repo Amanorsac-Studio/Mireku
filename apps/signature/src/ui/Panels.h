@@ -32,6 +32,24 @@ public:
         search_.onTextChange = [this] { rebuild(); };
         addAndMakeVisible (search_);
 
+        filterBtn_ = assets::makeIconButton ("filter", assets::Icon::filter, Theme::muted);
+        filterBtn_->onClick = [this]
+        {
+            juce::PopupMenu m;
+            const char* names[] = { "User", "Factory", "Favorites" };
+            for (int i = 0; i < 3; ++i)
+                m.addItem (i + 1, names[i], true, tabs_[(size_t) i].getToggleState());
+            m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (filterBtn_.get()), [this] (int r)
+            {
+                if (r >= 1 && r <= 3)
+                {
+                    tabs_[(size_t) (r - 1)].setToggleState (true, juce::dontSendNotification);
+                    rebuild();
+                }
+            });
+        };
+        addAndMakeVisible (*filterBtn_);
+
         const char* names[] = { "USER", "FACTORY", "FAVORITES" };
         for (int i = 0; i < 3; ++i)
         {
@@ -100,7 +118,10 @@ public:
     {
         auto r = getLocalBounds().reduced (Theme::M::pad);
         title_.setBounds (r.removeFromTop (22));
-        search_.setBounds (r.removeFromTop (26));
+        auto searchRow = r.removeFromTop (26);
+        filterBtn_->setBounds (searchRow.removeFromRight (24).reduced (2));
+        searchIconArea_ = searchRow.removeFromLeft (22).reduced (3);
+        search_.setBounds (searchRow);
         r.removeFromTop (4);
         auto tr = r.removeFromTop (24);
         const int tw = tr.getWidth() / 3;
@@ -115,14 +136,10 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        auto r = getLocalBounds().toFloat();
-        g.setColour (Theme::deepPanel);
-        g.fillRoundedRectangle (r, (float) Theme::M::corner);
-        // browser stays near-black: only the faintest chassis weave
-        KenteTexture::fill (g, r.reduced (1.0f), KenteTexture::Style::Weave, Theme::chassisCloth,
-                            0.5f, (float) Theme::M::corner);
-        g.setColour (Theme::goldDark.withAlpha (0.4f));
-        g.drawRoundedRectangle (r.reduced (0.5f), (float) Theme::M::corner, 1.0f);
+        // UX pack preset-browser-frame.svg language
+        ux::drawFrame (g, getLocalBounds().toFloat(), true, (float) Theme::M::corner, 7.0f);
+        if (searchIcon_ != nullptr && ! searchIconArea_.isEmpty())
+            searchIcon_->drawWithin (g, searchIconArea_.toFloat(), juce::RectanglePlacement::centred, 0.9f);
     }
 
 private:
@@ -141,15 +158,14 @@ private:
     {
         if (row < 0 || row >= (int) rows_.size()) return;
         auto& r = rows_[(size_t) row];
-        if (selected) { g.setColour (Theme::goldDark.withAlpha (0.35f)); g.fillRect (0, 0, w, h); }
-        g.setColour (r.kind == Row::Bundle ? Theme::goldHi : Theme::cream);
+        if (selected)   // preset-row-active.svg treatment; active text gold
+            ux::drawPresetRowActive (g, juce::Rectangle<float> (1.0f, 1.0f, (float) w - 2.0f, (float) h - 2.0f));
+        g.setColour (selected ? Theme::gold : r.kind == Row::Bundle ? Theme::cream : Theme::muted.brighter (0.25f));
         g.setFont (Theme::ui (13.0f));
         g.drawText (r.name, 8, 0, w - 30, h, juce::Justification::centredLeft);
-        if (proc_.state.library.isFavorite (r.favKey()))
-        {
-            g.setColour (Theme::gold);
-            g.drawText (juce::String::fromUTF8 ("\xE2\x98\x85"), w - 24, 0, 20, h, juce::Justification::centred);
-        }
+        if (proc_.state.library.isFavorite (r.favKey()) && starIcon_ != nullptr)
+            starIcon_->drawWithin (g, juce::Rectangle<float> ((float) w - 22.0f, (float) h * 0.5f - 7.0f, 14.0f, 14.0f),
+                                   juce::RectanglePlacement::centred, 1.0f);
     }
     void listBoxItemClicked (int row, const juce::MouseEvent& e) override
     {
@@ -206,6 +222,10 @@ private:
     juce::TextEditor search_, saveName_;
     std::array<juce::TextButton, 3> tabs_;
     juce::TextButton saveBtn_;
+    std::unique_ptr<juce::DrawableButton> filterBtn_;
+    std::unique_ptr<juce::Drawable> searchIcon_ { assets::makeIcon (assets::Icon::search, Theme::muted) };
+    std::unique_ptr<juce::Drawable> starIcon_ { ux::makePackIcon (ux::PackIcon::star, Theme::gold) };
+    juce::Rectangle<int> searchIconArea_;
     juce::ListBox list_;
     std::vector<Row> rows_;
 };
@@ -226,6 +246,29 @@ public:
         patchName_.setFont (Theme::ui (14.0f));
         patchName_.setColour (juce::Label::textColourId, Theme::gold);
         addAndMakeVisible (patchName_);
+
+        prevBtn_ = ux::makePackIconButton ("prev", ux::PackIcon::chevronLeft);
+        nextBtn_ = ux::makePackIconButton ("next", ux::PackIcon::chevronRight);
+        prevBtn_->onClick = [this] { stepPreset (-1); };
+        nextBtn_->onClick = [this] { stepPreset (1); };
+        addAndMakeVisible (*prevBtn_);
+        addAndMakeVisible (*nextBtn_);
+
+        heartBtn_ = std::make_unique<juce::DrawableButton> ("fav", juce::DrawableButton::ImageFitted);
+        {
+            auto off = ux::makePackIcon (ux::PackIcon::heart, Theme::muted);
+            auto over = ux::makePackIcon (ux::PackIcon::heart, Theme::goldHi);
+            auto on = ux::makePackIcon (ux::PackIcon::heart, Theme::gold);
+            heartBtn_->setImages (off.get(), over.get(), over.get(), nullptr, on.get(), on.get());
+            heartBtn_->setColour (juce::DrawableButton::backgroundColourId, juce::Colours::transparentBlack);
+            heartBtn_->setColour (juce::DrawableButton::backgroundOnColourId, juce::Colours::transparentBlack);
+        }
+        heartBtn_->onClick = [this]
+        {
+            proc_.state.library.toggleFavorite (currentPresetFavKey());
+            proc_.stateChanged.sendChangeMessage();
+        };
+        addAndMakeVisible (*heartBtn_);
 
         const char* tabNames[] = { "MAIN", "AMP ENV", "EQ", "SETTINGS", "INFO" };
         for (int i = 0; i < 5; ++i)
@@ -249,8 +292,27 @@ public:
         patchName_.setText (s.bundleName.isEmpty() ? "No bundle loaded" : s.bundleName + "  -  " + s.presetName,
                             juce::dontSendNotification);
         meter_.setLevel (proc_.slotPeak[(size_t) slot_].load(), proc_.slotPeak[(size_t) slot_].load());
+        heartBtn_->setToggleState (proc_.state.library.isFavorite (currentPresetFavKey()), juce::dontSendNotification);
         for (auto* k : knobs_) k->refresh();
         for (auto* c : choices_) c->refresh();
+    }
+
+    /// matches the browser's Row::FactoryPreset favKey format ("1|<name>")
+    juce::String currentPresetFavKey() const
+    {
+        return "1|" + proc_.state.slots[(size_t) slot_].presetName;
+    }
+
+    void stepPreset (int delta)
+    {
+        auto lb = proc_.engines[(size_t) slot_].bundle();
+        if (lb == nullptr || lb->inst.presets.empty()) return;
+        const int n = (int) lb->inst.presets.size();
+        int cur = 0;
+        for (int i = 0; i < n; ++i)
+            if (juce::String (lb->inst.presets[(size_t) i].name) == proc_.state.slots[(size_t) slot_].presetName)
+                { cur = i; break; }
+        proc_.applyJmiPresetToSlot (slot_, lb->inst.presets[(size_t) (((cur + delta) % n + n) % n)]);
     }
 
     void rebuildContent()
@@ -265,11 +327,13 @@ public:
         auto slotStr = juce::String (slot_);
         if (tab_ == 0)          // MAIN — the curated world controls
         {
+            int markIdx = 0;    // hero-control engraved marks, assigned in order (logged)
             for (auto& spec : worldEngineControls (world_))
             {
                 if (spec.kind == ParamKind::Float)
                 {
                     auto* k = new ParamKnob (proc_, "slot" + slotStr + ".engine." + spec.id, spec.label, &spec);
+                    k->setMark (markIdx++ % 5);
                     knobs_.add (k);
                     content_.addAndMakeVisible (k);
                 }
@@ -405,7 +469,14 @@ public:
     void resized() override
     {
         auto r = getLocalBounds().reduced (Theme::M::pad * 2);
-        header_.setBounds (r.removeFromTop (36));
+        auto headRow = r.removeFromTop (36);
+        {
+            auto hr = headRow.withSizeKeepingCentre (juce::jmin (420, headRow.getWidth()), headRow.getHeight());
+            prevBtn_->setBounds (hr.removeFromLeft (28).reduced (0, 6));
+            nextBtn_->setBounds (hr.removeFromRight (28).reduced (0, 6));
+            heartBtn_->setBounds (hr.removeFromRight (28).reduced (0, 7));
+            header_.setBounds (hr);
+        }
         patchName_.setBounds (r.removeFromTop (20));
         auto tabsRow = r.removeFromBottom (30);
         const int tw = juce::jmin (110, tabsRow.getWidth() / 5);
@@ -464,20 +535,22 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        // UX pack layer order: chassis base -> exact kente panel -> micro weave
+        // -> dark control bed -> frame stroke -> controls (children) -> glow.
         auto r = getLocalBounds().toFloat();
-        // full-panel kente tapestry frame (rust/forest/indigo/violet per world)
-        g.setColour (Theme::black);
+        g.setColour (Theme::chassisBase);                              // 1
         g.fillRoundedRectangle (r, (float) Theme::M::corner);
-        KenteTexture::fill (g, r.reduced (1.5f), KenteTexture::Style::Weave,
-                            Theme::worldAccent (world_), 1.0f, (float) Theme::M::corner);
-        // recessed control panel — darker/plainer so knobs + readouts dominate
+        ux::drawWorldPanel (g, r.reduced (1.0f), world_, 0.70f,        // 2
+                            (float) Theme::M::corner);
+        ux::drawMicroWeave (g, r.reduced (1.0f), 0.25f,                // 3
+                            (float) Theme::M::corner);
         auto inner = getLocalBounds().reduced (Theme::M::pad * 2 + 6).toFloat();
-        inner.removeFromBottom (26.0f);                       // sub-tab strip sits on the cloth
-        g.setColour (Theme::deepPanel.withAlpha (0.90f));
+        inner.removeFromBottom (26.0f);                                // tabs sit on the cloth
+        g.setColour (juce::Colour (0xff050505).withAlpha (0.40f));     // 4 control bed
         g.fillRoundedRectangle (inner, (float) Theme::M::corner);
-        g.setColour (juce::Colours::black.withAlpha (0.55f));
-        g.drawRoundedRectangle (inner, (float) Theme::M::corner, 1.5f);
-        g.setColour (Theme::gold.withAlpha (0.5f));
+        ux::drawFrame (g, r, false, (float) Theme::M::corner, 7.0f);   // 5 frame stroke
+        // world accent edge (accent = edges/labels, not cloth)
+        g.setColour (Theme::worldAccent (world_).withAlpha (0.55f));
         g.drawRoundedRectangle (r.reduced (1.0f), (float) Theme::M::corner, 1.2f);
 
         // sound-type badge
@@ -508,6 +581,7 @@ private:
     juce::OwnedArray<juce::Component> settingsWidgets_;
     juce::Label* infoText_ = nullptr;
     LevelMeter meter_;
+    std::unique_ptr<juce::DrawableButton> prevBtn_, nextBtn_, heartBtn_;
     std::unique_ptr<juce::FileChooser> chooser_;
 };
 
@@ -527,9 +601,9 @@ public:
         title_.setColour (juce::Label::textColourId, Theme::cream);
         addAndMakeVisible (title_);
 
-        menuBtn_.setButtonText ("...");
-        menuBtn_.onClick = [this] { showMenu(); };
-        addAndMakeVisible (menuBtn_);
+        menuBtn_ = ux::makePackIconButton ("more", ux::PackIcon::kebab, Theme::muted);
+        menuBtn_->onClick = [this] { showMenu(); };
+        addAndMakeVisible (*menuBtn_);
 
         for (auto& ps : spec.params)
         {
@@ -559,16 +633,26 @@ public:
         if (type_ == FxType::widener) startTimerHz (10);
     }
 
+    // UX pack fx-module frame family (personality mapping, logged in DECISIONS):
+    // chorus teal · tape delay/tremolo/EP drive orange · phaser/flanger purple ·
+    // shimmer + digital delay blue · compressor red · plate (hall family) green ·
+    // vintage EQ teal · widener green + 25% gold overlay. Never world colors.
     static juce::Colour accent (FxType t)
     {
         switch (t)
         {
-            case FxType::jmChorus: return Theme::fxChorus;       case FxType::tremoloAutoPan: return Theme::fxTremolo;
-            case FxType::phaser: return Theme::fxPhaser;         case FxType::flanger: return Theme::fxFlanger;
-            case FxType::epPreamp: return Theme::fxDrive;        case FxType::vintageEq: return Theme::fxEq;
-            case FxType::compressor: return Theme::fxComp;       case FxType::tapeDelay: return Theme::fxTapeDelay;
-            case FxType::digitalDelay: return Theme::fxDigDelay; case FxType::plateReverb: return Theme::fxPlate;
-            case FxType::hallShimmer: return Theme::fxHall;      default: return Theme::fxWidener;
+            case FxType::jmChorus:       return Theme::fxTeal;
+            case FxType::vintageEq:      return Theme::fxTeal;
+            case FxType::tremoloAutoPan: return Theme::fxOrange;
+            case FxType::tapeDelay:      return Theme::fxOrange;
+            case FxType::epPreamp:       return Theme::fxOrange;
+            case FxType::phaser:         return Theme::fxPurple;
+            case FxType::flanger:        return Theme::fxPurple;
+            case FxType::hallShimmer:    return Theme::fxBlue;
+            case FxType::digitalDelay:   return Theme::fxBlue;
+            case FxType::compressor:     return Theme::fxRed;
+            case FxType::plateReverb:    return Theme::fxGreen;
+            default:                     return Theme::fxGreen;   // widener (+ gold overlay)
         }
     }
 
@@ -584,7 +668,7 @@ public:
     {
         auto r = getLocalBounds().reduced (6);
         auto head = r.removeFromTop (20);
-        menuBtn_.setBounds (head.removeFromRight (24));
+        menuBtn_->setBounds (head.removeFromRight (22).reduced (2));
         title_.setBounds (head);
         bypass_.setBounds (r.removeFromBottom (22).withSizeKeepingCentre (juce::jmin (86, r.getWidth()), 20));
         r.removeFromBottom (2);
@@ -617,15 +701,8 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto r = getLocalBounds().toFloat();
-        g.setColour (Theme::black);
-        g.fillRoundedRectangle (r, 5.0f);
-        // per-unit kente cloth faceplate (teal chorus, ember tape delay, ...)
-        KenteTexture::fill (g, r.reduced (1.5f), KenteTexture::Style::Weave, accent (type_), 1.0f, 5.0f);
-        // gentle scrim behind the controls so gold/cream stays dominant
-        g.setColour (juce::Colours::black.withAlpha (0.30f));
-        g.fillRoundedRectangle (r.reduced (4.0f).withTrimmedTop (18.0f), 4.0f);
-        g.setColour (Theme::goldDark.withAlpha (0.8f));
-        g.drawRoundedRectangle (r.reduced (0.5f), 5.0f, 1.0f);
+        // UX pack fx-module-*.svg faceplate (color->#0B0B0A plate, screws, inner line)
+        ux::drawFxModuleFrame (g, r, accent (type_), type_ == FxType::widener);
         if (type_ == FxType::widener && rackDsp_ != nullptr)   // correlation meter
         {
             const float corr = rackDsp_->widenerCorrelation();
@@ -651,7 +728,7 @@ private:
         m.addItem (1, "Move left", idx_ > 0);
         m.addItem (2, "Move right", rackState_ != nullptr && idx_ + 1 < (int) rackState_->size());
         m.addItem (3, "Remove");
-        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&menuBtn_), [this] (int r)
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (menuBtn_.get()), [this] (int r)
         {
             if (rackState_ == nullptr || idx_ >= (int) rackState_->size() || r == 0) return;
             auto& rack = *rackState_;
@@ -678,7 +755,8 @@ private:
     FxRackState* rackState_;
     FxRackDsp* rackDsp_;
     juce::Label title_;
-    juce::TextButton menuBtn_, bypass_;
+    std::unique_ptr<juce::DrawableButton> menuBtn_;
+    juce::TextButton bypass_;
     juce::OwnedArray<ParamKnob> knobs_;
     juce::OwnedArray<ParamChoiceButton> choices_;
 };
@@ -755,16 +833,9 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto r = getLocalBounds().toFloat();
-        g.setColour (Theme::deepPanel);
-        g.fillRoundedRectangle (r, (float) Theme::M::corner);
-        if (prefix_ == "master")     // master rack wears the royal gold/burgundy weave
-            KenteTexture::fill (g, r.reduced (1.0f), KenteTexture::Style::Weave, Theme::masterCloth,
-                                0.85f, (float) Theme::M::corner);
-        else                         // otherwise a barely-there chassis weave
-            KenteTexture::fill (g, r.reduced (1.0f), KenteTexture::Style::Weave, Theme::chassisCloth,
-                                0.6f, (float) Theme::M::corner);
-        g.setColour (Theme::goldDark.withAlpha (0.4f));
-        g.drawRoundedRectangle (r.reduced (0.5f), (float) Theme::M::corner, 1.0f);
+        // master-fx-frame.svg / panel-frame.svg language; subtle micro weave
+        ux::drawFrame (g, r, true, (float) Theme::M::corner, prefix_ == "master" ? 6.0f : 7.0f);
+        ux::drawMicroWeave (g, r.reduced (2.0f), prefix_ == "master" ? 0.30f : 0.20f, (float) Theme::M::corner);
     }
 
 private:

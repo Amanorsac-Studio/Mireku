@@ -54,6 +54,47 @@ export const tracking = {
   label: '0.18em',
 } as const;
 
+/** Brand gold gradient (client logo.svg / knob rim family). */
+export const goldGradient = {
+  light: '#F2D06B',
+  mid: '#D9A648',
+  deep: '#8C6222',
+  shadow: '#4A3412',
+} as const;
+
+/** Knob recipe (client knob-recipe.svg): radial body, gold rim, ridge, pointer. */
+export const knob = {
+  body: ['#2A2622', '#0C0A07', '#050403'] as const,
+  bodyStops: [0, 0.7, 1] as const,
+  rim: [goldGradient.light, goldGradient.mid, goldGradient.deep, goldGradient.shadow] as const,
+  rimStops: [0, 0.3, 0.7, 1] as const,
+  ridge: '#1A1510',
+  pointer: '#D9A648',
+  pointerTip: '#F2D06B',
+  /** engraved adinkra alpha on the knob face (identity only, never a sticker) */
+  engravingAlpha: 0.18,
+} as const;
+
+/** LED level meter zones (client led-meter.svg). Red is reserved for the
+ * generic level meters' peak segment ONLY — never coaching UI (§ design law). */
+export const meter = {
+  safe: '#274E27',
+  warn: '#D9A648',
+  peak: '#8B1A1A',
+  well: '#0C0A07',
+  frame: '#2A2622',
+} as const;
+
+/** Darkening pipeline for the client's bright world pattern SVGs
+ * (pattern-*.svg are gold-base; must sit ≤ ~35% contrast on chassis). */
+export const patternDarken = {
+  brightness: 0.24,
+  saturate: 0.55,
+  /** chassis-colored veil drawn over the darkened pattern */
+  veilAlpha: 0.8,
+  tile: 150,
+} as const;
+
 /**
  * Kente weave system (design law: "Kente is material… ≤ ~35% perceived
  * contrast against #0C0A07"). All procedural-texture parameters live here;

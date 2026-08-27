@@ -89,26 +89,134 @@ struct Theme
     }
 
     // ---------------------------------------------------------------- fonts
-    static juce::Font display (float h)  { return juce::Font (juce::FontOptions ("Verdana", h, juce::Font::bold)); }
-    static juce::Font ui (float h)       { return juce::Font (juce::FontOptions ("Verdana", h, juce::Font::plain)); }
-    static juce::Font value (float h)    { return juce::Font (juce::FontOptions ("Consolas", h, juce::Font::plain)); }
+    // Hardware kit typography: Bahnschrift Condensed SemiBold, open-source
+    // fallback Oswald SemiBold / Barlow Condensed SemiBold (docs/hardware-kit
+    // layout-spec.json). Resolved once against the installed typefaces; live
+    // text only (the kit's font PNG is a style reference).
+    static const juce::String& faceDisplay()
+    {
+        static juce::String f = pick ({ "Bahnschrift SemiBold Condensed", "Bahnschrift SemiCondensed",
+                                        "Bahnschrift Condensed", "Bahnschrift", "Oswald SemiBold", "Oswald",
+                                        "Barlow Condensed SemiBold", "Barlow Condensed",
+                                        "Franklin Gothic Medium Cond", "Arial Narrow", "Verdana" });
+        return f;
+    }
+    static const juce::String& faceValue()
+    {
+        static juce::String f = pick ({ "Bahnschrift SemiBold Condensed", "Bahnschrift SemiCondensed",
+                                        "Bahnschrift", "Oswald", "Consolas" });
+        return f;
+    }
+    static juce::Font display (float h)
+    {
+        auto f = juce::Font (juce::FontOptions (faceDisplay(), h, juce::Font::bold));
+        f.setExtraKerningFactor (0.04f);          // kit tracking 0.04em
+        return f;
+    }
+    static juce::Font ui (float h)
+    {
+        auto f = juce::Font (juce::FontOptions (faceDisplay(), h, juce::Font::plain));
+        f.setExtraKerningFactor (0.04f);
+        return f;
+    }
+    static juce::Font value (float h) { return juce::Font (juce::FontOptions (faceValue(), h, juce::Font::plain)); }
+
+private:
+    static juce::String pick (const std::initializer_list<const char*>& names)
+    {
+        auto have = juce::Font::findAllTypefaceNames();
+        for (auto* n : names)
+            if (have.contains (juce::String (n))) return juce::String (n);
+        return "Verdana";
+    }
+public:
 
     // -------------------------------------------------------------- metrics
     // All in "design units" at the 1380x900 reference size; the editor scales.
     struct M
     {
-        // UX pack V2 reference viewport: 1000x720 (25:18), uniform-contain
-        static constexpr int designW        = 1000;
-        static constexpr int designH        = 720;
-        static constexpr int minW = 750, minH = 540, maxW = 2000, maxH = 1440;
+        // CLIENT REVIEW ROUND 2: the approved reference image is 1536x1024 (3:2)
+        // and shows every region at once. Root coordinate system == that image,
+        // uniform-contain scaled (V2 root discipline retained).
+        static constexpr int designW        = 1536;
+        static constexpr int designH        = 1024;
+        static constexpr int minW = 1152, minH = 768, maxW = 3072, maxH = 2048;
         static constexpr int pad            = 8;
         static constexpr int corner         = 6;
         static constexpr float arcThickness = 3.0f;
-        // legacy aliases still referenced by generic panels
         static constexpr int knobLarge      = 112;
         static constexpr int knobMedium     = 72;
         static constexpr int knobSmall      = 44;
-        static constexpr int topBarH = 74, statusBarH = 0, leftColW = 0, rightColW = 0, fxStripH = 0;
+    };
+
+    // ---------------- restored arrangement (measured off the approved image)
+    struct L
+    {
+        // header ------------------------------------------------------------
+        static constexpr int headerH   = 86;
+        static constexpr int shieldX = 14, shieldY = 10, shieldD = 64;
+        static constexpr int navX = 400, navY = 24, navW = 616, navH = 50;
+        static constexpr int navCellW[5] = { 158, 104, 96, 134, 124 };
+        static constexpr int cartX = 1072, iconY = 30, iconD = 30, gearX = 1116;
+        static constexpr int masterLblX = 1176, masterKnobCx = 1262, masterKnobCy = 43, masterKnobD = 44;
+        static constexpr int masterMeterX = 1300, masterMeterY = 30, masterMeterW = 126, masterMeterH = 26;
+        static constexpr int limiterX = 1434, limiterY = 28, limiterW = 88, limiterH = 30;
+
+        // main bands --------------------------------------------------------
+        static constexpr int browserX = 8,   browserY = 88,  browserW = 254,  browserH = 876;
+        static constexpr int centerX  = 270, centerY  = 88,  centerW  = 690,  centerH  = 584;
+        static constexpr int dockX    = 966, dockY    = 88,  dockW    = 558,  dockH    = 584;
+        static constexpr int rackX    = 270, rackY    = 672, rackW    = 1254, rackH    = 292;
+        static constexpr int barY     = 968, barH     = 56;
+
+        // preset browser (local coords) --------------------------------------
+        static constexpr int brTitleY = 16, brSearchY = 52, brSearchH = 30;
+        static constexpr int brTabsY = 94, brTabsH = 30;
+        static constexpr int brListY = 134, brListH = 388;
+        static constexpr int brArtY = 560, brArtH = 308;
+
+        // model page (local to centerX/centerY) -------------------------------
+        static constexpr int mpTitleY = 26, mpPatchY = 60;
+        static constexpr int mpSurfX = 18, mpSurfY = 86, mpSurfW = 600, mpSurfH = 440;
+        static constexpr int mpKnobD = 112, mpLabelOff = -82, mpValueOff = 68;
+        static constexpr int mpFive[5][2] = { { 126, 200 }, { 337, 200 }, { 542, 200 },
+                                             { 232, 370 }, { 440, 370 } };
+        static constexpr int mpSix[6][2]  = { { 126, 186 }, { 337, 186 }, { 542, 186 },
+                                             { 126, 376 }, { 337, 376 }, { 542, 376 } };
+        static constexpr int mpMeterX = 626, mpMeterY = 116, mpMeterW = 50, mpMeterH = 344;
+        static constexpr int mpTabsX = 8, mpTabsY = 526, mpTabsW = 674, mpTabsH = 44;
+
+        // perform dock (local) ------------------------------------------------
+        static constexpr int dkTitleH = 26;
+        static constexpr int dkSlotX = 4, dkSlotY = 30, dkSlotW = 550, dkSlotH = 78, dkSlotPitch = 87;
+        static constexpr int dkModeX = 4, dkModeY = 380, dkModeW = 250, dkModeH = 48;
+        static constexpr int dkTransX = 264, dkTransY = 380, dkTransW = 290, dkTransH = 48;
+        static constexpr int dkMacroY = 436, dkMacroH = 142, dkMacroD = 72;
+        static constexpr int dkMacroCx[4] = { 77, 206, 335, 464 };
+
+        // perform CENTER page (client correction: the four slots move to the
+        // middle when PERFORM is selected) -----------------------------------
+        // (the centre stage widens to centerW + dockW when PERFORM is selected)
+        static constexpr int pcStageW = centerW + dockW + 6;      // 1254
+        static constexpr int pcSlotW = 590, pcSlotH = 132;
+        static constexpr int pcSlotX[4] = { 26, 638, 26, 638 };
+        static constexpr int pcSlotY[4] = { 46, 46, 186, 186 };
+        static constexpr int pcModeX = 280, pcModeY = 332, pcModeW = 300, pcModeH = 52;
+        static constexpr int pcTransX = 674, pcTransY = 332, pcTransW = 340, pcTransH = 52;
+        static constexpr int pcMacroY = 396, pcMacroH = 180, pcMacroD = 104;
+        static constexpr int pcMacroCx[4] = { 251, 502, 753, 1004 };
+
+        // fx rack (local) -----------------------------------------------------
+        static constexpr int fxTitleH = 26;
+        static constexpr int fxRailX = 4, fxRailY = 32, fxRailW = 32, fxRailH = 215;
+        static constexpr int fxUnitX = 42, fxUnitY = 32, fxUnitW = 164, fxUnitH = 215, fxUnitPitch = 168;
+        static constexpr int fxDotsY = 258;
+        static constexpr int fxMasterX = 1054, fxMasterY = 32, fxMasterW = 196, fxMasterH = 215;
+
+        // bottom bar (local) ---------------------------------------------------
+        static constexpr int bbBtnY = 10, bbBtnH = 40;
+        static constexpr int bbBtnX[4] = { 268, 496, 672, 830 };
+        static constexpr int bbBtnW[4] = { 220, 168, 150, 128 };
     };
 
     // ------------------------- V2 exact geometry (tokens/design-tokens.json)

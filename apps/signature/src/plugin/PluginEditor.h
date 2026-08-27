@@ -1,6 +1,8 @@
-// PluginEditor.h — UX pack V2 editor: one fixed 1000x720 (25:18) root
-// coordinate system, scaled uniformly (min(w/1000, h/720)), centered, with
-// chassis-colored letterboxing. Header + one central page (model or PERFORM).
+// PluginEditor.h — CLIENT REVIEW ROUND 2: the approved full-window arrangement
+// is restored (header · left preset browser · centre model/PERFORM stage · right
+// PERFORM dock · bottom FX rack strip · bottom bar), inside ONE fixed 1536x1024
+// (3:2) root coordinate system scaled uniformly by min(w/1536, h/1024), centred,
+// with chassis-coloured letterboxing. No reflow, no independent stretch.
 #pragma once
 #include "PluginProcessor.h"
 #include "../ui/Perform.h"
@@ -24,15 +26,13 @@ private:
     void setPage (int page);
     void rebuildCenter();
 
-    // fixed-coordinate root: children live at absolute 1000x720 positions
+    // fixed-coordinate root: children live at absolute 1536x1024 positions
     struct RootComponent : juce::Component
     {
         void paint (juce::Graphics& g) override
         {
             g.setColour (Theme::bg);
-            g.fillRoundedRectangle (0.0f, 0.0f, 1000.0f, 720.0f, 12.0f);
-            g.setColour (juce::Colour (0xff33240E));
-            g.drawRoundedRectangle (8.0f, 8.0f, 984.0f, 704.0f, 10.0f, 1.0f);
+            g.fillRoundedRectangle (0.0f, 0.0f, (float) Theme::M::designW, (float) Theme::M::designH, 12.0f);
         }
     };
 
@@ -40,8 +40,14 @@ private:
     JmLookAndFeel lnf_;
     RootComponent root_;
     std::unique_ptr<HeaderBar> header_;
+    std::unique_ptr<PresetBrowserPanel> browser_;
+    std::unique_ptr<PerformDock> dock_;
+    std::unique_ptr<FxRackStrip> rack_;
+    std::unique_ptr<BottomBar> bar_;
     std::unique_ptr<ModelPagePanel> modelPage_;
-    std::unique_ptr<PerformPagePanel> performPage_;
+    std::unique_ptr<PerformCenterPanel> performPage_;
+    std::unique_ptr<juce::MidiKeyboardComponent> keyboard_;
+    bool showKeyboard_ = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (JMSignatureEditor)
 };

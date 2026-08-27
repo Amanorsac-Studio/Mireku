@@ -1,12 +1,19 @@
-// Panels.h — preset browser, V2 model pages, FX unit panels + rack strip.
-// Geometry follows UX pack V2 (docs/svg-pack-v2): tokens/design-tokens.json and
-// specs/screen-layouts.json are implemented EXACTLY for the visible layout;
-// build-spec functions that V2 screens do not place (sub-tab content, preset
-// browser, FX rack) live in overlays on the recessed surface (logged).
+// Panels.h — preset browser column, model pages, FX rack strip.
+//
+// CLIENT REVIEW ROUND 2: the approved reference arrangement is restored — the
+// preset browser column, centre model panel, right PERFORM dock, bottom FX rack
+// strip, bottom bar and status bar are all on screen at once inside ONE
+// 1536x1024 root coordinate system (uniform-contain scaled, never reflowed).
+// Materials/colour tokens/state rules stay on UX pack V2; the hardware surfaces
+// (knobs, FX faceplates, meters, buttons, screws) now come from the photoreal
+// kit in docs/hardware-kit. Behaviour/DSP authority remains JM-BUILD-SPEC.md —
+// no function was added or removed in this pass.
 #pragma once
 #include "Widgets.h"
 #include "KenteTexture.h"
 #include "UxAssets.h"
+#include "Kit.h"
+#include "Hardware.h"
 #include <juce_audio_utils/juce_audio_utils.h>
 
 namespace jm {
@@ -20,18 +27,24 @@ inline int slotForWorld (const AppState& st, int world)
 }
 
 //==============================================================================
+// Left column, persistent (approved reference): title, search + filter,
+// USER/FACTORY/FAVORITES segmented tabs in the mature language, scrolling list
+// with the active row lifted gold + starred, and the JM brand art panel below.
 class PresetBrowserPanel : public juce::Component,
                            private juce::ListBoxModel
 {
 public:
-    PresetBrowserPanel (JMSignatureProcessor& p) : proc_ (p)
+    PresetBrowserPanel (JMSignatureProcessor& p, bool compact = false)
+        : proc_ (p), compact_ (compact)
     {
         title_.setText ("PRESET BROWSER", juce::dontSendNotification);
-        title_.setFont (Theme::display (14.0f));
+        title_.setFont (Theme::display (17.0f));
+        title_.setJustificationType (juce::Justification::centred);
         title_.setColour (juce::Label::textColourId, Theme::gold);
         addAndMakeVisible (title_);
 
         search_.setTextToShowWhenEmpty ("Search presets...", Theme::muted);
+        search_.setFont (Theme::ui (14.0f));
         search_.onTextChange = [this] { rebuild(); };
         addAndMakeVisible (search_);
 
@@ -53,6 +66,7 @@ public:
         };
         addAndMakeVisible (*filterBtn_);
 
+        addAndMakeVisible (tabStrip_);
         const char* names[] = { "USER", "FACTORY", "FAVORITES" };
         for (int i = 0; i < 3; ++i)
         {
@@ -60,18 +74,23 @@ public:
             b.setButtonText (names[i]);
             b.setClickingTogglesState (true);
             b.setRadioGroupId (777);
+            b.setFirstCell (i == 0);
+            b.setFontHeight (12.0f);
             b.onClick = [this] { rebuild(); };
             addAndMakeVisible (b);
         }
         tabs_[1].setToggleState (true, juce::dontSendNotification);
 
         list_.setModel (this);
-        list_.setRowHeight (26);
+        list_.setRowHeight (30);
+        list_.setColour (juce::ListBox::backgroundColourId, juce::Colours::transparentBlack);
         addAndMakeVisible (list_);
 
         saveName_.setTextToShowWhenEmpty ("New preset name", Theme::muted);
+        saveName_.setFont (Theme::ui (13.0f));
         addAndMakeVisible (saveName_);
         saveBtn_.setButtonText ("SAVE");
+        saveBtn_.setFontHeight (11.0f);
         saveBtn_.onClick = [this] { doSave(); };
         addAndMakeVisible (saveBtn_);
         rebuild();
@@ -119,29 +138,73 @@ public:
 
     void resized() override
     {
-        auto r = getLocalBounds().reduced (Theme::M::pad);
-        title_.setBounds (r.removeFromTop (22));
-        auto searchRow = r.removeFromTop (26);
-        filterBtn_->setBounds (searchRow.removeFromRight (24).reduced (2));
-        searchIconArea_ = searchRow.removeFromLeft (22).reduced (3);
+        using L = Theme::L;
+        auto w = getWidth();
+        title_.setBounds (0, L::brTitleY, w, 24);
+        auto searchRow = juce::Rectangle<int> (12, L::brSearchY, w - 24, L::brSearchH);
+        filterBtn_->setBounds (searchRow.removeFromRight (34).reduced (3));
+        searchRow.removeFromRight (6);
+        searchIconArea_ = searchRow.removeFromLeft (26).reduced (5);
         search_.setBounds (searchRow);
-        r.removeFromTop (4);
-        auto tr = r.removeFromTop (24);
-        const int tw = tr.getWidth() / 3;
-        for (auto& t : tabs_) t.setBounds (tr.removeFromLeft (tw).reduced (1, 0));
-        r.removeFromTop (4);
-        auto save = r.removeFromBottom (26);
-        saveBtn_.setBounds (save.removeFromRight (52));
-        saveName_.setBounds (save.reduced (2, 0));
-        r.removeFromBottom (4);
-        list_.setBounds (r);
+        tabStrip_.setBounds (12, L::brTabsY, w - 24, L::brTabsH);
+        {
+            auto tr = tabStrip_.getBounds().reduced (3, 3);
+            const int tw = tr.getWidth() / 3;
+            for (int i = 0; i < 3; ++i)
+                tabs_[(size_t) i].setBounds (tr.removeFromLeft (i == 2 ? tr.getWidth() : tw));
+        }
+        const int listBottom = compact_ ? getHeight() - 40 : L::brListY + L::brListH;
+        list_.setBounds (14, L::brListY, w - 28, juce::jmax (60, listBottom - L::brListY));
+        auto save = juce::Rectangle<int> (12, listBottom + 6, w - 24, 28);
+        saveBtn_.setBounds (save.removeFromRight (62));
+        save.removeFromRight (6);
+        saveName_.setBounds (save);
+        artArea_ = juce::Rectangle<int> (12, L::brArtY, w - 24, L::brArtH);
     }
 
     void paint (juce::Graphics& g) override
     {
-        ux::drawFrame (g, getLocalBounds().toFloat(), true, (float) Theme::M::corner, 7.0f);
+        auto r = getLocalBounds().toFloat();
+        // recessed chassis column
+        juce::ColourGradient body (juce::Colour (0xff100E0C), r.getX(), r.getY(),
+                                   juce::Colour (0xff070706), r.getX(), r.getBottom(), false);
+        g.setGradientFill (body);
+        g.fillRoundedRectangle (r, 8.0f);
+        ux::drawMicroWeave (g, r.reduced (2.0f), 0.10f, 8.0f);
+        g.setColour (Theme::goldDark.withAlpha (0.55f));
+        g.drawRoundedRectangle (r.reduced (0.5f), 8.0f, 1.0f);
+        // search field bed
+        auto sf = juce::Rectangle<float> (12.0f, (float) Theme::L::brSearchY,
+                                          (float) getWidth() - 24.0f - 40.0f, (float) Theme::L::brSearchH);
+        g.setColour (juce::Colour (0xff1A1815));
+        g.fillRoundedRectangle (sf, 7.0f);
+        g.setColour (juce::Colour (0xff33302B));
+        g.drawRoundedRectangle (sf, 7.0f, 1.0f);
         if (searchIcon_ != nullptr && ! searchIconArea_.isEmpty())
             searchIcon_->drawWithin (g, searchIconArea_.toFloat(), juce::RectanglePlacement::centred, 0.9f);
+        // list bed
+        g.setColour (juce::Colour (0xff0A0908));
+        g.fillRoundedRectangle (list_.getBounds().toFloat().expanded (2.0f), 6.0f);
+
+        if (! compact_ && ! artArea_.isEmpty()) drawBrandArt (g, artArea_.toFloat());
+    }
+
+    /// JM box / USB brand art panel at the foot of the column (approved ref).
+    void drawBrandArt (juce::Graphics& g, juce::Rectangle<float> r)
+    {
+        kit::drawNineSlice (g, kit::image (kit::Img::buttonMaster), r, 34, 34, 1.0f);
+        auto inner = r.reduced (18.0f, 22.0f);
+        if (shield_ != nullptr)
+            shield_->drawWithin (g, inner.removeFromTop (inner.getHeight() * 0.48f),
+                                 juce::RectanglePlacement::centred, 1.0f);
+        g.setColour (Theme::goldHi);
+        g.setFont (Theme::display (18.0f));
+        g.drawText ("JM SIGNATURE", inner.removeFromTop (24.0f), juce::Justification::centred, false);
+        g.setColour (Theme::muted);
+        g.setFont (Theme::ui (10.0f));
+        g.drawText ("SOUND LIBRARY", inner.removeFromTop (16.0f), juce::Justification::centred, false);
+        // single gold flourish accent (kit) — used once, never as wallpaper
+        kit::drawFlourish (g, inner.withTrimmedTop (6.0f).reduced (24.0f, 2.0f), 0.75f);
     }
 
 private:
@@ -161,12 +224,25 @@ private:
         if (row < 0 || row >= (int) rows_.size()) return;
         auto& r = rows_[(size_t) row];
         if (selected)
-            ux::drawPresetRowActive (g, juce::Rectangle<float> (1.0f, 1.0f, (float) w - 2.0f, (float) h - 2.0f));
-        g.setColour (selected ? Theme::gold : r.kind == Row::Bundle ? Theme::cream : Theme::muted.brighter (0.25f));
-        g.setFont (Theme::ui (13.0f));
-        g.drawText (r.name, 8, 0, w - 30, h, juce::Justification::centredLeft);
+        {
+            auto cell = juce::Rectangle<float> (1.0f, 1.0f, (float) w - 2.0f, (float) h - 2.0f);
+            juce::ColourGradient grad (juce::Colour (0xff4A300B), cell.getX(), cell.getY(),
+                                       juce::Colour (0xff1A1208), cell.getRight(), cell.getY(), false);
+            g.setGradientFill (grad);
+            g.fillRoundedRectangle (cell, 5.0f);
+            g.setColour (Theme::gold.withAlpha (0.75f));
+            g.drawRoundedRectangle (cell.reduced (0.5f), 5.0f, 1.0f);
+        }
+        else
+        {
+            g.setColour (juce::Colour (0xff1D1B18).withAlpha (0.55f));
+            g.fillRect (6, h - 1, w - 12, 1);
+        }
+        g.setColour (selected ? Theme::goldHi : r.kind == Row::Bundle ? Theme::cream : Theme::muted.brighter (0.3f));
+        g.setFont (Theme::ui (14.0f));
+        g.drawText (r.name, 12, 0, w - 40, h, juce::Justification::centredLeft);
         if (proc_.state.library.isFavorite (r.favKey()) && starIcon_ != nullptr)
-            starIcon_->drawWithin (g, juce::Rectangle<float> ((float) w - 22.0f, (float) h * 0.5f - 7.0f, 14.0f, 14.0f),
+            starIcon_->drawWithin (g, juce::Rectangle<float> ((float) w - 26.0f, (float) h * 0.5f - 8.0f, 16.0f, 16.0f),
                                    juce::RectanglePlacement::centred, 1.0f);
     }
     void listBoxItemClicked (int row, const juce::MouseEvent& e) override
@@ -220,19 +296,26 @@ private:
     }
 
     JMSignatureProcessor& proc_;
+    bool compact_;
     juce::Label title_;
     juce::TextEditor search_, saveName_;
-    std::array<juce::TextButton, 3> tabs_;
-    juce::TextButton saveBtn_;
+    ux::SegmentStrip tabStrip_;
+    std::array<ux::TabCellButton, 3> tabs_;
+    ux::PlateButton saveBtn_;
     std::unique_ptr<juce::DrawableButton> filterBtn_;
     std::unique_ptr<juce::Drawable> searchIcon_ { assets::makeIcon (assets::Icon::search, Theme::muted) };
     std::unique_ptr<juce::Drawable> starIcon_ { ux::makePackIcon (ux::PackIcon::star, Theme::gold) };
-    juce::Rectangle<int> searchIconArea_;
+    std::unique_ptr<juce::Drawable> shield_ { ux::makeShield() };
+    juce::Rectangle<int> searchIconArea_, artArea_;
     juce::ListBox list_;
     std::vector<Row> rows_;
 };
 
 //==============================================================================
+// One FX rack unit on a photoreal kit faceplate (docs/hardware-kit
+// panel-{colour}.png). The plate already carries screws, bevel and depth, so it
+// replaces the V2 drawn plate; the cells are laid out at the kit's native
+// 0.764:1 ratio so the art is never stretched non-uniformly.
 class FxUnitPanel : public juce::Component, private juce::Timer
 {
 public:
@@ -244,9 +327,19 @@ public:
         auto& spec = fxSpec (type_);
         title_.setText (juce::String (spec.name).toUpperCase(), juce::dontSendNotification);
         title_.setFont (Theme::display (12.0f));
-        title_.setJustificationType (juce::Justification::centredLeft);
-        title_.setColour (juce::Label::textColourId, Theme::cream);
+        title_.setMinimumHorizontalScale (0.7f);
+        title_.setJustificationType (juce::Justification::centred);
+        title_.setColour (juce::Label::textColourId, juce::Colour (0xffF7EEDB));
         addAndMakeVisible (title_);
+
+        power_.ringColour = Theme::goldHi;
+        power_.setState (! st.bypassed);
+        power_.onToggle = [this] (bool on)
+        {
+            proc_.setParamNormalized (prefix_ + ".fx" + juce::String (idx_) + ".bypass", on ? 0.0f : 1.0f);
+            bypass_.setToggleState (! on, juce::dontSendNotification);
+        };
+        addAndMakeVisible (power_);
 
         menuBtn_ = ux::makePackIconButton ("more", ux::PackIcon::kebab, Theme::muted);
         menuBtn_->onClick = [this] { showMenu(); };
@@ -258,6 +351,8 @@ public:
             if (ps.kind == ParamKind::Float)
             {
                 auto* k = new ParamKnob (proc_, path, ps.label, &ps);
+                k->setShowValue (false);
+                k->setLabelBelow (true, 10.0f);
                 knobs_.add (k);
                 addAndMakeVisible (k);
             }
@@ -269,37 +364,47 @@ public:
             }
         }
         bypass_.setButtonText ("BYPASS");
+        bypass_.setFontHeight (11.0f);
         bypass_.setClickingTogglesState (true);
         bypass_.setToggleState (st.bypassed, juce::dontSendNotification);
         bypass_.onClick = [this]
         {
             proc_.setParamNormalized (prefix_ + ".fx" + juce::String (idx_) + ".bypass",
                                       bypass_.getToggleState() ? 1.0f : 0.0f);
+            power_.setState (! bypass_.getToggleState());
         };
         addAndMakeVisible (bypass_);
         if (type_ == FxType::widener) startTimerHz (10);
     }
 
-    // V2 fx-module family (personality mapping, logged in DECISIONS):
-    // chorus + vintage EQ teal · tape delay/tremolo/EP drive orange ·
-    // phaser/flanger purple · shimmer + digital delay blue · compressor red ·
-    // plate green · widener green + gold overlay. Never world colors.
-    static juce::Colour accent (FxType t)
+    // FX personality mapping (unchanged from V1/V2, logged in DECISIONS) — the
+    // FX family is its own hardware colour set, never the world colours.
+    // 0 teal · 1 orange · 2 purple · 3 blue · 4 red · 5 green
+    static int plateFamily (FxType t)
     {
         switch (t)
         {
-            case FxType::jmChorus:       return Theme::fxTeal;
-            case FxType::vintageEq:      return Theme::fxTeal;
-            case FxType::tremoloAutoPan: return Theme::fxOrange;
-            case FxType::tapeDelay:      return Theme::fxOrange;
-            case FxType::epPreamp:       return Theme::fxOrange;
-            case FxType::phaser:         return Theme::fxPurple;
-            case FxType::flanger:        return Theme::fxPurple;
-            case FxType::hallShimmer:    return Theme::fxBlue;
-            case FxType::digitalDelay:   return Theme::fxBlue;
-            case FxType::compressor:     return Theme::fxRed;
-            case FxType::plateReverb:    return Theme::fxGreen;
-            default:                     return Theme::fxGreen;   // widener (+ gold overlay)
+            case FxType::jmChorus:       return 0;
+            case FxType::vintageEq:      return 0;
+            case FxType::tremoloAutoPan: return 1;
+            case FxType::tapeDelay:      return 1;
+            case FxType::epPreamp:       return 1;
+            case FxType::phaser:         return 2;
+            case FxType::flanger:        return 2;
+            case FxType::hallShimmer:    return 3;
+            case FxType::digitalDelay:   return 3;
+            case FxType::compressor:     return 4;
+            case FxType::plateReverb:    return 5;
+            default:                     return 5;   // widener
+        }
+    }
+    static juce::Colour accent (FxType t)
+    {
+        switch (plateFamily (t))
+        {
+            case 0: return Theme::fxTeal;   case 1: return Theme::fxOrange;
+            case 2: return Theme::fxPurple; case 3: return Theme::fxBlue;
+            case 4: return Theme::fxRed;    default: return Theme::fxGreen;
         }
     }
 
@@ -308,54 +413,59 @@ public:
         for (auto* k : knobs_) k->refresh();
         for (auto* c : choices_) c->refresh();
         if (rackState_ != nullptr && idx_ < (int) rackState_->size())
-            bypass_.setToggleState ((*rackState_)[(size_t) idx_].bypassed, juce::dontSendNotification);
+        {
+            const bool byp = (*rackState_)[(size_t) idx_].bypassed;
+            bypass_.setToggleState (byp, juce::dontSendNotification);
+            power_.setState (! byp);
+        }
     }
 
     void resized() override
     {
-        auto r = getLocalBounds().reduced (10);
-        auto head = r.removeFromTop (20);
-        menuBtn_->setBounds (head.removeFromRight (22).reduced (2));
-        title_.setBounds (head);
-        bypass_.setBounds (r.removeFromBottom (22).withSizeKeepingCentre (juce::jmin (86, r.getWidth()), 20));
-        r.removeFromBottom (2);
+        auto r = getLocalBounds();
+        const float u = (float) r.getWidth() / 164.0f;
+        auto S = [u] (int v) { return juce::roundToInt ((float) v * u); };
+        auto head = r.withY (S (8)).withHeight (S (20));
+        power_.setBounds (r.getRight() - S (28), S (9), S (20), S (20));
+        menuBtn_->setBounds (S (9), S (10), S (16), S (16));
+        title_.setBounds (head.reduced (S (26), 0));
+        bypass_.setBounds (juce::Rectangle<int> (S (84), S (26)).withCentre ({ r.getCentreX(), S (189) }));
 
         juce::Array<juce::Component*> items;
         for (auto* k : knobs_) items.add (k);
         for (auto* c : choices_) items.add (c);
-        if (items.isEmpty()) return;
-        const int perRow = juce::jmax (2, (items.size() + 1) / 2);
-        const int rows = (items.size() + perRow - 1) / perRow;
-        const int cellH = r.getHeight() / rows;
-        int idx = 0;
-        for (int row = 0; row < rows && idx < items.size(); ++row)
+        const int cx[2] = { S (44), S (120) };
+        const int cy[2] = { S (72), S (134) };
+        for (int i = 0; i < items.size(); ++i)
         {
-            auto rowArea = r.removeFromTop (cellH);
-            const int inRow = juce::jmin (perRow, items.size() - idx);
-            const int cellW = rowArea.getWidth() / inRow;
-            for (int c = 0; c < inRow; ++c)
-            {
-                auto cell = rowArea.removeFromLeft (cellW);
-                auto* comp = items[idx++];
-                if (dynamic_cast<ParamChoiceButton*> (comp) != nullptr)
-                    comp->setBounds (cell.reduced (2).withHeight (juce::jmin (38, cell.getHeight())));
-                else
-                    comp->setBounds (cell.reduced (1));
-            }
+            const int col = i % 2, row = juce::jmin (1, i / 2);
+            auto cell = juce::Rectangle<int> (S (74), S (58)).withCentre ({ cx[col], cy[row] });
+            if (dynamic_cast<ParamChoiceButton*> (items[i]) != nullptr)
+                items[i]->setBounds (cell);
+            else
+                items[i]->setBounds (cell);
+            items[i]->setVisible (i < 4);
         }
     }
 
     void paint (juce::Graphics& g) override
     {
         auto r = getLocalBounds().toFloat();
-        ux::drawFxModuleFrameV2 (g, r, accent (type_), type_ == FxType::widener);
-        // opaque local plaque behind the label — never trade contrast for pattern
-        g.setColour (juce::Colour (0xff0B0A08).withAlpha (0.92f));
-        g.fillRoundedRectangle (r.reduced (9.0f).removeFromTop (22.0f), 3.0f);
+        kit::drawFxPlate (g, r, plateFamily (type_));
+        // opaque local plaque behind the title — never trade contrast for pattern
+        const float u = r.getWidth() / 164.0f;
+        auto plaque = juce::Rectangle<float> (r.getX() + 26 * u, r.getY() + 6 * u,
+                                              r.getWidth() - 52 * u, 24 * u);
+        g.setColour (juce::Colour (0xff0B0A08).withAlpha (0.80f));
+        g.fillRoundedRectangle (plaque, 4.0f);
+        g.setColour (Theme::gold.withAlpha (0.28f));
+        g.drawRoundedRectangle (plaque, 4.0f, 1.0f);
+
         if (type_ == FxType::widener && rackDsp_ != nullptr)   // correlation meter
         {
             const float corr = rackDsp_->widenerCorrelation();
-            auto bar = getLocalBounds().toFloat().removeFromBottom (34.0f).removeFromTop (5.0f).reduced (14.0f, 0.0f);
+            auto bar = juce::Rectangle<float> (r.getX() + 30 * u, r.getY() + 168 * u,
+                                               r.getWidth() - 60 * u, 4 * u);
             g.setColour (Theme::black);
             g.fillRect (bar);
             const float t = juce::jlimit (0.0f, 1.0f, (corr + 1.0f) * 0.5f);
@@ -404,23 +514,154 @@ private:
     FxRackState* rackState_;
     FxRackDsp* rackDsp_;
     juce::Label title_;
+    PowerButton power_;
     std::unique_ptr<juce::DrawableButton> menuBtn_;
-    juce::TextButton bypass_;
+    ux::PlateButton bypass_;
     juce::OwnedArray<ParamKnob> knobs_;
     juce::OwnedArray<ParamChoiceButton> choices_;
 };
 
 //==============================================================================
+// MASTER FX column at the right of the rack strip (approved reference). Hosts
+// the post-mix master rack's leading unit compactly plus the master output LED
+// ladder; the kebab opens the same add/replace/remove menus as any rack unit,
+// so no function is added or lost.
+class MasterFxColumn : public juce::Component
+{
+public:
+    explicit MasterFxColumn (JMSignatureProcessor& p) : proc_ (p) { rebuild(); }
+
+    void rebuild()
+    {
+        knobs_.clear();
+        auto& rack = proc_.state.masterRack;
+        unitName_.clear();
+        if (! rack.empty())
+        {
+            auto& spec = fxSpec (rack.front().type);
+            unitName_ = juce::String (spec.name).toUpperCase();
+            int n = 0;
+            for (auto& ps : spec.params)
+            {
+                if (ps.kind != ParamKind::Float) continue;
+                if (n >= 3) break;
+                auto* k = new ParamKnob (proc_, "master.fx0." + juce::String (ps.id), ps.label, &ps);
+                k->setShowValue (false);
+                k->setLabelBelow (true, 10.0f);
+                knobs_.add (k);
+                addAndMakeVisible (k);
+                ++n;
+            }
+        }
+        if (menuBtn_ == nullptr)
+        {
+            menuBtn_ = ux::makePackIconButton ("mfx", ux::PackIcon::kebab, Theme::muted);
+            menuBtn_->onClick = [this] { showMenu(); };
+            addAndMakeVisible (*menuBtn_);
+        }
+        resized();
+        repaint();
+    }
+
+    void refresh()
+    {
+        for (auto* k : knobs_) k->refresh();
+        const float pk = juce::jmax (proc_.masterPeakL.load(), proc_.masterPeakR.load());
+        if (std::abs (pk - pk_) > 1.0e-3f) { pk_ = pk; repaint(); }
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds();
+        const float u = (float) r.getWidth() / 196.0f;
+        auto S = [u] (int v) { return juce::roundToInt ((float) v * u); };
+        menuBtn_->setBounds (r.getRight() - S (26), S (8), S (18), S (18));
+        const int cx[3] = { S (46), S (104), S (46) };
+        const int cy[3] = { S (78), S (78), S (156) };
+        for (int i = 0; i < knobs_.size(); ++i)
+            knobs_[i]->setBounds (juce::Rectangle<int> (S (58), S (58))
+                                      .withCentre ({ cx[juce::jmin (i, 2)], cy[juce::jmin (i, 2)] }));
+        meterArea_ = juce::Rectangle<int> (S (148), S (48), S (22), S (146));
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat();
+        kit::drawNineSlice (g, kit::image (kit::Img::panelMaster), r, 48, 48, 1.0f);
+        g.setColour (Theme::goldHi);
+        g.setFont (Theme::display (15.0f));
+        g.drawText ("MASTER FX", r.withTrimmedTop (8.0f).withHeight (20.0f), juce::Justification::centred, false);
+        if (unitName_.isNotEmpty())
+        {
+            g.setColour (Theme::muted);
+            g.setFont (Theme::ui (9.0f));
+            g.drawText (unitName_, r.withTrimmedTop (28.0f).withHeight (12.0f), juce::Justification::centred, false);
+        }
+        else
+        {
+            g.setColour (Theme::muted);
+            g.setFont (Theme::ui (11.0f));
+            g.drawFittedText ("RACK EMPTY\nADD VIA MENU",
+                              r.reduced (44.0f, 70.0f).toNearestInt(), juce::Justification::centred, 2);
+        }
+        // dB ladder + kit LED meter
+        auto m = meterArea_.toFloat();
+        kit::drawLedMeterV (g, m, LevelMeter::norm (pk_));
+        g.setColour (Theme::muted.withAlpha (0.8f));
+        g.setFont (Theme::value (8.0f));
+        const char* ticks[] = { "0", "-12", "-24", "-36", "-60" };
+        for (int i = 0; i < 5; ++i)
+            g.drawText (ticks[i], m.getRight() + 2.0f, m.getY() + m.getHeight() * (float) i / 4.6f - 5.0f,
+                        24.0f, 10.0f, juce::Justification::centredLeft, false);
+    }
+
+private:
+    void showMenu()
+    {
+        juce::PopupMenu m, add, repl;
+        for (auto& s : fxRegistry()) add.addItem (100 + (int) s.type, s.name);
+        m.addSubMenu ("Add unit", add, (int) proc_.state.masterRack.size() < FxRackDsp::kMaxSlots);
+        if (! proc_.state.masterRack.empty())
+        {
+            for (auto& s : fxRegistry()) repl.addItem (300 + (int) s.type, s.name);
+            m.addSubMenu ("Replace first unit", repl);
+            m.addItem (2, "Remove first unit");
+        }
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (menuBtn_.get()), [this] (int r)
+        {
+            auto& rack = proc_.state.masterRack;
+            if (r >= 300) { FxUnitState u; u.type = (FxType) (r - 300); u.params = defaultParams (u.type);
+                            if (! rack.empty()) rack.front() = std::move (u); }
+            else if (r >= 100) { FxUnitState u; u.type = (FxType) (r - 100); u.params = defaultParams (u.type);
+                                 rack.push_back (std::move (u)); }
+            else if (r == 2 && ! rack.empty()) rack.erase (rack.begin());
+            else return;
+            proc_.masterRack.setState (rack);
+            proc_.stateChanged.sendChangeMessage();
+        });
+    }
+
+    JMSignatureProcessor& proc_;
+    juce::String unitName_;
+    juce::OwnedArray<ParamKnob> knobs_;
+    std::unique_ptr<juce::DrawableButton> menuBtn_;
+    juce::Rectangle<int> meterArea_;
+    float pk_ = 0;
+};
+
+//==============================================================================
+// Bottom FX rack strip, restored to the approved arrangement: "FX RACK" title,
+// a left vertical rail of rack icons, six colour-coded units, page dots and the
+// MASTER FX column at the right.
 class FxRackStrip : public juce::Component
 {
 public:
     FxRackStrip (JMSignatureProcessor& p) : proc_ (p)
     {
-        title_.setFont (Theme::display (13.0f));
-        title_.setColour (juce::Label::textColourId, Theme::gold);
-        title_.setJustificationType (juce::Justification::centred);
-        addAndMakeVisible (title_);
+        master_ = std::make_unique<MasterFxColumn> (proc_);
+        addAndMakeVisible (*master_);
         addBtn_.setButtonText ("+ ADD UNIT");
+        addBtn_.setFontHeight (11.0f);
         addBtn_.onClick = [this] { showAddMenu(); };
         addAndMakeVisible (addBtn_);
         rebuild();
@@ -430,56 +671,98 @@ public:
     {
         panels_.clear();
         const int page = proc_.state.currentPage;
-        if (page >= 0 && page <= 3)
+        const int slot = page <= 3 ? slotForWorld (proc_.state, page) : 0;
+        prefix_ = "slot" + juce::String (slot);
+        rackState_ = &proc_.state.slots[(size_t) slot].rack;
+        rackDsp_ = &proc_.slotRacks[(size_t) slot];
+        slotLabel_ = juce::String::charToString ((juce::juce_wchar) ('A' + slot))
+                     + "  (" + worldName (proc_.state.slots[(size_t) slot].world) + ")";
+        const int shown = juce::jmin (6, (int) rackState_->size());
+        for (int i = 0; i < shown; ++i)
         {
-            const int slot = slotForWorld (proc_.state, page);
-            prefix_ = "slot" + juce::String (slot);
-            rackState_ = &proc_.state.slots[(size_t) slot].rack;
-            rackDsp_ = &proc_.slotRacks[(size_t) slot];
-            title_.setText ("FX RACK  -  SLOT " + juce::String::charToString ((juce::juce_wchar) ('A' + slot))
-                            + "  (" + worldName (proc_.state.slots[(size_t) slot].world) + ")",
-                            juce::dontSendNotification);
-        }
-        else
-        {
-            prefix_ = "master";
-            rackState_ = &proc_.state.masterRack;
-            rackDsp_ = &proc_.masterRack;
-            title_.setText ("MASTER FX RACK  (POST-MIX)", juce::dontSendNotification);
-        }
-        for (size_t i = 0; i < rackState_->size(); ++i)
-        {
-            auto* pn = new FxUnitPanel (proc_, prefix_, (int) i, (*rackState_)[i], rackState_, rackDsp_);
+            auto* pn = new FxUnitPanel (proc_, prefix_, i, (*rackState_)[(size_t) i], rackState_, rackDsp_);
             pn->onRackEdit = [this] { rebuild(); };
             panels_.add (pn);
             addAndMakeVisible (pn);
         }
-        addBtn_.setVisible ((int) rackState_->size() < FxRackDsp::kMaxSlots);
+        addBtn_.setVisible (shown < 6 && (int) rackState_->size() < FxRackDsp::kMaxSlots);
+        master_->rebuild();
         resized();
         repaint();
     }
 
-    void refresh() { for (auto* pn : panels_) pn->refresh(); }
+    void refresh()
+    {
+        for (auto* pn : panels_) pn->refresh();
+        master_->refresh();
+    }
 
     void resized() override
     {
-        auto r = getLocalBounds().reduced (Theme::M::pad);
-        title_.setBounds (r.removeFromTop (18));
-        r.removeFromTop (2);
-        if (panels_.isEmpty())
-        {
-            addBtn_.setBounds (r.withSizeKeepingCentre (140, 30));
-            return;
-        }
-        const int n = panels_.size() + (addBtn_.isVisible() ? 1 : 0);
-        const int w = juce::jmin (220, r.getWidth() / juce::jmax (1, n));
-        for (auto* pn : panels_)
-            pn->setBounds (r.removeFromLeft (w).reduced (3, 0));
+        using L = Theme::L;
+        for (int i = 0; i < panels_.size(); ++i)
+            panels_[i]->setBounds (L::fxUnitX + i * L::fxUnitPitch, L::fxUnitY, L::fxUnitW, L::fxUnitH);
         if (addBtn_.isVisible())
-            addBtn_.setBounds (r.removeFromLeft (juce::jmin (110, juce::jmax (60, r.getWidth()))).withSizeKeepingCentre (100, 30));
+            addBtn_.setBounds (juce::Rectangle<int> (110, 30)
+                                   .withCentre ({ L::fxUnitX + panels_.size() * L::fxUnitPitch + L::fxUnitW / 2,
+                                                  L::fxUnitY + L::fxUnitH / 2 }));
+        master_->setBounds (L::fxMasterX, L::fxMasterY, L::fxMasterW, L::fxMasterH);
     }
 
-    void paint (juce::Graphics&) override {}   // hosted inside overlay plaques
+    void paint (juce::Graphics& g) override
+    {
+        using L = Theme::L;
+        auto r = getLocalBounds().toFloat();
+        juce::ColourGradient body (juce::Colour (0xff0E0D0B), r.getX(), r.getY(),
+                                   juce::Colour (0xff060605), r.getX(), r.getBottom(), false);
+        g.setGradientFill (body);
+        g.fillRoundedRectangle (r, 8.0f);
+        g.setColour (Theme::goldDark.withAlpha (0.5f));
+        g.drawRoundedRectangle (r.reduced (0.5f), 8.0f, 1.0f);
+        // kit rack corners (single accent per corner)
+        const float cs = 34.0f;
+        kit::drawRackCorner (g, { r.getX() + 2, r.getY() + 2, cs, cs }, 0, 0.85f);
+        kit::drawRackCorner (g, { r.getRight() - cs - 2, r.getY() + 2, cs, cs }, 1, 0.85f);
+
+        g.setColour (Theme::gold);
+        g.setFont (Theme::display (14.0f));
+        g.drawText ("F X   R A C K      SLOT " + slotLabel_, r.withHeight (24.0f).withTrimmedTop (4.0f),
+                    juce::Justification::centred, false);
+
+        // left rack rail — five recessed page/rack glyphs (decorative fittings)
+        auto rail = juce::Rectangle<float> ((float) L::fxRailX, (float) L::fxRailY,
+                                            (float) L::fxRailW, (float) L::fxRailH);
+        g.setColour (juce::Colour (0xff0A0908));
+        g.fillRoundedRectangle (rail, 5.0f);
+        g.setColour (Theme::goldDark.withAlpha (0.5f));
+        g.drawRoundedRectangle (rail, 5.0f, 1.0f);
+        for (int i = 0; i < 5; ++i)
+        {
+            auto cell = juce::Rectangle<float> (rail.getX() + 4.0f, rail.getY() + 8.0f + (float) i * 40.0f,
+                                                rail.getWidth() - 8.0f, 32.0f);
+            const bool on = i == 2;
+            g.setColour (on ? Theme::gold.withAlpha (0.18f) : juce::Colours::transparentBlack);
+            g.fillRoundedRectangle (cell, 4.0f);
+            g.setColour (on ? Theme::goldHi : Theme::muted.withAlpha (0.55f));
+            auto q = cell.reduced (9.0f);
+            for (int k = 0; k < 4; ++k)
+                g.fillRect (q.getX() + (k % 2) * (q.getWidth() * 0.6f),
+                            q.getY() + (k / 2) * (q.getHeight() * 0.6f),
+                            q.getWidth() * 0.4f, q.getHeight() * 0.4f);
+        }
+
+        // page dots under the units
+        const int pages = juce::jmax (1, ((int) (rackState_ != nullptr ? rackState_->size() : 0) + 5) / 6);
+        const float dcx = (float) (L::fxUnitX + 3 * L::fxUnitPitch);
+        for (int i = 0; i < juce::jmax (pages, 5); ++i)
+        {
+            const bool active = i == 0;
+            const bool real = i < pages;
+            g.setColour (active ? Theme::gold : Theme::muted.withAlpha (real ? 0.5f : 0.22f));
+            g.fillEllipse (dcx - 40.0f + (float) i * 20.0f, (float) L::fxDotsY, active ? 8.0f : 6.0f,
+                           active ? 8.0f : 6.0f);
+        }
+    }
 
 private:
     void showAddMenu()
@@ -501,52 +784,50 @@ private:
     }
 
     JMSignatureProcessor& proc_;
-    juce::String prefix_;
+    juce::String prefix_, slotLabel_;
     FxRackState* rackState_ = nullptr;
     FxRackDsp* rackDsp_ = nullptr;
-    juce::Label title_;
-    juce::TextButton addBtn_;
+    ux::PlateButton addBtn_;
     juce::OwnedArray<FxUnitPanel> panels_;
+    std::unique_ptr<MasterFxColumn> master_;
 };
 
 //==============================================================================
-// V2 output meter (rhodes-model-layout.svg: 54x330 frame at 830,185; OUTPUT
-// caption; 14px inner track; single 8px level bar, #7EE126).
+// Model-page OUTPUT meter along the panel's right edge (approved reference):
+// framed column, "OUTPUT" caption, dB ladder and the kit LED ladder.
 class OutputMeterV2 : public juce::Component
 {
 public:
-    void setLevel (float l) { if (std::abs (l - lvl_) > 1.0e-4f) { lvl_ = l; repaint(); } }
+    void setLevel (float l) { if (std::abs (l - lvl_) > 1.0e-3f) { lvl_ = l; repaint(); } }
     void paint (juce::Graphics& g) override
     {
         auto r = getLocalBounds().toFloat();
-        g.setColour (juce::Colour (0xff070706));
+        g.setColour (juce::Colour (0xff0A0908).withAlpha (0.92f));
         g.fillRoundedRectangle (r, 6.0f);
-        g.setColour (juce::Colour (0xff644617));
+        g.setColour (Theme::goldDark.withAlpha (0.7f));
         g.drawRoundedRectangle (r.reduced (0.5f), 6.0f, 1.0f);
         g.setColour (juce::Colour (0xffCDBB93));
-        g.setFont (Theme::ui (9.0f));
-        g.drawText ("OUTPUT", r.withTrimmedTop (14.0f).withHeight (14.0f), juce::Justification::centred);
-        auto track = juce::Rectangle<float> (r.getCentreX() - 7.0f, r.getY() + 41.0f, 14.0f, r.getHeight() - 66.0f);
-        g.setColour (juce::Colour (0xff111111));
-        g.fillRoundedRectangle (track, 5.0f);
-        const float db = juce::Decibels::gainToDecibels (lvl_ + 1.0e-6f);
-        const float t = juce::jlimit (0.0f, 1.0f, (db + 60.0f) / 66.0f);
-        if (t > 0.005f)
-        {
-            g.setColour (juce::Colour (0xff7EE126));
-            auto fill = track.reduced (3.0f, 0.0f);
-            g.fillRect (fill.removeFromBottom (fill.getHeight() * t));
-        }
+        g.setFont (Theme::display (9.0f));
+        g.drawText ("OUTPUT", r.withTrimmedTop (8.0f).withHeight (14.0f), juce::Justification::centred, false);
+        auto ladder = r.reduced (6.0f).withTrimmedTop (26.0f).withTrimmedBottom (6.0f);
+        auto bar = ladder.removeFromRight (ladder.getWidth() * 0.5f);
+        kit::drawLedMeterV (g, bar, LevelMeter::norm (lvl_));
+        g.setColour (Theme::muted.withAlpha (0.75f));
+        g.setFont (Theme::value (8.0f));
+        const char* ticks[] = { "0", "-6", "-12", "-18", "-24", "-36", "-60" };
+        for (int i = 0; i < 7; ++i)
+            g.drawText (ticks[i], ladder.getX() - 2.0f,
+                        ladder.getY() + ladder.getHeight() * (float) i / 6.6f - 5.0f,
+                        ladder.getWidth() + 4.0f, 10.0f, juce::Justification::centredRight, false);
     }
 private:
     float lvl_ = 0;
 };
 
 //==============================================================================
-// V2 model page — fills the whole 1000x720 root below the header. MAIN shows
-// the exact pixel-spec layout; the other build-spec functions (amp env, EQ,
-// slot FX rack, settings, info, preset browser) open as overlays on the
-// recessed surface so the spec view stays pristine (arrangement logged).
+// Centre model panel — kente surround, title + patch name with prev/next and a
+// favourite heart, the hero knobs on a recessed control surface, the OUTPUT
+// meter along the right edge and the mature sub-tab strip along the bottom.
 class ModelPagePanel : public juce::Component
 {
 public:
@@ -580,13 +861,16 @@ public:
         };
         addAndMakeVisible (*heartBtn_);
 
-        const char* tabNames[] = { "MAIN", "AMP ENV", "EQ", "FX", "SETTINGS", "INFO" };
-        for (int i = 0; i < 6; ++i)
+        addAndMakeVisible (tabStrip_);
+        const char* tabNames[] = { "MAIN", "AMP ENV", "EQ", "SETTINGS", "INFO" };
+        for (int i = 0; i < 5; ++i)
         {
             auto& b = tabs_[(size_t) i];
             b.setButtonText (tabNames[i]);
             b.setClickingTogglesState (true);
             b.setRadioGroupId (888);
+            b.setFirstCell (i == 0);
+            b.setFontHeight (14.0f);
             b.onClick = [this, i] { if (tabs_[(size_t) i].getToggleState()) { tab_ = i; rebuildContent(); } };
             addAndMakeVisible (b);
         }
@@ -602,8 +886,7 @@ public:
         heartBtn_->setToggleState (proc_.state.library.isFavorite (currentPresetFavKey()), juce::dontSendNotification);
         for (auto* k : knobs_) k->refresh();
         for (auto* c : choices_) c->refresh();
-        if (rack_ != nullptr) rack_->refresh();
-        repaint (300, 120, 400, 30);      // live patch subtitle
+        repaint (0, Theme::L::mpPatchY - 4, getWidth(), 26);      // live patch subtitle
     }
 
     juce::String currentPresetFavKey() const
@@ -628,27 +911,26 @@ public:
         knobs_.clear();
         choices_.clear();
         settingsWidgets_.clear();
-        rack_.reset();
         browser_.reset();
         infoText_ = nullptr;
         slot_ = slotForWorld (proc_.state, world_);
         auto slotStr = juce::String (slot_);
 
-        if (tab_ == 0)          // MAIN — exact V2 pixel spec (3-over-2 / MKS 3x2)
+        if (tab_ == 0)          // MAIN — hero knobs at the approved positions
         {
+            using L = Theme::L;
             auto& ctrls = worldEngineControls (world_);
             const bool six = (int) ctrls.size() == 6;
-            const int d = six ? Theme::V2::knob6D : Theme::V2::knobD;
+            const int d = L::mpKnobD;
             int i = 0;
             for (auto& spec : ctrls)
             {
-                const int* ctr = six ? Theme::V2::six[juce::jmin (i, 5)] : Theme::V2::five[juce::jmin (i, 4)];
+                const int* ctr = six ? L::mpSix[juce::jmin (i, 5)] : L::mpFive[juce::jmin (i, 4)];
                 auto* k = new ParamKnob (proc_, "slot" + slotStr + ".engine." + spec.id, spec.label, &spec);
                 k->setMotif (i % 5);
                 k->setAccent (Theme::worldAccent (world_));
-                k->setV2 (d, Theme::V2::labelOffsetY * d / 112, Theme::V2::valueOffsetY * d / 112 + 13);
-                const int box = d + 60;                       // room for glow + label + value
-                k->setBounds (juce::Rectangle<int> (box, box + 80).withCentre ({ ctr[0], ctr[1] }));
+                k->setV2 (d, L::mpLabelOff, L::mpValueOff, 16.0f, 16.0f);
+                k->setBounds (juce::Rectangle<int> (d + 70, d + 100).withCentre ({ ctr[0], ctr[1] }));
                 knobs_.add (k);
                 addAndMakeVisible (k);
                 ++i;
@@ -696,16 +978,11 @@ public:
                         }
                     }
             }
-            else if (tab_ == 3) // FX — this slot's rack (build-spec §5.2)
-            {
-                rack_ = std::make_unique<FxRackStrip> (proc_);
-                addAndMakeVisible (*rack_);
-            }
-            else if (tab_ == 4) // SETTINGS — library folder + rescan
+            else if (tab_ == 3) // SETTINGS — library folder + rescan
             {
                 auto* lbl = new juce::Label();
                 lbl->setText ("LIBRARY FOLDER", juce::dontSendNotification);
-                lbl->setFont (Theme::ui (12.0f));
+                lbl->setFont (Theme::display (13.0f));
                 lbl->setColour (juce::Label::textColourId, Theme::muted);
                 addAndMakeVisible (lbl);
                 settingsWidgets_.add (lbl);
@@ -714,12 +991,12 @@ public:
                 path->setText (proc_.state.library.libraryDir().getFullPathName()
                                + (proc_.state.library.usedFallback() ? "   (empty - using testdata fallback)" : ""),
                                juce::dontSendNotification);
-                path->setFont (Theme::value (12.0f));
+                path->setFont (Theme::value (13.0f));
                 path->setColour (juce::Label::textColourId, Theme::cream);
                 addAndMakeVisible (path);
                 settingsWidgets_.add (path);
 
-                auto* browse = new juce::TextButton ("BROWSE...");
+                auto* browse = new ux::PlateButton ("BROWSE...");
                 browse->onClick = [this]
                 {
                     chooser_ = std::make_unique<juce::FileChooser> ("Choose library folder",
@@ -737,7 +1014,7 @@ public:
                 addAndMakeVisible (browse);
                 settingsWidgets_.add (browse);
 
-                auto* rescan = new juce::TextButton ("RESCAN LIBRARY");
+                auto* rescan = new ux::PlateButton ("RESCAN LIBRARY");
                 rescan->onClick = [this]
                 {
                     proc_.state.library.rescan();
@@ -783,7 +1060,7 @@ public:
     void toggleBrowser()
     {
         if (browser_ != nullptr) { browser_.reset(); setKnobsVisible (true); repaint(); return; }
-        browser_ = std::make_unique<PresetBrowserPanel> (proc_);
+        browser_ = std::make_unique<PresetBrowserPanel> (proc_, true);
         addAndMakeVisible (*browser_);
         setKnobsVisible (false);
         resized();
@@ -797,34 +1074,36 @@ public:
 
     void resized() override
     {
-        using V = Theme::V2;
-        // title row widgets around the patch subtitle (y=137 line)
-        patchBtn_.setBounds (360, 96, 280, 48);
-        prevBtn_->setBounds (330, 124, 24, 20);
-        nextBtn_->setBounds (648, 124, 24, 20);
-        heartBtn_->setBounds (676, 124, 22, 20);
-        meter_.setBounds (V::outX, V::outY, V::outW, V::outH);
-        // sub-tabs: discreet row at the bottom of the content area
-        int tx = 190;
-        for (auto& t : tabs_) { t.setBounds (tx, 682, 84, 20); tx += 88; }
+        using L = Theme::L;
+        const int cx = getWidth() / 2;
+        patchBtn_.setBounds (cx - 150, L::mpTitleY - 4, 300, 60);
+        prevBtn_->setBounds (cx - 242, L::mpTitleY + 4, 26, 26);
+        nextBtn_->setBounds (cx + 216, L::mpTitleY + 4, 26, 26);
+        heartBtn_->setBounds (cx + 254, L::mpTitleY + 4, 26, 26);
+        meter_.setBounds (L::mpMeterX, L::mpMeterY, L::mpMeterW, L::mpMeterH);
 
-        const juce::Rectangle<int> surface (190, 150, 652, 454);
-        if (browser_ != nullptr)
-            browser_->setBounds (surface.reduced (60, 20));
-        if (rack_ != nullptr)
-            rack_->setBounds (surface.reduced (8));
+        tabStrip_.setBounds (L::mpTabsX, L::mpTabsY, L::mpTabsW, L::mpTabsH);
+        {
+            auto tr = tabStrip_.getBounds().reduced (4, 4);
+            const int tw = tr.getWidth() / 5;
+            for (int i = 0; i < 5; ++i)
+                tabs_[(size_t) i].setBounds (tr.removeFromLeft (i == 4 ? tr.getWidth() : tw));
+        }
+
+        const juce::Rectangle<int> surface (L::mpSurfX, L::mpSurfY, L::mpSurfW, L::mpSurfH);
+        if (browser_ != nullptr) browser_->setBounds (surface.reduced (60, 16));
 
         auto area = surface.reduced (40);
-        if (tab_ == 4 && settingsWidgets_.size() >= 4)
+        if (tab_ == 3 && settingsWidgets_.size() >= 4)
         {
             auto r = area.reduced (20);
-            settingsWidgets_[0]->setBounds (r.removeFromTop (20));
-            settingsWidgets_[1]->setBounds (r.removeFromTop (24));
-            r.removeFromTop (10);
-            auto row = r.removeFromTop (30);
-            settingsWidgets_[2]->setBounds (row.removeFromLeft (120));
-            row.removeFromLeft (10);
-            settingsWidgets_[3]->setBounds (row.removeFromLeft (160));
+            settingsWidgets_[0]->setBounds (r.removeFromTop (22));
+            settingsWidgets_[1]->setBounds (r.removeFromTop (26));
+            r.removeFromTop (12);
+            auto row = r.removeFromTop (32);
+            settingsWidgets_[2]->setBounds (row.removeFromLeft (130));
+            row.removeFromLeft (12);
+            settingsWidgets_[3]->setBounds (row.removeFromLeft (170));
             return;
         }
         if (infoText_ != nullptr) { infoText_->setBounds (area.reduced (16)); return; }
@@ -848,10 +1127,10 @@ public:
                     auto cell = rowArea.removeFromLeft (cellW);
                     auto* comp = items[idx++];
                     if (dynamic_cast<ParamChoiceButton*> (comp) != nullptr)
-                        comp->setBounds (cell.withSizeKeepingCentre (juce::jmin (120, cell.getWidth() - 8), 50));
+                        comp->setBounds (cell.withSizeKeepingCentre (juce::jmin (130, cell.getWidth() - 8), 56));
                     else
                     {
-                        const int k = juce::jmin (140, juce::jmin (cell.getWidth() - 4, cell.getHeight() - 4));
+                        const int k = juce::jmin (150, juce::jmin (cell.getWidth() - 4, cell.getHeight() - 4));
                         comp->setBounds (cell.withSizeKeepingCentre (k, k));
                     }
                 }
@@ -861,36 +1140,81 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        using V = Theme::V2;
-        const juce::Rectangle<float> content ((float) V::contentX, (float) V::contentY,
-                                              (float) V::contentW, (float) V::contentH);
-        ux::drawWorldBackdropV2 (g, content, world_);
+        using L = Theme::L;
+        auto r = getLocalBounds().toFloat();
+        drawWorldSurround (g, r, world_);
 
-        // title + live patch subtitle (V2 title block at 500,115 / 500,137).
-        // Dark plaque under the text per the design law (never label on undimmed
-        // pattern) and the polished reference's title panel; it is also the
-        // click affordance for the preset browser.
-        g.setColour (juce::Colour (0xff0A0805).withAlpha (0.85f));
-        g.fillRoundedRectangle (352.0f, 92.0f, 296.0f, 54.0f, 8.0f);
-        g.setColour (Theme::goldDark.withAlpha (0.8f));
-        g.drawRoundedRectangle (352.0f, 92.0f, 296.0f, 54.0f, 8.0f, 1.0f);
+        const float cx = r.getWidth() * 0.5f;
+        // dark title plaque (design law: title text never on undimmed pattern);
+        // it doubles as the click affordance for the preset browser
+        auto plaque = juce::Rectangle<float> (cx - 214.0f, (float) L::mpTitleY - 6.0f, 428.0f, 62.0f);
+        g.setColour (juce::Colour (0xff0A0805).withAlpha (0.82f));
+        g.fillRoundedRectangle (plaque, 9.0f);
+        g.setColour (Theme::goldDark.withAlpha (0.75f));
+        g.drawRoundedRectangle (plaque, 9.0f, 1.0f);
         g.setColour (Theme::cream);
-        g.setFont (Theme::display (28.0f));
-        g.drawText (worldName (world_), 200, 96, 600, 26, juce::Justification::centred);
+        g.setFont (Theme::display (30.0f));
+        g.drawText (juce::String (worldName (world_)).toUpperCase(), 0, L::mpTitleY, getWidth(), 32,
+                    juce::Justification::centred, false);
         auto& s = proc_.state.slots[(size_t) slot_];
         g.setColour (Theme::goldHi);
-        g.setFont (Theme::ui (11.0f));
+        g.setFont (Theme::display (14.0f));
         g.drawText (s.bundleName.isEmpty() ? "NO BUNDLE - CLICK TO BROWSE"
                                            : (s.bundleName + "  -  " + s.presetName).toUpperCase(),
-                    200, 128, 600, 16, juce::Justification::centred);
+                    0, L::mpPatchY, getWidth(), 18, juce::Justification::centred, false);
 
         if (tab_ != 0 || browser_ != nullptr)   // overlay plaque over the surface
         {
+            auto surf = juce::Rectangle<float> ((float) L::mpSurfX, (float) L::mpSurfY,
+                                                (float) L::mpSurfW, (float) L::mpSurfH);
             g.setColour (juce::Colour (0xff0A0805).withAlpha (0.96f));
-            g.fillRoundedRectangle (190.0f, 150.0f, 652.0f, 454.0f, 12.0f);
+            g.fillRoundedRectangle (surf, 12.0f);
             g.setColour (Theme::goldDark);
-            g.drawRoundedRectangle (190.0f, 150.0f, 652.0f, 454.0f, 12.0f, 1.0f);
+            g.drawRoundedRectangle (surf, 12.0f, 1.0f);
         }
+    }
+
+    /// Kente surround + recessed control surface (V2 materials retained: the
+    /// graded raster, the vignette and the recess treatment).
+    static void drawWorldSurround (juce::Graphics& g, juce::Rectangle<float> r, int world)
+    {
+        using L = Theme::L;
+        juce::Path clip;
+        clip.addRoundedRectangle (r, 10.0f);
+        {
+            juce::Graphics::ScopedSaveState ss (g);
+            g.reduceClipRegion (clip);
+            g.setColour (Theme::chassis);
+            g.fillRect (r);
+            auto& img = ux::kenteGraded (world);
+            if (img.isValid()) ux::drawCover (g, img, r, Theme::V2::backdropOpacity);
+            else KenteTexture::fill (g, r, KenteTexture::Style::Weave, Theme::worldAccent (world), 0.8f, 10.0f, world);
+            // the approved reference's surround is deep and smoky, not a bright
+            // graphic band: a flat scrim plus the V2 radial vignette
+            g.setColour (juce::Colours::black.withAlpha (0.34f));
+            g.fillRect (r);
+            juce::ColourGradient vig (juce::Colours::transparentBlack, r.getCentreX(), r.getCentreY(),
+                                      juce::Colours::black.withAlpha (0.80f), r.getX(), r.getY(), true);
+            vig.addColour (0.30, juce::Colours::transparentBlack);
+            g.setGradientFill (vig);
+            g.fillRect (r);
+        }
+        g.setColour (Theme::gold.withAlpha (0.55f));
+        g.drawRoundedRectangle (r.reduced (0.5f), 10.0f, 1.5f);
+
+        auto surf = juce::Rectangle<float> (r.getX() + L::mpSurfX, r.getY() + L::mpSurfY,
+                                            (float) L::mpSurfW, (float) L::mpSurfH);
+        g.setColour (juce::Colours::black.withAlpha (0.5f));
+        g.fillRoundedRectangle (surf.translated (0.0f, 4.0f), 14.0f);
+        g.setColour (juce::Colour (0xff080604).withAlpha (0.93f));
+        g.fillRoundedRectangle (surf, 14.0f);
+        g.setColour (juce::Colour (0xff8A5B17));
+        g.drawRoundedRectangle (surf, 14.0f, 2.0f);
+        g.setColour (juce::Colour (0xffE3A92B).withAlpha (0.22f));
+        g.drawRoundedRectangle (surf.reduced (10.0f), 10.0f, 1.0f);
+        for (auto p : { surf.getTopLeft(), surf.getTopRight(), surf.getBottomLeft(), surf.getBottomRight() })
+            kit::drawScrew (g, { p.x + (p.x < surf.getCentreX() ? 16.0f : -16.0f),
+                                 p.y + (p.y < surf.getCentreY() ? 16.0f : -16.0f) }, 16.0f, 0.9f);
     }
 
     int world() const { return world_; }
@@ -911,13 +1235,13 @@ private:
     JMSignatureProcessor& proc_;
     int world_, slot_ = 0, tab_ = 0;
     HitArea patchBtn_;
-    std::array<juce::TextButton, 6> tabs_;
+    ux::SegmentStrip tabStrip_;
+    std::array<ux::TabCellButton, 5> tabs_;
     juce::OwnedArray<ParamKnob> knobs_;
     juce::OwnedArray<ParamChoiceButton> choices_;
     juce::OwnedArray<juce::Component> settingsWidgets_;
     juce::Label* infoText_ = nullptr;
     OutputMeterV2 meter_;
-    std::unique_ptr<FxRackStrip> rack_;
     std::unique_ptr<PresetBrowserPanel> browser_;
     std::unique_ptr<juce::DrawableButton> prevBtn_, nextBtn_, heartBtn_;
     std::unique_ptr<juce::FileChooser> chooser_;

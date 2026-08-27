@@ -121,6 +121,140 @@ Implemented from `docs/svg-pack-v2` (CLAUDE-IMPLEMENTATION-V2.md + tokens/design
 - One more legibility call: at (500,137) the live patch subtitle sat directly on an undimmed gold band of the rhodes cloth (above the recessed surface). Added the polished-reference's dark title plaque (352,92,296x54) behind the title block — it doubles as the click affordance for the preset browser. Title/patch text never sits on raw pattern.
 - Standalone note: the in-progress Release relink failed once with LNK1104 because the user's running (pre-V2) standalone locked the exe; that stale instance was terminated to complete the link (coordinator relaunches). The new standalone was NOT launched.
 
+## Client review round 2 — arrangement restore + hardware kit (2026-08-27)
+UI-only pass. No DSP, engine, parameter or feature change; JM-BUILD-SPEC.md remains the sole
+behaviour authority. **Authority resolution**: where the client's review conflicts with
+`docs/svg-pack-v2/CLAUDE-IMPLEMENTATION-V2.md`, the CLIENT WINS on (a) overall arrangement and
+(b) canvas aspect ratio. Everything else in V2 still stands and is retained: colour tokens,
+kente materials/grading, state rules, z-order, hero-knob sizing, the JM engraved motif family
+naming policy, live text only, cached drawables.
+
+### Task 1 — approved full-window arrangement restored
+- **Root is 1536x1024 (3:2)** — the approved reference image's own size, so its coordinates could
+  be read off directly. V2's root discipline is kept verbatim: ONE root coordinate system, whole
+  root scaled by `min(w/1536, h/1024)` through a single AffineTransform, centred, chassis-coloured
+  letterbox, fixed aspect, limits 1152x768–3072x2048. No reflow, no independent stretch.
+- The V2 "one page at a time" model is gone. Every approved region is on screen simultaneously:
+  header · left preset browser column · centre model stage · right PERFORM dock · bottom FX rack
+  strip · bottom/status bar. All band geometry lives in the new `Theme::L` block.
+- Recovered from the pre-V2 commit `2376b5a` rather than rewritten: `PerformDock`, `SlotStrip`,
+  `TransposeControl`, `MacroKnobUnit`, `TopBar`→`HeaderBar`, `StatusBar`→`BottomBar`, and the full
+  preset-browser column. V2 refinements were ported forward onto them (tokens, state rules,
+  motif naming, graded kente).
+- Restored elements: JM shield + wordmark, cart + gear icons, MASTER knob + horizontal LED meter +
+  LIMITER, the browser's JM box/USB brand-art panel, the model page's title/patch row with prev/next
+  and favourite heart, the OUTPUT meter along the panel's right edge, the FX rack's left icon rail,
+  page dots and MASTER FX column, and the KEYBOARD/MOD MATRIX/LFO/ARP bottom bar with version,
+  license and CPU.
+- Sub-tabs went back to the reference's five (MAIN · AMP ENV · EQ · SETTINGS · INFO). The V2-only
+  "FX" sub-tab was dropped because the slot's FX rack is now permanently on screen in the bottom
+  strip — no function lost, one less indirection.
+- **LIMITER, MOD MATRIX, LFO and ARP are rendered disabled placeholders** (no `limiter` host
+  parameter exists and those three are out of build-spec scope). Same call as v1; drawing them live
+  would have meant adding function.
+
+### Task 2 — PERFORM: slots move to the centre
+- Selecting PERFORM hides the right dock and widens the centre stage to `centerW + dockW`
+  (1254x584). The four slots occupy it as a 2x2 grid — A/B top row, C/D second row — with
+  SOLO/POLY and TRANSPOSE beneath and the four macros under those. Browser, FX rack, bottom bar
+  and status bar all stay exactly where they are.
+- `SlotStrip` gained two layouts over one behaviour set: `Row` (dock, 550x78) and `Card`
+  (centre grid, 590x132). Both expose the same build-spec functions; nothing was added or removed.
+
+### Task 3 — the "matured" tab/button language (`src/ui/Hardware.h`)
+The approved reference's sub-tab strip was reproduced as the single button language and applied to
+**every** segmented/tabbed/plate surface: nav tabs, model sub-tabs, USER/FACTORY/FAVORITES, FX
+BYPASS, bottom-bar buttons, LIMITER, macro LEARN/target chips, SAVE, BROWSE/RESCAN, + ADD UNIT,
+SOLO/POLY and TRANSPOSE housings. Three registers, one family:
+- **Segment** (`SegmentStrip` + `TabCellButton`): dark recessed plaque (vertical #141210→#0B0A09,
+  gold #6E5320 hairline, soft outer shadow, inner recess line), cells divided by #2C2823 hairlines.
+  ACTIVE cell is lifted (#402D0F→#1A1208), carries a 2px #FFC24A **top-edge line**, a soft #FFB11B
+  underline, a subtle radial gold inner glow and a #FFD77A label; inactive cells are muted cream
+  #C9C2B4. Condensed uppercase with 0.04em tracking throughout.
+- **Plate** (`PlateButton` + `JmLookAndFeel::drawButtonBackground`, so plain TextButtons inherit it):
+  the kit's `button-empty-up.png` / `button-empty-down.png` plaque, nine-sliced. **This finally
+  wires the pressed state** (down plaque + 1px content offset + inner shadow) that V2 logged as
+  missing. Engaged/toggled = the reference's filled-gold pill (#F4C95A→#B9822A, dark label).
+- Below ~26px tall the kit plaque's bevel reads as a lozenge, so small chips (macro LEARN/target)
+  drop to a flat member of the same family — identical palette, stroke weight and type, no bevel.
+- V2 state tokens are now all live: disabled .38, hover gold .18, pressed 1px + inner shadow, and
+  the previously-unwired **focus 2px #FFD77A** outline on tabs, plates and knobs.
+
+### Task 4 — photoreal hardware kit (`docs/hardware-kit` → `src/ui/Kit.h`)
+19 PNGs vendored to `apps/signature/resources/kit/` and embedded through the existing `JMAssets`
+`juce_add_binary_data` target (~4.3 MB). All decoding is cached; nothing is decoded per repaint.
+- **Knobs**: ONE image per size, rotated −135°→+135° (the kit's recommended approach), replacing the
+  V2 drawn knob. The crops are not square, so the rotation axis is derived at runtime by
+  `kit::optical()` from the **binary alpha silhouette** (alpha > 128, which excludes the soft drop
+  shadow) and its area centroid — for a disc with an evenly distributed stud bezel that is the true
+  axis. Measured: knob-large 278x283 → optical centre (145.1, 168.0), span 270 (the pixel centre
+  (139.0, 141.5) is 26px out — rotating about it would visibly orbit); knob-small 217x220 →
+  (108.6, 115.4), span 208. Verified visually at 0 % / 50 % / 100 % against cross-hairs in the new
+  `round2-knob-rotation.png` snapshot. Value arc + numeric readout kept per the design law (arc at
+  r = 0.545·d behind the hardware, in the world/macro accent); the engraved JM motif is composited
+  into the face centre and **does not rotate**.
+- **FX faceplates**: `panel-{teal,orange,purple,blue,red,green}.png` replace the V2 SVG plates
+  (they already carry screws, bevel and depth). The rack cells are laid out at the kit's native
+  **0.764:1** ratio (164x215) so the art is never stretched non-uniformly — asserted in the
+  self-check. The FX personality→colour mapping is unchanged from V1/V2.
+- **Meters**: `meter-led-left/right.png` for slot, master and output metering, **masked by level**
+  (clip, not tint) over a recessed bed, with a 0.14 unlit ghost. The header's horizontal master
+  meter is the same column rotated +90° (source bottom → destination left, so green leads).
+- `panel-master-empty.png` (MASTER FX column), `button-master-empty.png` (browser brand-art panel),
+  `screw-00.png` (recessed-surface corners), `icon-power.png` (slot + FX power buttons),
+  `rack-corner.png` (two rack corners), `divider-gold.png` (dock title rule) and
+  `flourish-gold.png` — the flourish used **once**, as a single accent in the brand-art panel,
+  never as repeated wallpaper.
+- Kente is retained exactly where V2 put it — the world backdrops and the Perform slot strips — plus
+  micro-weave at 10–12 % on the browser/dock/rack chassis. Where kente and a kit asset both applied
+  (the FX plates) the kit's photoreal art wins, per the brief.
+- **Typography**: `Theme::faceDisplay()` resolves once against the installed typefaces, preferring
+  Bahnschrift Condensed SemiBold and falling back through Bahnschrift / Oswald SemiBold / Barlow
+  Condensed SemiBold / Arial Narrow. Tracking 0.04em; live text only.
+
+### Kit assets that could not be used as shipped
+- `knob-small-00.png` (215x185) ships **clipped**: the top of the bezel is cut off and a stray gold
+  arc from the neighbouring knob bleeds in — visible as an orbiting artefact once rotated. Fallback:
+  **recropped from the kit's own `controls-sheet.png`** (row 3, column 1; alpha bbox 73..277 x
+  691..898, crop 67,685,217x220), which the README explicitly ships the sheets for. The shipped
+  crop is not used.
+- `panel-master-empty.png` is **1230x395 (3.11:1)**, not the 1600x400 (4:1) the README states, and
+  the MASTER FX column in the approved reference is a tall 196x215 panel. Fallback: nine-sliced
+  (fixed corner caps carrying the screws and bevel, stretched edges) rather than scaled — the
+  corner screws and border weight survive at any aspect. Same treatment for the button plaques,
+  whose 3.07:1 native ratio never matches a nav cell or a BYPASS button.
+- Only the pointer-up state (`knob-large-00`, recropped `knob-small-00`) is embedded; the other 8+4
+  state PNGs are unused by design — the kit names rotation as "the lighter-weight app approach".
+- `font-style-preview.png` is a style reference only (live text is required), and the three sheet
+  PNGs are used as source material for the recrop, not at runtime.
+
+### CONFLICT FOR THE CLIENT TO RESOLVE — the DECAYING badge
+The V2 pack forbids the sound-type badge on model pages ("DECAYING badge removed from model pages
+entirely — sound type appears only as text in the Info sub-tab"), but the **approved reference image
+shows it** under the SPACE knob. It is **kept hidden for now** (V2 wins, since the client's stated
+corrections were arrangement, Perform-slot placement and the button language — not the badge), and
+the sound type remains live in the INFO sub-tab. **Flagged for the client to decide**: restoring it
+is a one-line change to `ModelPagePanel::paint`.
+
+### Verification after client review round 2 (2026-08-27)
+- Reconfigure + full Release build (VST3 + Standalone + tests + snapshot tool): **exit 0**.
+- `ctest -C Release`: **100 % passed** (EngineTests) — the engine was not touched.
+- pluginval 1.3.5 strictness 8 `--skip-gui-tests`: **SUCCESS (exit 0)**.
+- `JMSignatureSnapshot` (rewritten for the restored layout — the old 1000x720 coordinate assertions
+  were replaced, the harness kept): **SELF-CHECK PASSED, 0 failures, worst measured hero offset
+  (0,0) px**. It now verifies the 19 kit assets decode, both knob optical centres, every hero-knob
+  centre on all four model pages against `Theme::L`, the simultaneous presence of browser + centre +
+  dock + rack + MASTER FX + bottom bar + header on a model page, the four dock slot rows, the FX
+  units' 0.764:1 plate ratio, and on PERFORM that the dock steps aside while the four slots sit on
+  the centre stage's 2x2 grid (A/B top, C/D second) with the browser, rack and bottom bar unmoved.
+- Snapshots in `apps/signature/build/snapshots/`: `round2-full-rhodes.png`,
+  `round2-full-perform.png` (both full-window at reference size, for direct comparison with
+  `docs/jm-design-reference/ui-reference/01-approved-ui-look-and-feel-rhodes-page.png`),
+  `round2-page-mks-6knob.png` (the 3x2 outlier) and `round2-knob-rotation.png`.
+- Standalone deliberately not launched. The Release relink failed once with LNK1104 because the
+  user's running "JM Signature" standalone (PID 48076) locked the exe; that instance was terminated
+  to complete the link, as briefed.
+
 ## Verification after UX pack V2 (2026-08-27)
 - Release rebuild (VST3 + Standalone + tests + snapshot tool): exit 0.
 - **Acceptance self-check (JMSignatureSnapshot, offscreen 1000x720)**: ALL PASS, `worst measured offset: (0,0) px`.

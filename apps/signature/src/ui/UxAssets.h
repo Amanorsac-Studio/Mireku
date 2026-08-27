@@ -278,11 +278,16 @@ inline void drawPerformSlot (juce::Graphics& g, juce::Rectangle<float> area, int
     if (img.isValid())
     {
         drawCover (g, img, area, 1.0f);
+        // CLIENT REVIEW ROUND 2: the approved reference's slot strips are DARK
+        // tinted cloth, not full-strength pattern — the label/knob layer must
+        // win. Base scrim + the pack's L->R shade + the accent wash.
+        g.setColour (juce::Colour (0xff050505).withAlpha (0.70f));
+        g.fillRect (area);
         juce::ColourGradient shade (juce::Colour (0xff050505).withAlpha (0.25f), area.getX(), area.getY(),
                                     juce::Colours::black.withAlpha (0.62f), area.getRight(), area.getY(), false);
         g.setGradientFill (shade);
         g.fillRect (area);
-        g.setColour (Theme::worldAccent (world).withAlpha (0.08f));
+        g.setColour (Theme::worldAccent (world).withAlpha (0.10f));
         g.fillRect (area);
     }
     else

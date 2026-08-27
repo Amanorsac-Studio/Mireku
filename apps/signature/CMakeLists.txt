@@ -63,7 +63,27 @@ juce_add_binary_data(JMAssets HEADER_NAME JMAssets.h NAMESPACE JMAssets SOURCES
     resources/svg/gear.svg
     resources/svg/heart.svg
     resources/svg/kebab.svg
-    resources/svg/star.svg)
+    resources/svg/star.svg
+    # photoreal hardware kit (docs/hardware-kit) — client review round 2
+    resources/kit/knob-large-00.png
+    resources/kit/knob-small-00.png
+    resources/kit/panel-teal.png
+    resources/kit/panel-orange.png
+    resources/kit/panel-purple.png
+    resources/kit/panel-blue.png
+    resources/kit/panel-red.png
+    resources/kit/panel-green.png
+    resources/kit/panel-master-empty.png
+    resources/kit/button-empty-up.png
+    resources/kit/button-empty-down.png
+    resources/kit/button-master-empty.png
+    resources/kit/meter-led-left.png
+    resources/kit/meter-led-right.png
+    resources/kit/screw-00.png
+    resources/kit/icon-power.png
+    resources/kit/rack-corner.png
+    resources/kit/divider-gold.png
+    resources/kit/flourish-gold.png)
 target_link_libraries(JMSignature PRIVATE JMAssets)
 
 target_include_directories(JMSignature PRIVATE src "${JMI_FORMAT_INCLUDE}")

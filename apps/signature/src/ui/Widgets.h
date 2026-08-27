@@ -5,6 +5,8 @@
 #include "../Theme.h"
 #include "Assets.h"
 #include "UxAssets.h"
+#include "Kit.h"
+#include "Hardware.h"
 #include "../plugin/PluginProcessor.h"
 
 namespace jm {
@@ -36,85 +38,68 @@ public:
         setColour (juce::AlertWindow::backgroundColourId, Theme::deepPanel);
     }
 
-    // UX pack V2 knob, transcribed 1:1 from assets/screens/*-layout.svg knob
-    // groups (for a 112 token knob: accent glow ring r63 @.35, gold rim r58
-    // stroke 6 (#FFF0A1 -> #FFBE2E .35 -> #784500), face r48 radial
-    // (#211D16 -> #0B0A08 .65 -> #020202) stroke #3A2B15, rotating #FFD77A
-    // indicator r30..r44, fixed engraved motif). Shell fixed; indicator only
-    // rotates. Slider properties: "jmMotif" 0..4, "jmAccent" argb (glow ring).
+    // CLIENT REVIEW ROUND 2 — knobs are now the photoreal hardware kit art
+    // (docs/hardware-kit): ONE image per size, rotated -135deg..+135deg about
+    // the crop's OPTICAL centre (kit::optical, derived from the alpha
+    // silhouette — the crops are not square, so the pixel centre is wrong).
+    // The value arc + numeric readout are kept per the design law, and the
+    // engraved JM motif is composited into the face centre WITHOUT rotating.
+    // Slider properties: "jmMotif" 0..4, "jmAccent" argb (value-arc colour).
     void drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h,
                            float pos, float startAngle, float endAngle, juce::Slider& slider) override
     {
         auto bounds = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h);
-        const float size = juce::jmin (bounds.getWidth(), bounds.getHeight());
+        const float box = juce::jmin (bounds.getWidth(), bounds.getHeight());
         const auto c = bounds.getCentre();
         const float angle = startAngle + pos * (endAngle - startAngle);
         const bool hover = slider.isMouseOverOrDragging() && slider.isEnabled();
+        const bool down  = slider.isMouseButtonDown();
+        const float alpha = slider.isEnabled() ? 1.0f : ux::HwState::disabledAlpha;
+        const bool large = box >= 66.0f;
 
-        if (size >= 100.0f)   // ---- V2 primary (model heroes + macros)
+        // the arc halo lives in the outer 14% of the component box
+        const float d = box * 0.86f;
+        const juce::Colour accent { (juce::uint32) (juce::int64) slider.getProperties()
+                                        .getWithDefault ("jmAccent", (juce::int64) Theme::gold.getARGB()) };
+
+        // ---- value arc (behind the hardware)
+        const float ar = d * 0.545f;
+        const float aw = juce::jmax (2.0f, d * 0.038f);
+        juce::Path track, arc;
+        track.addCentredArc (c.x, c.y, ar, ar, 0, startAngle, endAngle, true);
+        g.setColour (Theme::knobTrack.withAlpha (0.75f * alpha));
+        g.strokePath (track, juce::PathStrokeType (aw, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        if (pos > 0.001f)
         {
-            const float u = size / 130.0f;      // 130px box == the 112-token knob
-            const juce::Colour accent { (juce::uint32) (juce::int64) slider.getProperties()
-                                            .getWithDefault ("jmAccent", (juce::int64) Theme::gold.getARGB()) };
-            // soft hardware drop shadow
-            g.setColour (juce::Colours::black.withAlpha (0.45f));
-            g.fillEllipse (juce::Rectangle<float> (118 * u, 118 * u).withCentre ({ c.x, c.y + 7 * u }));
-            // accent glow ring
-            g.setColour (accent.withAlpha (hover ? 0.5f : 0.35f));
-            g.drawEllipse (juce::Rectangle<float> (126 * u, 126 * u).withCentre (c), 4.0f * u);
-            // gold rim
-            auto rim = juce::Rectangle<float> (116 * u, 116 * u).withCentre (c);
-            g.setColour (juce::Colour (0xff070604));
-            g.fillEllipse (rim);
-            juce::ColourGradient goldRing (juce::Colour (0xffFFF0A1), c.x, rim.getY(),
-                                           juce::Colour (0xff784500), c.x, rim.getBottom(), false);
-            goldRing.addColour (0.35, juce::Colour (0xffFFBE2E));
-            g.setGradientFill (goldRing);
-            g.drawEllipse (rim.reduced (3.0f * u), 6.0f * u);
-            // face
-            juce::ColourGradient face (juce::Colour (0xff211D16), c.x, c.y, juce::Colour (0xff020202),
-                                       c.x + 48 * u, c.y + 48 * u, true);
-            face.addColour (0.65, juce::Colour (0xff0B0A08));
-            g.setGradientFill (face);
-            g.fillEllipse (juce::Rectangle<float> (96 * u, 96 * u).withCentre (c));
-            g.setColour (juce::Colour (0xff3A2B15));
-            g.drawEllipse (juce::Rectangle<float> (96 * u, 96 * u).withCentre (c), 2.0f * u);
-            // engraved motif (fixed)
-            if (auto* motif = motifFor (slider))
-                motif->drawWithin (g, juce::Rectangle<float> (58 * u, 58 * u).withCentre (c),
-                                   juce::RectanglePlacement::centred, 0.86f);
-            // rotating indicator only
+            arc.addCentredArc (c.x, c.y, ar, ar, 0, startAngle, angle, true);
+            if (slider.isEnabled())
             {
-                juce::Graphics::ScopedSaveState ss (g);
-                g.addTransform (juce::AffineTransform::rotation (angle, c.x, c.y));
-                g.setColour (Theme::goldHi);
-                juce::Path ind;
-                ind.startNewSubPath (c.x, c.y - 44 * u);
-                ind.lineTo (c.x, c.y - 30 * u);
-                g.strokePath (ind, juce::PathStrokeType (4.0f * u, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+                g.setColour (accent.withAlpha (0.28f));
+                g.strokePath (arc, juce::PathStrokeType (aw * 2.6f, juce::PathStrokeType::curved,
+                                                         juce::PathStrokeType::rounded));
             }
-            if (hover)
-            {
-                g.setColour (Theme::gold.withAlpha (0.18f));
-                g.fillEllipse (juce::Rectangle<float> (96 * u, 96 * u).withCentre (c));
-            }
+            g.setColour (accent.withAlpha (alpha));
+            g.strokePath (arc, juce::PathStrokeType (aw, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         }
-        else                 // ---- V2 secondary (slot vol/pan, FX, header master)
+
+        // ---- kit hardware (rotates about the optical centre; pressed = 1px)
+        kit::drawKnob (g, { c.x, c.y + (down ? ux::HwState::pressedOffset : 0.0f) }, d, angle, large, alpha);
+
+        // ---- engraved JM motif, fixed in the face centre (never rotates)
+        if (large)
+            if (auto* motif = motifFor (slider))
+                motif->drawWithin (g, juce::Rectangle<float> (d * 0.34f, d * 0.34f).withCentre (c),
+                                   juce::RectanglePlacement::centred, 0.55f * alpha);
+
+        if (hover)
         {
-            const float u = size / 44.0f;
-            g.setColour (juce::Colour (0xff080706));
-            g.fillEllipse (juce::Rectangle<float> (40 * u, 40 * u).withCentre (c));
-            g.setColour (hover ? Theme::goldHi : Theme::gold);
-            g.drawEllipse (juce::Rectangle<float> (40 * u, 40 * u).withCentre (c), 2.0f * u);
-            {
-                juce::Graphics::ScopedSaveState ss (g);
-                g.addTransform (juce::AffineTransform::rotation (angle, c.x, c.y));
-                g.setColour (Theme::goldHi);
-                juce::Path ind;
-                ind.startNewSubPath (c.x, c.y - 16 * u);
-                ind.lineTo (c.x, c.y - 8 * u);
-                g.strokePath (ind, juce::PathStrokeType (2.5f * u, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-            }
+            g.setColour (Theme::gold.withAlpha (ux::HwState::hoverGold * 0.75f));
+            g.fillEllipse (juce::Rectangle<float> (d * 0.62f, d * 0.62f).withCentre (c));
+        }
+        if (slider.hasKeyboardFocus (false))
+        {
+            g.setColour (ux::HwState::focus);
+            g.drawEllipse (juce::Rectangle<float> (d * 1.06f, d * 1.06f).withCentre (c), 2.0f);
         }
     }
 
@@ -148,22 +133,29 @@ public:
         return motifs_[(size_t) idx].get();
     }
 
+    // Every plain TextButton in the plugin adopts the mature plate language
+    // (kit button-empty-up / -down plaque, gold "engaged" fill) so nav tabs,
+    // BYPASS, LIMITER, bottom bar, LEARN chips and the rest read as one family.
     void drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour&,
                                bool over, bool down) override
     {
-        auto r = b.getLocalBounds().toFloat().reduced (0.5f);
-        auto bg = b.getToggleState() ? Theme::goldDark : Theme::black;
-        if (down) bg = bg.brighter (0.2f);
-        else if (over) bg = bg.brighter (0.08f);
-        g.setColour (bg);
-        g.fillRoundedRectangle (r, 4.0f);
-        g.setColour (b.getToggleState() ? Theme::gold : Theme::goldDark.withAlpha (0.6f));
-        g.drawRoundedRectangle (r, 4.0f, 1.0f);
+        ux::drawPlateButton (g, b.getLocalBounds().toFloat(), {}, b.getToggleState(),
+                             over, down, b.isEnabled());
+    }
+
+    void drawButtonText (juce::Graphics& g, juce::TextButton& b, bool, bool down) override
+    {
+        auto r = b.getLocalBounds().toFloat();
+        if (down && b.isEnabled()) r = r.translated (0.0f, ux::HwState::pressedOffset);
+        g.setFont (getTextButtonFont (b, b.getHeight()));
+        g.setColour ((b.getToggleState() ? juce::Colour (0xff1A1206) : juce::Colour (0xffD8D1C2))
+                         .withAlpha (b.isEnabled() ? 1.0f : ux::HwState::disabledAlpha));
+        g.drawText (b.getButtonText().toUpperCase(), r, juce::Justification::centred, false);
     }
 
     juce::Font getTextButtonFont (juce::TextButton&, int h) override
     {
-        return Theme::ui (juce::jmin (13.0f, (float) h * 0.55f));
+        return Theme::display (juce::jlimit (9.0f, 14.0f, (float) h * 0.42f));
     }
     juce::Font getComboBoxFont (juce::ComboBox&) override { return Theme::ui (13.0f); }
     juce::Font getPopupMenuFont() override { return Theme::ui (14.0f); }
@@ -243,6 +235,17 @@ public:
 
     void setShowValue (bool b) { value_.setVisible (b); }
     const juce::String& path() const { return path_; }
+    juce::String caption() const { return name_.getText(); }
+
+    /// Compact hardware layout: caption sits UNDER the knob (FX rack + master
+    /// column, per the approved reference), sized for small cells.
+    void setLabelBelow (bool b, float fontHeight = 10.0f)
+    {
+        labelBelow_ = b;
+        name_.setFont (Theme::display (fontHeight));
+        name_.setColour (juce::Label::textColourId, juce::Colour (0xffEFE4CC));
+        resized();
+    }
 
     /// Engraved motif index (0..4, ux::Motif — JM engraved motif family).
     void setMotif (int idx) { slider_.getProperties().set ("jmMotif", idx); }
@@ -254,14 +257,15 @@ public:
 
     /// V2 exact placement: token knob diameter + label/value Y offsets from the
     /// knob centre (design-tokens model.knob). Component centre == knob centre.
-    void setV2 (int tokenDiameter, int labelOffY, int valueOffY)
+    void setV2 (int tokenDiameter, int labelOffY, int valueOffY, float labelFont = 14.0f,
+                float valueFont = 14.0f)
     {
         v2Diameter_ = tokenDiameter;
         v2LabelOff_ = labelOffY;
         v2ValueOff_ = valueOffY;
-        name_.setFont (Theme::display (14.0f));
+        name_.setFont (Theme::display (labelFont));
         name_.setColour (juce::Label::textColourId, Theme::cream);
-        value_.setFont (Theme::value (13.0f));
+        value_.setFont (Theme::value (valueFont));
         value_.setColour (juce::Label::textColourId, Theme::goldHi);
         resized();
     }
@@ -278,16 +282,26 @@ public:
         if (v2Diameter_ > 0)
         {
             const auto c = getLocalBounds().getCentre();
-            const int box = juce::roundToInt ((float) v2Diameter_ * 130.0f / 112.0f);
+            // component box carries the value-arc halo (art occupies 86% of it)
+            const int box = juce::roundToInt ((float) v2Diameter_ / 0.86f);
             slider_.setBounds (juce::Rectangle<int> (box, box).withCentre (c));
             name_.setBounds (juce::Rectangle<int> (getWidth(), 18).withCentre ({ c.x, c.y + v2LabelOff_ }));
-            value_.setBounds (juce::Rectangle<int> (getWidth(), 16).withCentre ({ c.x, c.y + v2ValueOff_ }));
+            value_.setBounds (juce::Rectangle<int> (getWidth(), 18).withCentre ({ c.x, c.y + v2ValueOff_ }));
             return;
         }
         auto r = getLocalBounds();
-        name_.setBounds (r.removeFromTop (15));
-        if (value_.isVisible()) value_.setBounds (r.removeFromBottom (15));
-        slider_.setBounds (r);
+        if (labelBelow_)
+        {
+            name_.setBounds (r.removeFromBottom (13));
+            if (value_.isVisible()) value_.setBounds (r.removeFromBottom (12));
+        }
+        else
+        {
+            name_.setBounds (r.removeFromTop (15));
+            if (value_.isVisible()) value_.setBounds (r.removeFromBottom (15));
+        }
+        const int d = juce::jmin (r.getWidth(), r.getHeight());
+        slider_.setBounds (juce::Rectangle<int> (d, d).withCentre (r.getCentre()));
     }
 
     void paintOverChildren (juce::Graphics& g) override
@@ -366,6 +380,7 @@ private:
     PathSlider slider_;
     juce::Label name_, value_;
     int v2Diameter_ = 0, v2LabelOff_ = -74, v2ValueOff_ = 68;
+    bool labelBelow_ = false;
 };
 
 //==============================================================================
@@ -431,29 +446,24 @@ public:
             repaint();
         }
     }
+    juce::Colour ringColour = Theme::gold;      // world/FX accent ring when ON
     void paint (juce::Graphics& g) override
     {
         auto b = getLocalBounds().toFloat();
         const float size = juce::jmin (b.getWidth(), b.getHeight());
-        const float u = size / 48.0f;
         auto c = b.getCentre();
-        if (state_)
+        auto disc = juce::Rectangle<float> (size, size).withCentre (c);
+        if (state_)                                        // feedback glow
         {
-            g.setColour (Theme::gold.withAlpha (0.18f));       // feedback glow
-            g.fillEllipse (juce::Rectangle<float> (46 * u, 46 * u).withCentre (c));
+            g.setColour (ringColour.withAlpha (0.22f));
+            g.fillEllipse (disc.expanded (size * 0.10f));
         }
-        g.setColour (juce::Colour (0xff090909));
-        g.fillEllipse (juce::Rectangle<float> (40 * u, 40 * u).withCentre (c));
-        g.setColour (state_ ? Theme::gold : Theme::line);
-        g.drawEllipse (juce::Rectangle<float> (40 * u, 40 * u).withCentre (c), 2.0f * u);
-        juce::Path glyph;
-        glyph.startNewSubPath (c.x, c.y - 15 * u);
-        glyph.lineTo (c.x, c.y);
-        glyph.addCentredArc (c.x, c.y, 12 * u, 12 * u, 0,
-                             juce::MathConstants<float>::pi * 0.25f,
-                             juce::MathConstants<float>::pi * 1.75f, true);
-        g.setColour (state_ ? Theme::goldHi : Theme::muted.withAlpha (0.6f));
-        g.strokePath (glyph, juce::PathStrokeType (2.5f * u, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.setColour (juce::Colour (0xff080807));
+        g.fillEllipse (disc.reduced (size * 0.06f));
+        g.setColour (state_ ? ringColour : Theme::line);
+        g.drawEllipse (disc.reduced (size * 0.06f), juce::jmax (1.2f, size * 0.055f));
+        // kit icon-power.png (42px reference)
+        kit::drawPowerIcon (g, disc.reduced (size * 0.26f), state_ ? 1.0f : 0.35f);
     }
 private:
     bool state_ = false;
@@ -534,42 +544,39 @@ private:
 // #392A17 border, 6px rounded segments (3px pitch gap) — green x8, yellow x3,
 // orange x2 zone proportions from the reference asset. Dual columns for stereo
 // (single-column asset duplicated; logged in DECISIONS).
+// CLIENT REVIEW ROUND 2: the segmented green->amber->red LED columns now come
+// straight from the kit (meter-led-left / -right). Level MASKS the art (clip)
+// rather than tinting it, so the rendered LED colours and bezel survive.
 class LevelMeter : public juce::Component
 {
 public:
-    void setLevel (float l, float r) { l_ = l; r_ = r; repaint(); }
+    void setLevel (float l, float r)
+    {
+        if (std::abs (l - l_) < 1.0e-3f && std::abs (r - r_) < 1.0e-3f) return;
+        l_ = l; r_ = r; repaint();
+    }
+    void setHorizontal (bool h) { horiz_ = h; }
+    static float norm (float lvl)
+    {
+        const float db = juce::Decibels::gainToDecibels (lvl + 1.0e-6f);
+        return juce::jlimit (0.0f, 1.0f, (db + 60.0f) / 66.0f);
+    }
     void paint (juce::Graphics& g) override
     {
         auto r = getLocalBounds().toFloat();
-        g.setColour (Theme::meterTrack);
-        g.fillRoundedRectangle (r, 3.0f);
-        g.setColour (Theme::meterBorder);
-        g.drawRoundedRectangle (r.reduced (0.5f), 3.0f, 1.0f);
-
-        auto draw = [&] (juce::Rectangle<float> col, float lvl)
+        if (horiz_)
         {
-            const float db = juce::Decibels::gainToDecibels (lvl + 1.0e-6f);
-            const float t = juce::jlimit (0.0f, 1.0f, (db + 60.0f) / 66.0f);
-            const int nSegs = juce::jmax (5, (int) (col.getHeight() / 9.0f));
-            const float pitch = col.getHeight() / (float) nSegs;
-            const int lit = (int) std::ceil (t * (float) nSegs);
-            for (int i = 0; i < lit; ++i)             // i = 0 at bottom
-            {
-                const float frac = (float) i / (float) nSegs;
-                g.setColour ((frac >= 0.85f ? Theme::meterPeak
-                              : frac >= 0.62f ? Theme::meterWarn : Theme::meterSafe).withAlpha (0.95f));
-                g.fillRoundedRectangle (col.getX(), col.getBottom() - (float) (i + 1) * pitch + 1.5f,
-                                        col.getWidth(), juce::jmax (2.0f, pitch - 3.0f), 1.0f);
-            }
-        };
-        auto left = r.reduced (2.5f);
-        auto right = left.removeFromRight (left.getWidth() * 0.46f);
-        left.removeFromRight (left.getWidth() * 0.08f);
-        draw (left, l_);
-        draw (right, r_);
+            kit::drawLedMeterH (g, r, norm (juce::jmax (l_, r_)));
+            return;
+        }
+        auto left = r;
+        auto right = left.removeFromRight (left.getWidth() * 0.48f);
+        kit::drawLedMeterV (g, left,  norm (l_), false);
+        kit::drawLedMeterV (g, right, norm (r_), true);
     }
 private:
     float l_ = 0, r_ = 0;
+    bool horiz_ = false;
 };
 
 

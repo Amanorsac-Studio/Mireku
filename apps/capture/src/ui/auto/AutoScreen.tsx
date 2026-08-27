@@ -58,7 +58,7 @@ export function AutoScreen() {
           )}
         </div>
       </Panel>
-      <Panel>
+      <Panel variant="recessed">
         <ProgressMap
           session={session}
           current={auto.position ? { note: auto.position.note, layer: auto.position.layer } : null}

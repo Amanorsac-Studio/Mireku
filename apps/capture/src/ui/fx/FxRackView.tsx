@@ -5,6 +5,8 @@ import { MAX_SLOTS } from '../../engine/fx/rack';
 import { useApp } from '../../state/appStore';
 import { services } from '../../state/services';
 import { Button, Label, Panel } from '../common';
+import { fxTint } from '../theme/tokens';
+import { clothBackground } from '../theme/weave';
 import { Knob } from './Knob';
 
 /**
@@ -69,7 +71,8 @@ export function FxRackView() {
           {units.map((unit, i) => (
             <div
               key={`${unit.type}-${i}`}
-              className={`jm-fx-unit${unit.isBypassed() ? ' bypassed' : ''}`}
+              className={`jm-fx-unit jm-cloth${unit.isBypassed() ? ' bypassed' : ''}`}
+              style={clothBackground(fxTint[unit.type])}
               draggable
               onDragStart={() => (dragFrom.current = i)}
               onDragOver={(e) => e.preventDefault()}

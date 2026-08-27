@@ -74,7 +74,7 @@ export function GuidedScreen() {
         </div>
       </div>
 
-      <Panel>
+      <Panel variant="recessed">
         <ArcMeter layer={layer} />
         <div className="jm-col" style={{ alignItems: 'center', gap: 'calc(var(--jm-size-gap-unit) * 1.5)' }}>
           <div className={`jm-verdict ${verdict?.kind ?? ''}`}>
@@ -121,7 +121,7 @@ export function GuidedScreen() {
         </div>
       </Panel>
 
-      <Panel>
+      <Panel variant="recessed">
         <ProgressMap
           session={session}
           current={position ? { note: position.note, layer: position.layer } : null}

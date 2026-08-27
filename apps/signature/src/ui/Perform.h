@@ -86,8 +86,13 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto r = getLocalBounds().toFloat().reduced (1.0f);
-        g.setColour (Theme::worldAccent (proc_.state.slots[(size_t) slot_].world).withAlpha (0.45f));
+        // flat-graphic kente strip in the hosted world's cloth
+        g.setColour (Theme::black);
         g.fillRoundedRectangle (r, 5.0f);
+        KenteTexture::fill (g, r.reduced (0.5f), KenteTexture::Style::Flat,
+                            Theme::worldAccent (proc_.state.slots[(size_t) slot_].world), 1.0f, 5.0f);
+        g.setColour (juce::Colours::black.withAlpha (0.22f));      // readability scrim
+        g.fillRoundedRectangle (r.reduced (0.5f), 5.0f);
         g.setColour (Theme::goldDark.withAlpha (0.6f));
         g.drawRoundedRectangle (r, 5.0f, 1.0f);
     }
@@ -305,10 +310,14 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        auto r = getLocalBounds().toFloat();
         g.setColour (Theme::deepPanel);
-        g.fillRoundedRectangle (getLocalBounds().toFloat(), (float) Theme::M::corner);
+        g.fillRoundedRectangle (r, (float) Theme::M::corner);
+        // faint chassis weave; the cloth statements are the slot strips themselves
+        KenteTexture::fill (g, r.reduced (1.0f), KenteTexture::Style::Weave, Theme::chassisCloth,
+                            0.5f, (float) Theme::M::corner);
         g.setColour (Theme::goldDark.withAlpha (0.4f));
-        g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), (float) Theme::M::corner, 1.0f);
+        g.drawRoundedRectangle (r.reduced (0.5f), (float) Theme::M::corner, 1.0f);
     }
 
 private:
@@ -377,10 +386,16 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto r = getLocalBounds().toFloat();
-        g.setColour (Theme::deepPanel);
+        // master section: royal gold/burgundy weave framing a recessed panel
+        g.setColour (Theme::black);
         g.fillRoundedRectangle (r, (float) Theme::M::corner);
-        g.setColour (Theme::masterAccent.withAlpha (0.30f));
-        g.fillRoundedRectangle (r.reduced (3.0f), (float) Theme::M::corner);
+        KenteTexture::fill (g, r.reduced (1.5f), KenteTexture::Style::Weave, Theme::masterCloth,
+                            1.0f, (float) Theme::M::corner);
+        auto inner = getLocalBounds().reduced (Theme::M::pad * 2 + 6).toFloat();
+        g.setColour (Theme::deepPanel.withAlpha (0.88f));
+        g.fillRoundedRectangle (inner, (float) Theme::M::corner);
+        g.setColour (juce::Colours::black.withAlpha (0.55f));
+        g.drawRoundedRectangle (inner, (float) Theme::M::corner, 1.5f);
         g.setColour (Theme::gold.withAlpha (0.5f));
         g.drawRoundedRectangle (r.reduced (1.0f), (float) Theme::M::corner, 1.2f);
     }

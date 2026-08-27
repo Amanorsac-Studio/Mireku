@@ -3,6 +3,7 @@
 // reference (docs/jm-design-reference/ui-reference). All styling via Theme.h.
 #pragma once
 #include "Widgets.h"
+#include "KenteTexture.h"
 #include <juce_audio_utils/juce_audio_utils.h>
 
 namespace jm {
@@ -114,10 +115,14 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        auto r = getLocalBounds().toFloat();
         g.setColour (Theme::deepPanel);
-        g.fillRoundedRectangle (getLocalBounds().toFloat(), (float) Theme::M::corner);
+        g.fillRoundedRectangle (r, (float) Theme::M::corner);
+        // browser stays near-black: only the faintest chassis weave
+        KenteTexture::fill (g, r.reduced (1.0f), KenteTexture::Style::Weave, Theme::chassisCloth,
+                            0.5f, (float) Theme::M::corner);
         g.setColour (Theme::goldDark.withAlpha (0.4f));
-        g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), (float) Theme::M::corner, 1.0f);
+        g.drawRoundedRectangle (r.reduced (0.5f), (float) Theme::M::corner, 1.0f);
     }
 
 private:
@@ -460,11 +465,18 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto r = getLocalBounds().toFloat();
-        g.setColour (Theme::deepPanel);
+        // full-panel kente tapestry frame (rust/forest/indigo/violet per world)
+        g.setColour (Theme::black);
         g.fillRoundedRectangle (r, (float) Theme::M::corner);
-        // flat module accent wash (kente cloth placeholder)
-        g.setColour (Theme::worldAccent (world_).withAlpha (0.28f));
-        g.fillRoundedRectangle (r.reduced (3.0f), (float) Theme::M::corner);
+        KenteTexture::fill (g, r.reduced (1.5f), KenteTexture::Style::Weave,
+                            Theme::worldAccent (world_), 1.0f, (float) Theme::M::corner);
+        // recessed control panel — darker/plainer so knobs + readouts dominate
+        auto inner = getLocalBounds().reduced (Theme::M::pad * 2 + 6).toFloat();
+        inner.removeFromBottom (26.0f);                       // sub-tab strip sits on the cloth
+        g.setColour (Theme::deepPanel.withAlpha (0.90f));
+        g.fillRoundedRectangle (inner, (float) Theme::M::corner);
+        g.setColour (juce::Colours::black.withAlpha (0.55f));
+        g.drawRoundedRectangle (inner, (float) Theme::M::corner, 1.5f);
         g.setColour (Theme::gold.withAlpha (0.5f));
         g.drawRoundedRectangle (r.reduced (1.0f), (float) Theme::M::corner, 1.2f);
 
@@ -607,8 +619,11 @@ public:
         auto r = getLocalBounds().toFloat();
         g.setColour (Theme::black);
         g.fillRoundedRectangle (r, 5.0f);
-        g.setColour (accent (type_).withAlpha (0.55f));
-        g.fillRoundedRectangle (r.reduced (1.5f), 5.0f);
+        // per-unit kente cloth faceplate (teal chorus, ember tape delay, ...)
+        KenteTexture::fill (g, r.reduced (1.5f), KenteTexture::Style::Weave, accent (type_), 1.0f, 5.0f);
+        // gentle scrim behind the controls so gold/cream stays dominant
+        g.setColour (juce::Colours::black.withAlpha (0.30f));
+        g.fillRoundedRectangle (r.reduced (4.0f).withTrimmedTop (18.0f), 4.0f);
         g.setColour (Theme::goldDark.withAlpha (0.8f));
         g.drawRoundedRectangle (r.reduced (0.5f), 5.0f, 1.0f);
         if (type_ == FxType::widener && rackDsp_ != nullptr)   // correlation meter
@@ -739,10 +754,17 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        auto r = getLocalBounds().toFloat();
         g.setColour (Theme::deepPanel);
-        g.fillRoundedRectangle (getLocalBounds().toFloat(), (float) Theme::M::corner);
+        g.fillRoundedRectangle (r, (float) Theme::M::corner);
+        if (prefix_ == "master")     // master rack wears the royal gold/burgundy weave
+            KenteTexture::fill (g, r.reduced (1.0f), KenteTexture::Style::Weave, Theme::masterCloth,
+                                0.85f, (float) Theme::M::corner);
+        else                         // otherwise a barely-there chassis weave
+            KenteTexture::fill (g, r.reduced (1.0f), KenteTexture::Style::Weave, Theme::chassisCloth,
+                                0.6f, (float) Theme::M::corner);
         g.setColour (Theme::goldDark.withAlpha (0.4f));
-        g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), (float) Theme::M::corner, 1.0f);
+        g.drawRoundedRectangle (r.reduced (0.5f), (float) Theme::M::corner, 1.0f);
     }
 
 private:

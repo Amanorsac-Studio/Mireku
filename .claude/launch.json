@@ -2,7 +2,7 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "capture-renderer",
+      "name": "capture-dev",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "-w", "jm-capture"],
       "port": 5173

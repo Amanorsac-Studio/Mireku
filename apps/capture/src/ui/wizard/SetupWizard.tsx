@@ -7,6 +7,8 @@ import { createSession, planFromRange, serializeSession, type SessionConfig } fr
 import { useApp } from '../../state/appStore';
 import { bridge } from '../../state/services';
 import { Button, Field, Label, Panel } from '../common';
+import { worldTint } from '../theme/tokens';
+import { clothBackground } from '../theme/weave';
 
 const WORLDS: { id: World; label: string }[] = [
   { id: 'rhodes-ep', label: 'Rhodes / EP' },
@@ -96,9 +98,14 @@ export function SetupWizard() {
           <Field label="World">
             <div className="jm-row">
               {WORLDS.map((w) => (
-                <Button key={w.id} primary={world === w.id} onClick={() => setWorld(w.id)}>
+                <div
+                  key={w.id}
+                  className={`jm-world-card jm-cloth${world === w.id ? ' selected' : ''}`}
+                  style={clothBackground(worldTint[w.id])}
+                  onClick={() => setWorld(w.id)}
+                >
                   {w.label}
-                </Button>
+                </div>
               ))}
             </div>
           </Field>

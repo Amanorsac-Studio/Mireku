@@ -54,6 +54,64 @@ export const tracking = {
   label: '0.18em',
 } as const;
 
+/**
+ * Kente weave system (design law: "Kente is material… ≤ ~35% perceived
+ * contrast against #0C0A07"). All procedural-texture parameters live here;
+ * src/ui/theme/weave.ts renders them deterministically.
+ */
+export const weave = {
+  /** tile size in px (rendered once, repeated) */
+  tile: 96,
+  /** warp/weft strip width in px */
+  strip: 6,
+  /** thread gap line width */
+  gap: 1,
+  /** base cloth luminance values (near-black, warm) */
+  baseA: '#12100C',
+  baseB: '#0E0C09',
+  gapColor: '#080807',
+  /** chassis variant is fainter than module surfaces */
+  chassisAlpha: 0.5,
+  panelAlpha: 0.8,
+  /** tint overlay alpha on module cloth (keeps ≤ ~35% contrast) */
+  tintAlpha: 0.14,
+  /** per-thread luminance jitter (fiber irregularity), 0..1 */
+  jitter: 0.16,
+  /** deterministic seed */
+  seed: 20260826,
+} as const;
+
+/** Per-world cloth tints (design reference: rust rhodes, forest mks,
+ * indigo fm, violet strings). */
+export const worldTint = {
+  'rhodes-ep': '#8A4B2A',
+  mks: '#2E5B3A',
+  fm: '#33406F',
+  strings: '#5B3A6F',
+} as const;
+
+/**
+ * Per-FX-unit cloth tints. Reference README maps: teal chorus, ember tape
+ * delay, violet phaser, indigo shimmer, crimson compressor, forest hall.
+ * The remaining units get harmonious neighbors (logged in
+ * DECISIONS-capture.md): brass tremolo, slate flanger, amber EP preamp,
+ * bronze EQ, steel-blue digital delay, forest plate, aubergine widener.
+ */
+export const fxTint = {
+  jmChorus: '#2A6560',
+  tremoloAutoPan: '#6F5A2A',
+  phaser: '#5B3A6F',
+  flanger: '#33556F',
+  epPreamp: '#75452E',
+  vintageEq: '#4A5C36',
+  compressor: '#6E2A32',
+  tapeDelay: '#7A3A22',
+  digitalDelay: '#333E75',
+  plateReverb: '#3A4E5C',
+  hallShimmer: '#33406F',
+  widener: '#4A2E55',
+} as const;
+
 function toVars(): Record<string, string> {
   const vars: Record<string, string> = {};
   for (const [k, v] of Object.entries(color)) vars[`--jm-color-${kebab(k)}`] = v;

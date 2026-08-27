@@ -50,6 +50,32 @@ Owner: JM Signature build agent.
 - Editor is resizable with fixed aspect (1380×900 reference, scaled metrics).
 - Reference-image elements that are placeholder-only in v1: Mod Matrix / LFO / Arp bottom buttons (out of spec scope), cart/settings icons, license text (static). Keyboard button shows a working on-screen keyboard.
 
+## Kente visual pass (client-requested, ahead of the UX doc)
+- `src/ui/KenteTexture.h`: procedural, deterministic (seeded by style+tint), tileable cloth renderer with a per-(style,tint) image cache. Two styles: **Weave** (Ewe/Ashanti patchwork — blocks of warp stripes, weft bands, checker, zigzag, sawtooth triangles, fine hatch, plus warp micro-threads and light weft seams; block rhythm from kente/02+03) and **Flat** (bold kente/01-style geometry for the Perform slot strips). All parameters/tints in `Theme.h` (`Theme::Kente`).
+- Contrast law enforced in code: every cloth colour is clamped to brightness ≤ 0.21 (weave) / 0.24 (flat) and desaturated before drawing, keeping the pattern ≤ ~35% perceived contrast against #0C0A07; readability scrims sit behind control areas.
+- Application: model pages = full-panel tapestry frame + recessed dark control panel; FX units = per-type cloth faceplates; Perform slots = flat-graphic strips in the hosted world's tint; master rack + Perform center = royal gold/burgundy weave (`masterCloth #5C2A20`); preset browser, dock body and non-master rack strip = faintest near-black weave (`chassisCloth #17130E`); chassis stays flat black.
+- **Tint table** (Theme.h tokens):
+  | Module | Token | Hex |
+  |---|---|---|
+  | Rhodes/EP page + slots | rhodesAccent | #7A3B22 (rust/amber) |
+  | MKS page + slots | mksAccent | #2E4A2B (forest/gold) |
+  | FM page + slots | fmAccent | #23305C (indigo) |
+  | Strings page + slots | stringsAccent | #4A2B5C (violet) |
+  | Master section/rack | masterCloth | #5C2A20 (royal gold/burgundy) |
+  | JM Chorus | fxChorus | #1E4A44 (teal) |
+  | Tremolo/Auto-Pan | fxTremolo | #4A3A1E (dark amber) — my pick |
+  | Phaser | fxPhaser | #45265C (violet) |
+  | Flanger | fxFlanger | #26455C (steel blue) — my pick |
+  | EP Preamp/Drive | fxDrive | #5C3A26 (burnt sienna) — my pick |
+  | Vintage EQ | fxEq | #3A4A2E (olive/forest) — my pick |
+  | Compressor | fxComp | #5C2626 (crimson) |
+  | Tape Delay | fxTapeDelay | #5C4526 (ember) |
+  | Digital Delay | fxDigDelay | #26305C (deep indigo) — my pick |
+  | Plate Reverb | fxPlate | #2E3E4A (slate/forest) — my pick |
+  | Hall/Shimmer | fxHall | #2E4A38 (forest; shimmer amount lives in the unit) |
+  | Widener/Ensemble | fxWidener | #44265C (violet) — my pick |
+  | Browser/dock chassis weave | chassisCloth | #17130E |
+
 ## Verification results (2026-08-26, this machine)
 - Clean Ninja Release configure + build: success (VST3, Standalone, tests; AU declared, skipped on Windows as expected).
 - `ctest`: EngineTests 100% passed (58 checks).

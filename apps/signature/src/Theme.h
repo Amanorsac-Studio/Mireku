@@ -39,6 +39,11 @@ struct Theme
     static inline const juce::Colour fxHall       { 0xff2E4A38 };  // forest / indigo shimmer
     static inline const juce::Colour fxWidener    { 0xff44265C };
 
+    // master section cloth (royal gold/burgundy weave)
+    static inline const juce::Colour masterCloth  { 0xff5C2A20 };
+    // near-black weave for chassis-level panels (browser, dock)
+    static inline const juce::Colour chassisCloth { 0xff17130E };
+
     static inline const juce::Colour okGreen      { 0xff6FBF5A };
     static inline const juce::Colour warnRed      { 0xffC24A3A };
     static inline const juce::Colour meterGreen   { 0xff7FCC5E };
@@ -72,6 +77,22 @@ struct Theme
         static constexpr int pad            = 8;
         static constexpr int corner         = 6;
         static constexpr float arcThickness = 3.5f;
+    };
+
+    // ---------------------------------------------------- kente texture params
+    // (design-reference README: desaturated/darkened cloth behind gold UI,
+    //  pattern legible up close, <= ~35% perceived contrast against chassis)
+    struct Kente
+    {
+        static constexpr int   weaveTile   = 288;   // tileable image size, woven style
+        static constexpr int   weaveBlock  = 48;    // patchwork block size
+        static constexpr int   flatTile    = 256;   // flat-graphic style (Perform strips)
+        static constexpr int   flatBlock   = 64;
+        static constexpr float weaveMaxBri = 0.21f; // brightness ceiling (keeps contrast law)
+        static constexpr float flatMaxBri  = 0.24f;
+        static constexpr float minBri      = 0.05f;
+        static constexpr float warpAlpha   = 0.055f; // vertical thread micro-lines
+        static constexpr float weftAlpha   = 0.13f;  // light seam lines between blocks
     };
 };
 

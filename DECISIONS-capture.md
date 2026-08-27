@@ -81,6 +81,33 @@ to log anything the spec left open.
     `decodeWav`) is Node-only and used exclusively by the Electron main process
     and the vitest suite; WAV/validation work reaches the renderer via IPC.
 
-17. **Electron main is bundled as ESM (`.mjs`)** with `@jm/jmi-format` kept external
+17. **Kente visual pass (procedural weave).** Cloth backdrops are rendered
+    procedurally (`src/ui/theme/weave.ts`): a deterministic seeded plain-weave
+    tile (warp/weft cells, fiber jitter, thread gaps, sparse banding) drawn once
+    per tint to a canvas and cached as a data URL. All parameters + tint tables
+    live in `src/ui/theme/tokens.ts`. Chassis gets a fainter variant than module
+    surfaces; tint overlays are low-alpha so contrast stays well under the ~35%
+    ceiling against #0C0A07. Surfaces: chassis = neutral faint weave; guided
+    meter + session-map plates = recessed neutral warp panels; FX unit cards and
+    wizard world cards = tinted cloth.
+
+18. **FX cloth tint table.** The design README fixes teal chorus, ember tape
+    delay, violet phaser, indigo shimmer, crimson compressor, forest hall;
+    DECISIONS-signature.md logs only "flat per-module accent tints" without a
+    full table, so the remaining units were given harmonious neighbors here:
+    brass tremolo (#6F5A2A), slate flanger (#3F4A55), amber EP preamp (#7A552A),
+    bronze vintage EQ (#6A4A28), steel-blue digital delay (#33506F), forest
+    plate reverb (#2E5B3A), aubergine widener (#4A2E55). World cards: rust
+    rhodes (#8A4B2A), forest mks (#2E5B3A), indigo fm (#33406F), violet strings
+    (#5B3A6F). If the Signature side later publishes a canonical table, only
+    `fxTint`/`worldTint` in tokens.ts need updating.
+
+19. **Electron main is bundled as ESM (`.mjs`)** with `@jm/jmi-format` kept external
     so its `import.meta.url`-relative JSON-schema lookup keeps resolving from
     `node_modules`. Preload is CJS for sandbox compatibility.
+
+19. **FX tint reconciliation.** Signature's tint table (DECISIONS-signature.md) is
+    canonical for the six units the design README left open. Capture's `fxTint`
+    hues were aligned to it (flanger→steel blue, EP preamp→burnt sienna,
+    EQ→olive, digital delay→deep indigo, plate→slate) while keeping Capture's
+    lighter luminance range, since its weave renderer applies tints at low alpha.

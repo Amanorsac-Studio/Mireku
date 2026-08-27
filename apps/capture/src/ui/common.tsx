@@ -1,8 +1,17 @@
 import React from 'react';
 
-export function Panel({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
+export function Panel({
+  children,
+  style,
+  variant,
+}: {
+  children: React.ReactNode;
+  style?: React.CSSProperties;
+  /** 'recessed' = dark plate with subtle warp weave (meter / session map) */
+  variant?: 'recessed';
+}) {
   return (
-    <div className="jm-panel" style={style}>
+    <div className={`jm-panel${variant ? ` ${variant}` : ''}`} style={style}>
       {children}
     </div>
   );

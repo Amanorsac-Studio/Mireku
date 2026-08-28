@@ -37,6 +37,15 @@ public:
         auto& p = spec_.params[(size_t) i];
         values_[(size_t) i].store (juce::jlimit (p.min, p.max, v));
     }
+    /// MODULATION PHASE 1: index-addressed setter for the audio thread. The mod
+    /// matrix resolves every destination to a param INDEX on the message thread,
+    /// so the audio thread never compares a string here.
+    void setParamIndexed (int i, float v)
+    {
+        if (i < 0 || i >= (int) spec_.params.size()) return;
+        auto& p = spec_.params[(size_t) i];
+        values_[(size_t) i].store (juce::jlimit (p.min, p.max, v), std::memory_order_relaxed);
+    }
     float getParam (int i) const { return values_[(size_t) i].load(); }
 
     virtual void prepare (double sampleRate, int maxBlock) = 0;
@@ -721,6 +730,31 @@ public:
         const juce::SpinLock::ScopedLockType sl (lock_);
         if (slot >= 0 && slot < (int) slots_.size() && slots_[(size_t) slot].unit)
             slots_[(size_t) slot].unit->setParam (id, v);
+    }
+    /// MODULATION PHASE 1 — audio-thread parameter write. Uses the same TRY-lock
+    /// discipline as process(): if the message thread is mid-rebuild we skip this
+    /// control block rather than spin, exactly as a colliding block passes dry.
+    void setParamRt (int slot, int paramIndex, float v)
+    {
+        const juce::SpinLock::ScopedTryLockType sl (lock_);
+        if (! sl.isLocked()) return;
+        if (slot >= 0 && slot < (int) slots_.size() && slots_[(size_t) slot].unit)
+            slots_[(size_t) slot].unit->setParamIndexed (paramIndex, v);
+    }
+    void setBypassedRt (int slot, bool b)
+    {
+        const juce::SpinLock::ScopedTryLockType sl (lock_);
+        if (! sl.isLocked()) return;
+        if (slot >= 0 && slot < (int) slots_.size() && slots_[(size_t) slot].bypassed != b)
+        {
+            slots_[(size_t) slot].bypassed = b;
+            slots_[(size_t) slot].mix.setTargetValue (b ? 0.0f : 1.0f);
+        }
+    }
+    int numUnits() const
+    {
+        const juce::SpinLock::ScopedTryLockType sl (lock_);
+        return sl.isLocked() ? (int) slots_.size() : 0;
     }
     void setBypassed (int slot, bool b)
     {

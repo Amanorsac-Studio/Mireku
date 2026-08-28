@@ -5,6 +5,7 @@
 #include <juce_core/juce_core.h>
 #include "FxDsp.h"
 #include "Library.h"
+#include "Modulation.h"
 
 namespace jm {
 
@@ -182,11 +183,136 @@ struct MacroTarget
         const float base = d >= 0.0f ? lo : hi;
         return juce::jlimit (0.0f, 1.0f, base + (hi - lo) * d * t);
     }
+
+    // ---------------------------------------------------- MODULATION PHASE 1
+    // The macro path is now the modulation path: a macro is source #1 of the one
+    // matrix, and modulation OFFSETS the knob instead of overwriting it (spec:
+    // "modulation never overwrites the knob"). The offset is the same curve this
+    // link always had, anchored at the end of the window apply() swept FROM
+    // (`min` for positive depth, `max` for negative):
+    //
+    //     offsetFor(v) == apply(v) - anchor        (unit-tested)
+    //
+    // which expands to  depth * (max-min) * shaped(v)  — exactly the depth
+    // formula docs/MODULATION-RESEARCH.md section 1.1 recommends for a unipolar source.
+    // So an existing link keeps its span, its direction, its curve and its
+    // invert flag unchanged; the only difference is that a macro at rest is now
+    // a no-op rather than forcing the target to the low (or high) end.
+    float offsetFor (float norm, bool bipolarSource = false) const
+    {
+        const float loV = juce::jmin (min, max), hiV = juce::jmax (min, max);
+        return modmath::modOffset (norm, bipolarSource, depth, loV, hiV, curve, invert);
+    }
 };
 struct Macro
 {
     juce::String name;              // display name; value lives in APVTS "macroN"
     std::vector<MacroTarget> targets;
+};
+
+//==============================================================================
+// MODULATION PHASE 1 — the message-thread model of the matrix. One row is the
+// MacroTarget structure the macro editor has always used, with a SOURCE and an
+// ENABLE flag added (spec section D: "the data model gains one field and the rest is
+// already written"). `rowCount` is stored so eight rows can grow to sixteen
+// later without breaking a saved preset (spec decision 3).
+struct MatrixRow
+{
+    ModSource source = ModSource::none;
+    juce::String destPath;          // same router path addressing macros use
+    float min = 0.0f, max = 1.0f;
+    float curve = 1.0f;
+    float depth = 0.5f;             // bipolar
+    bool invert = false;
+    bool enabled = true;
+
+    bool active() const { return enabled && source != ModSource::none && destPath.isNotEmpty(); }
+};
+
+struct ModState
+{
+    static constexpr int kVersion = 1;
+
+    std::array<LfoSettings, kNumLfos> lfos {};
+    std::array<MatrixRow, kMaxMatrixRows> rows {};
+    int rowCount = kDefaultMatrixRows;
+
+    juce::var toVar() const
+    {
+        auto* o = new juce::DynamicObject();
+        o->setProperty ("version", kVersion);
+        o->setProperty ("rowCount", rowCount);
+        juce::Array<juce::var> ls;
+        for (auto& l : lfos)
+        {
+            auto* lo = new juce::DynamicObject();
+            lo->setProperty ("shape", l.shape);
+            lo->setProperty ("rateHz", l.rateHz);
+            lo->setProperty ("sync", l.sync != 0);
+            lo->setProperty ("division", l.division);
+            lo->setProperty ("phaseDeg", l.phaseDeg);
+            lo->setProperty ("fadeSec", l.fadeSec);
+            lo->setProperty ("retrigger", l.retrigger);
+            ls.add (juce::var (lo));
+        }
+        o->setProperty ("lfos", juce::var (ls));
+        juce::Array<juce::var> rs;
+        for (int i = 0; i < juce::jlimit (0, kMaxMatrixRows, rowCount); ++i)
+        {
+            auto& r = rows[(size_t) i];
+            auto* ro = new juce::DynamicObject();
+            ro->setProperty ("source", juce::String (modSourceId (r.source)));
+            ro->setProperty ("dest", r.destPath);
+            ro->setProperty ("min", r.min);
+            ro->setProperty ("max", r.max);
+            ro->setProperty ("curve", r.curve);
+            ro->setProperty ("depth", r.depth);
+            ro->setProperty ("invert", r.invert);
+            ro->setProperty ("enabled", r.enabled);
+            rs.add (juce::var (ro));
+        }
+        o->setProperty ("rows", juce::var (rs));
+        return juce::var (o);
+    }
+
+    /// Versioned load. A state written before phase 1 simply has no "mod"
+    /// property at all, so everything stays at its default and every macro link
+    /// in that state keeps working unchanged.
+    void fromVar (const juce::var& v)
+    {
+        *this = ModState {};
+        if (! v.isObject()) return;
+        rowCount = juce::jlimit (1, kMaxMatrixRows, (int) v.getProperty ("rowCount", kDefaultMatrixRows));
+        if (auto* ls = v.getProperty ("lfos", juce::var()).getArray())
+            for (int i = 0; i < juce::jmin (kNumLfos, ls->size()); ++i)
+            {
+                auto& lv = ls->getReference (i);
+                auto& l = lfos[(size_t) i];
+                l.shape = juce::jlimit (0, kNumLfoShapes - 1, (int) lv.getProperty ("shape", 0));
+                l.rateHz = juce::jlimit (kLfoRateMin, kLfoRateMax,
+                                         (float) (double) lv.getProperty ("rateHz", 1.0));
+                l.sync = (bool) lv.getProperty ("sync", true) ? 1 : 0;
+                l.division = juce::jlimit (0, numDivisions() - 1, (int) lv.getProperty ("division", kDivQuarter));
+                l.phaseDeg = juce::jlimit (0.0f, 360.0f, (float) (double) lv.getProperty ("phaseDeg", 0.0));
+                l.fadeSec = juce::jlimit (0.0f, 5.0f, (float) (double) lv.getProperty ("fadeSec", 0.0));
+                l.retrigger = juce::jlimit (0, 2, (int) lv.getProperty ("retrigger", 0));
+            }
+        if (auto* rs = v.getProperty ("rows", juce::var()).getArray())
+            for (int i = 0; i < juce::jmin (kMaxMatrixRows, rs->size()); ++i)
+            {
+                auto& rv = rs->getReference (i);
+                auto& r = rows[(size_t) i];
+                r.source = modSourceFromId (rv.getProperty ("source", "none").toString());
+                r.destPath = rv.getProperty ("dest", "").toString();
+                r.min = (float) (double) rv.getProperty ("min", 0.0);
+                r.max = (float) (double) rv.getProperty ("max", 1.0);
+                r.curve = (float) (double) rv.getProperty ("curve", 1.0);
+                r.depth = (float) (double) rv.getProperty ("depth", 0.5);
+                r.invert = (bool) rv.getProperty ("invert", false);
+                r.enabled = (bool) rv.getProperty ("enabled", true);
+                rowCount = juce::jmax (rowCount, i + 1);
+            }
+    }
 };
 
 //==============================================================================
@@ -256,6 +382,7 @@ struct AppState
     std::array<Macro, 4> macros { Macro { "MACRO 1", {} }, Macro { "MACRO 2", {} },
                                   Macro { "MACRO 3", {} }, Macro { "MACRO 4", {} } };
     MidiMap midiMap;
+    ModState mod;                    // MODULATION PHASE 1 (LFOs + matrix)
     LearnState learn;
     int currentPage = 0;             // 0..3 model pages, 4 = perform
     juce::String performPresetName;

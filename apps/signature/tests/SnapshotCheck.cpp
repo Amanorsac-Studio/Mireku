@@ -739,6 +739,478 @@ int main()
         for (auto& e : proc.engines) e.allNotesOff (false);
     }
 
+    //========================================================================
+    // MODULATION PHASE 1 — LFOs + matrix, through the REAL processor.
+    //========================================================================
+
+    // -------- the architectural claim: modulation OFFSETS, it never overwrites
+    std::printf ("\n== MOD (1) base + offset: the knob is never overwritten ==\n");
+    {
+        proc.prepareToPlay (48000.0, 512);
+        for (auto& r : proc.state.mod.rows) r = MatrixRow {};
+        for (auto& m : proc.state.macros) m.targets.clear();
+
+        // LFO 1: free-running 5 Hz triangle, so the value sweeps the full +-1
+        auto& l1 = proc.state.mod.lfos[0];
+        l1.sync = 0; l1.rateHz = 5.0f; l1.shape = (int) LfoShape::triangle;
+        l1.fadeSec = 0.0f; l1.retrigger = (int) LfoRetrigger::free;
+
+        auto& row = proc.state.mod.rows[0];
+        row.source = ModSource::lfo1;
+        row.destPath = "slot0.engine.bark";      // 0..100
+        row.depth = 0.5f; row.min = 0.0f; row.max = 1.0f; row.curve = 1.0f;
+        row.enabled = true;
+        proc.publishModulation();
+
+        juce::AudioBuffer<float> buf (2, 512);
+        auto sweep = [&] (float base)
+        {
+            proc.setParamNormalized ("slot0.engine.bark", base);
+            float lo = 1.0e9f, hi = -1.0e9f;
+            for (int b = 0; b < 60; ++b)
+            {
+                juce::MidiBuffer e;
+                buf.clear();
+                proc.processBlock (buf, e);
+                const float v = proc.engines[0].engineParam (0);
+                lo = juce::jmin (lo, v); hi = juce::jmax (hi, v);
+            }
+            return std::make_pair (lo, hi);
+        };
+
+        auto a = sweep (0.25f);
+        const float storedAfterA = proc.state.slots[0].engineParams["bark"];
+        auto b = sweep (0.60f);
+        const float storedAfterB = proc.state.slots[0].engineParams["bark"];
+        std::printf ("  base 0.25 -> engine value swept %.2f..%.2f   (stored base still %.2f)\n",
+                     a.first, a.second, storedAfterA);
+        std::printf ("  base 0.60 -> engine value swept %.2f..%.2f   (stored base still %.2f)\n",
+                     b.first, b.second, storedAfterB);
+
+        // 1. the STORED value is exactly the knob, never the modulated one
+        CHECK (std::abs (storedAfterA - 25.0f) < 0.01f && std::abs (storedAfterB - 60.0f) < 0.01f,
+               "the stored parameter value stays exactly where the player put it");
+        // 2. depth 0.5 on a bipolar source = +-25% of the range (School A)
+        CHECK (std::abs ((a.second - a.first) - 50.0f) < 2.0f,
+               "a bipolar source at depth 50% swings the parameter by 50% peak-to-peak");
+        // 3. turning the knob moves the WHOLE modulated range, by exactly the
+        //    amount the knob moved — the behaviour the spec asks for by name
+        std::printf ("  range shift when the knob moved by 35%%: lo %+.2f  hi %+.2f\n",
+                     b.first - a.first, b.second - a.second);
+        CHECK (std::abs ((b.first - a.first) - 35.0f) < 2.0f
+               && std::abs ((b.second - a.second) - 35.0f) < 2.0f,
+               "turning the knob while the LFO runs moves the whole modulated range");
+        // 4. and it is still centred on the knob
+        CHECK (std::abs ((a.first + a.second) * 0.5f - 25.0f) < 1.5f,
+               "the modulated range stays centred on the base value");
+
+        // disabling the row must hand the destination back to the knob
+        row.enabled = false;
+        proc.publishModulation();
+        for (int i = 0; i < 4; ++i) { juce::MidiBuffer e; buf.clear(); proc.processBlock (buf, e); }
+        CHECK (std::abs (proc.engines[0].engineParam (0) - 60.0f) < 0.01f,
+               "disabling a row restores the destination to the knob's own value");
+        row.enabled = true;
+        proc.publishModulation();
+    }
+
+    // -------- no zipper at high LFO rates, measured on the real audio path
+    std::printf ("\n== MOD (2) no zipper at high LFO rates ==\n");
+    {
+        // Gain modulation is multiplicative, so rendering the SAME note twice —
+        // once clean, once with a 39 Hz LFO on master volume — and dividing gives
+        // the actual per-sample gain the modulation applied. Zipper noise would
+        // show up as 64-sample-wide steps in that signal.
+        for (auto& r : proc.state.mod.rows) r = MatrixRow {};
+        proc.publishModulation();
+        for (auto& e : proc.engines) e.allNotesOff (false);
+        // one slot, no limiter, so the measured ratio IS the modulation gain
+        for (int i = 0; i < 4; ++i)
+            if (auto* p = proc.apvts.getParameter ("slotEnable" + juce::String (i)))
+                p->setValueNotifyingHost (i == 0 ? 1.0f : 0.0f);
+        if (auto* p = proc.apvts.getParameter ("limiter")) p->setValueNotifyingHost (0.0f);
+        if (auto* p = proc.apvts.getParameter ("masterVol")) p->setValueNotifyingHost (0.55f);
+        // The Rhodes rack carries a tape delay whose wow/flutter is a random
+        // source, so the slot's own FX would make two renders differ for reasons
+        // that have nothing to do with modulation. Measure on the dry engine.
+        const auto savedRack = proc.state.slots[0].rack;
+        proc.state.slots[0].rack.clear();
+        proc.slotRacks[0].setState (proc.state.slots[0].rack);
+        proc.prepareToPlay (48000.0, 512);
+
+        auto render = [&] (bool withMod)
+        {
+            // Both renders keep the SAME row (and therefore the same 64-sample
+            // control-block split through the whole engine); only the depth
+            // changes, so the ratio between them isolates the gain modulation
+            // and nothing else.
+            for (auto& r : proc.state.mod.rows) r = MatrixRow {};
+            {
+                auto& l = proc.state.mod.lfos[0];
+                l.sync = 0; l.rateHz = 39.0f; l.shape = (int) LfoShape::sine;
+                l.fadeSec = 0.0f; l.retrigger = (int) LfoRetrigger::everyNote;
+                auto& r = proc.state.mod.rows[0];
+                r.source = ModSource::lfo1;
+                r.destPath = "host.masterVol";
+                r.depth = withMod ? 0.4f : 0.0f;
+                r.min = 0.0f; r.max = 1.0f; r.curve = 1.0f; r.enabled = true;
+            }
+            proc.publishModulation();
+            // make the two renders bit-comparable: the round-robin counter would
+            // otherwise pick a different sample the second time round
+            for (auto& e : proc.engines) { e.allNotesOff (false); e.setBundle (e.bundle()); }
+            proc.prepareToPlay (48000.0, 512);
+
+            std::vector<float> out;
+            juce::AudioBuffer<float> buf (2, 512);
+            juce::MidiBuffer mb;
+            mb.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 110), 0);
+            for (int b = 0; b < 12; ++b)
+            {
+                buf.clear();
+                proc.processBlock (buf, mb);
+                mb.clear();
+                const auto* p = buf.getReadPointer (0);
+                for (int i = 0; i < 512; ++i) out.push_back (p[i]);
+            }
+            for (auto& e : proc.engines) e.allNotesOff (false);
+            return out;
+        };
+
+        const auto dry = render (false);
+        const auto dry2 = render (false);
+        {
+            size_t firstDiff = dry.size();
+            for (size_t i = 0; i < dry.size() && i < dry2.size(); ++i)
+                if (std::abs (dry[i] - dry2[i]) > 1e-9f) { firstDiff = i; break; }
+            std::printf ("  determinism control: two identical renders diverge at sample %d of %d\n",
+                         (int) firstDiff, (int) dry.size());
+            CHECK (firstDiff == dry.size(),
+                   "the reference render is bit-identical twice (so the ratio below means something)");
+        }
+        const auto wet = render (true);
+        int compared = 0, steps = 0;
+        float worstStep = 0.0f, prevGain = 1.0f;
+        bool havePrev = false;
+        for (size_t i = 2048; i < dry.size() && i < wet.size(); ++i)   // skip the attack
+        {
+            if (std::abs (dry[i]) < 1.0e-3f) { havePrev = false; continue; }
+            const float g = wet[i] / dry[i];
+            if (g < 0.0f || g > 4.0f) { havePrev = false; continue; }
+            if (havePrev)
+            {
+                const float d = std::abs (g - prevGain);
+                worstStep = juce::jmax (worstStep, d);
+                if (d > 0.01f) ++steps;
+                ++compared;
+            }
+            prevGain = g;
+            havePrev = true;
+        }
+        // A 20 ms linear ramp at 48 kHz can move the gain by at most
+        // 1/(0.02*48000) = 1.04e-3 per sample; anything much above that is a step.
+        std::printf ("  samples compared %d | worst per-sample gain step %.6f | steps > 1%%: %d\n",
+                     compared, worstStep, steps);
+        CHECK (compared > 2000, "the zipper measurement had enough signal to be meaningful");
+        CHECK (worstStep < 3.0e-3f,
+               "a 39 Hz LFO on master volume moves the gain smoothly, per sample, with no steps");
+        CHECK (steps == 0, "no sample-to-sample gain jump above 1% anywhere in the render");
+
+        for (auto& r : proc.state.mod.rows) r = MatrixRow {};
+        proc.state.slots[0].rack = savedRack;
+        proc.slotRacks[0].setState (savedRack);
+        if (auto* p = proc.apvts.getParameter ("limiter")) p->setValueNotifyingHost (1.0f);
+        proc.publishModulation();
+    }
+
+    // -------- editing the routing while audio renders
+    std::printf ("\n== MOD (3) the matrix can be re-routed while audio renders ==\n");
+    {
+        proc.prepareToPlay (48000.0, 256);
+        juce::AudioBuffer<float> buf (2, 256);
+        juce::MidiBuffer mb;
+        mb.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+        const char* dests[] = { "slot0.engine.bark", "slot0.engine.tine", "host.masterVol",
+                                "slot0.fx0.drive", "mod.lfo2.rate", "host.slotPan0" };
+        bool finite = true;
+        for (int i = 0; i < 600; ++i)
+        {
+            // message-thread style edit, interleaved with real render calls
+            auto& r = proc.state.mod.rows[(size_t) (i % kDefaultMatrixRows)];
+            r.source = (ModSource) (1 + (i % (kNumModSources - 1)));
+            r.destPath = dests[i % 6];
+            r.depth = ((i % 21) - 10) * 0.1f;
+            r.enabled = (i % 5) != 0;
+            proc.state.mod.lfos[i % kNumLfos].division = i % numDivisions();
+            proc.state.mod.lfos[i % kNumLfos].sync = (i % 3) != 0;
+            proc.publishModulation();
+
+            buf.clear();
+            proc.processBlock (buf, mb);
+            mb.clear();
+            for (int c = 0; c < 2; ++c)
+            {
+                const auto* p = buf.getReadPointer (c);
+                for (int s = 0; s < 256; ++s)
+                    if (! std::isfinite (p[s]) || std::abs (p[s]) > 8.0f) finite = false;
+            }
+        }
+        CHECK (finite, "600 live re-routings during rendering produce no NaN, inf or runaway output");
+        for (auto& e : proc.engines) e.allNotesOff (false);
+        for (auto& r : proc.state.mod.rows) r = MatrixRow {};
+        for (auto& l : proc.state.mod.lfos) l = LfoSettings {};
+        proc.publishModulation();
+    }
+
+    // -------- a macro link saved BEFORE this change still loads and behaves
+    std::printf ("\n== MOD (4) pre-modulation state and macro links still work ==\n");
+    {
+        proc.prepareToPlay (48000.0, 512);
+        // A version-1 state: macros with links, and NO "mod" property at all.
+        auto* root = new juce::DynamicObject();
+        root->setProperty ("version", 1);
+        auto* mo = new juce::DynamicObject();
+        mo->setProperty ("name", "Legacy Sweep");
+        auto* to = new juce::DynamicObject();
+        to->setProperty ("path", "slot0.engine.tine");
+        to->setProperty ("min", 0.0);
+        to->setProperty ("max", 1.0);
+        to->setProperty ("curve", 1.0);
+        to->setProperty ("depth", 1.0);
+        to->setProperty ("invert", false);
+        juce::Array<juce::var> ts; ts.add (juce::var (to));
+        mo->setProperty ("targets", juce::var (ts));
+        juce::Array<juce::var> ms2; ms2.add (juce::var (mo));
+        for (int i = 1; i < 4; ++i)
+        {
+            auto* e = new juce::DynamicObject();
+            e->setProperty ("name", "MACRO " + juce::String (i + 1));
+            e->setProperty ("targets", juce::Array<juce::var>());
+            ms2.add (juce::var (e));
+        }
+        root->setProperty ("macros", juce::var (ms2));
+        const auto json = juce::JSON::toString (juce::var (root));
+        proc.setStateInformation (json.toRawUTF8(), (int) json.getNumBytesAsUTF8());
+
+        CHECK (proc.state.macros[0].name == "Legacy Sweep"
+               && proc.state.macros[0].targets.size() == 1
+               && proc.state.macros[0].targets[0].path == "slot0.engine.tine",
+               "a version-1 state's macro link loads unchanged");
+        CHECK (proc.state.mod.rowCount == kDefaultMatrixRows && proc.state.mod.rows[0].destPath.isEmpty(),
+               "a version-1 state gets a clean default modulation block");
+
+        auto* macro1 = proc.apvts.getParameter ("macro1");
+        juce::AudioBuffer<float> buf (2, 512);
+        auto settle = [&] { for (int i = 0; i < 6; ++i) { juce::MidiBuffer e; buf.clear(); proc.processBlock (buf, e); } };
+        proc.setParamNormalized ("slot0.engine.tine", 0.0f);
+        macro1->setValueNotifyingHost (0.0f);
+        settle();
+        const float atZero = proc.engines[0].engineParam (1);
+        macro1->setValueNotifyingHost (1.0f);
+        settle();
+        const float atOne = proc.engines[0].engineParam (1);
+        macro1->setValueNotifyingHost (0.5f);
+        settle();
+        const float atHalf = proc.engines[0].engineParam (1);
+        std::printf ("  legacy full-range link, knob at 0: macro 0 -> %.1f, 0.5 -> %.1f, 1 -> %.1f\n",
+                     atZero, atHalf, atOne);
+        // The link was min 0 / max 1 / depth +1, i.e. the macro covers the whole
+        // range. With the knob at its low end the behaviour is IDENTICAL to the
+        // old destructive path, value for value.
+        CHECK (std::abs (atZero - 0.0f) < 0.6f && std::abs (atOne - 100.0f) < 0.6f
+               && std::abs (atHalf - 50.0f) < 0.6f,
+               "a restored full-range macro link sweeps the target exactly as it did before");
+        // ...and now it also does the thing the spec asked for
+        proc.setParamNormalized ("slot0.engine.tine", 0.2f);
+        macro1->setValueNotifyingHost (0.0f);
+        settle();
+        CHECK (std::abs (proc.engines[0].engineParam (1) - 20.0f) < 0.6f,
+               "with the macro at rest the knob's own value is what is heard");
+        CHECK (std::abs (proc.state.slots[0].engineParams["tine"] - 20.0f) < 0.01f,
+               "a macro sweep no longer overwrites the stored knob value");
+        macro1->setValueNotifyingHost (0.0f);
+    }
+
+    // -------- full state round trip including modulation
+    std::printf ("\n== MOD (5) modulation state round-trips ==\n");
+    {
+        proc.state.mod.lfos[2].shape = (int) LfoShape::sampleHold;
+        proc.state.mod.lfos[2].division = 21;                 // 2/1
+        proc.state.mod.lfos[2].phaseDeg = 90.0f;
+        proc.state.mod.lfos[2].fadeSec = 1.5f;
+        proc.state.mod.rows[2].source = ModSource::keyTrack;
+        proc.state.mod.rows[2].destPath = "host.slotPan1";
+        proc.state.mod.rows[2].depth = -0.75f;
+        proc.state.mod.rows[2].enabled = true;
+        proc.publishModulation();
+
+        juce::MemoryBlock mb;
+        proc.getStateInformation (mb);
+        proc.state.mod = ModState {};
+        proc.publishModulation();
+        proc.setStateInformation (mb.getData(), (int) mb.getSize());
+
+        CHECK (proc.state.mod.lfos[2].shape == (int) LfoShape::sampleHold
+               && proc.state.mod.lfos[2].division == 21
+               && std::abs (proc.state.mod.lfos[2].phaseDeg - 90.0f) < 1e-3f
+               && std::abs (proc.state.mod.lfos[2].fadeSec - 1.5f) < 1e-3f,
+               "LFO settings survive a plugin state round trip");
+        CHECK (proc.state.mod.rows[2].source == ModSource::keyTrack
+               && proc.state.mod.rows[2].destPath == "host.slotPan1"
+               && std::abs (proc.state.mod.rows[2].depth + 0.75f) < 1e-3f,
+               "a matrix row survives a plugin state round trip");
+
+        // ...and it reaches a PERFORMANCE preset but never a .jmi bundle preset
+        auto slotPreset = proc.slotPresetToVar (0, "probe");
+        CHECK (! slotPreset.hasProperty ("mod"),
+               "a slot/.jmi-schema preset carries NO modulation (spec decision 4)");
+        proc.savePerformancePreset ("ModProbe");
+        auto pf = JMSignatureProcessor::performancePresetDir().getChildFile ("ModProbe.json");
+        CHECK (pf.existsAsFile()
+               && juce::JSON::parse (pf.loadFileAsString()).hasProperty ("mod"),
+               "a performance preset DOES carry modulation");
+        pf.deleteFile();
+
+        proc.state.mod = ModState {};
+        proc.publishModulation();
+    }
+
+    // -------- the cross-modulation guard
+    std::printf ("\n== MOD (6) cross-modulation guard ==\n");
+    {
+        CHECK (proc.modRowWouldCycle (0, ModSource::lfo2, "mod.lfo2.rate"),
+               "a row may not modulate its own LFO's rate");
+        CHECK (! proc.modRowWouldCycle (0, ModSource::lfo1, "mod.lfo2.rate"),
+               "but LFO 1 sweeping LFO 2's rate is allowed (spec §D)");
+        CHECK (proc.modRowWouldCycle (3, ModSource::lfo1, "mod.row4.depth"),
+               "a row may not modulate its own depth");
+        CHECK (proc.modRowWouldCycle (0, ModSource::macro2, "host.macro2"),
+               "a macro may not modulate itself");
+        CHECK (proc.isModulatableDest ("slot0.engine.bark")
+               && proc.isModulatableDest ("host.masterVol")
+               && ! proc.isModulatableDest ("host.solo")
+               && ! proc.isModulatableDest ("host.transpose"),
+               "bool/int host parameters are not offered as destinations");
+    }
+
+    // -------- the two new panels, and a knob wearing its modulation span
+    std::printf ("\n== MOD (7) LFO panel, MOD MATRIX panel, modulated knob ==\n");
+    {
+        proc.state.currentPage = 0;                       // a model page, so hero knobs are on screen
+        // a visible, generous routing so the span arc is unmistakable in the shot
+        for (auto& r : proc.state.mod.rows) r = MatrixRow {};
+        for (auto& m : proc.state.macros) m.targets.clear();   // (MOD 4 left a legacy link)
+        auto& l0 = proc.state.mod.lfos[0];
+        l0.sync = 0; l0.rateHz = 0.6f; l0.shape = (int) LfoShape::sine; l0.fadeSec = 0.0f;
+        proc.state.mod.lfos[1].shape = (int) LfoShape::smoothRandom;
+        proc.state.mod.lfos[1].division = 18;             // 1/1
+        proc.state.mod.lfos[2].shape = (int) LfoShape::sampleHold;
+        proc.state.mod.rows[0].source = ModSource::lfo1;
+        proc.state.mod.rows[0].destPath = "slot0.engine.tine";
+        proc.state.mod.rows[0].depth = 0.6f;
+        proc.state.mod.rows[1].source = ModSource::velocity;
+        proc.state.mod.rows[1].destPath = "slot0.engine.bark";
+        proc.state.mod.rows[1].depth = 0.45f;
+        proc.state.mod.rows[2].source = ModSource::macro1;
+        proc.state.mod.rows[2].destPath = "slot0.engine.space";
+        proc.state.mod.rows[2].depth = -0.5f;
+        proc.state.mod.rows[3].source = ModSource::lfo2;
+        proc.state.mod.rows[3].destPath = "mod.lfo1.rate";
+        proc.state.mod.rows[3].depth = 0.25f;
+        proc.setParamNormalized ("slot0.engine.tine", 0.5f);
+        proc.publishModulation();
+
+        // drive the LFO a little so the live marker is off-centre in the shot
+        {
+            juce::AudioBuffer<float> buf (2, 512);
+            juce::MidiBuffer mb;
+            mb.addEvent (juce::MidiMessage::noteOn (1, 64, (juce::uint8) 96), 0);
+            for (int i = 0; i < 22; ++i) { buf.clear(); proc.processBlock (buf, mb); mb.clear(); }
+        }
+
+        auto* ed = dynamic_cast<JMSignatureEditor*> (proc.createEditor());
+        ed->setSize (Theme::M::designW, Theme::M::designH);
+        ed->setVisible (true);
+
+        // the bottom-bar plates are live now (ARP is deliberately still not)
+        auto* bar = findOne<BottomBar> (*ed);
+        std::vector<ux::PlateButton*> bb;
+        if (bar != nullptr) findAll<ux::PlateButton> (*bar, bb);
+        CHECK ((int) bb.size() == 4, "the bottom bar still carries its four plates");
+        if (bb.size() == 4)
+        {
+            CHECK (bb[1]->isEnabled() && bb[2]->isEnabled(),
+                   "MOD MATRIX and LFO are live buttons now (they were disabled placeholders)");
+            CHECK (! bb[3]->isEnabled(), "ARP stays a disabled placeholder (it is phase 2)");
+        }
+
+        // a modulated knob advertises its span to the LookAndFeel
+        std::vector<juce::Slider*> sliders;
+        collectSliders (*ed, sliders);
+        int modded = 0;
+        for (auto* s : sliders)
+            if ((bool) s->getProperties().getWithDefault ("jmModActive", false)) ++modded;
+        std::printf ("  knobs carrying a modulation span: %d\n", modded);
+        CHECK (modded >= 3, "every modulated knob publishes its span for the second arc");
+        {
+            const auto span = proc.modSpanForPath ("slot0.engine.tine");
+            std::printf ("  slot0.engine.tine span %.3f .. %.3f (live %+.3f)\n",
+                         span.lo, span.hi, span.current);
+            CHECK (span.active && std::abs (span.lo + 0.3f) < 1e-3f && std::abs (span.hi - 0.3f) < 1e-3f,
+                   "a bipolar LFO at depth 60% reports a symmetric +-30% span");
+            CHECK (span.current >= span.lo - 1e-4f && span.current <= span.hi + 1e-4f,
+                   "the live modulated value sits inside the drawn span");
+            const auto uni = proc.modSpanForPath ("slot0.engine.bark");
+            CHECK (uni.active && std::abs (uni.lo) < 1e-4f && std::abs (uni.hi - 0.45f) < 1e-3f,
+                   "a unipolar source reports a one-sided span anchored at the knob");
+        }
+        savePng (*ed, "mod-knob-span.png");
+
+        if (auto* host = OverlayHost::find (findOne<HeaderBar> (*ed)))
+        {
+            host->showOverlay (std::make_unique<LfoPanel> (proc), LfoPanel::kWidth, LfoPanel::kHeight);
+            auto* lp = findOne<LfoPanel> (*ed);
+            CHECK (lp != nullptr, "the LFO panel opens as an overlay");
+            std::vector<PlainKnob*> lk;
+            if (lp != nullptr) findAll<PlainKnob> (*lp, lk);
+            CHECK ((int) lk.size() == 3, "the LFO panel exposes RATE, PHASE and FADE IN");
+            CHECK (findOne<LfoScope> (*ed) != nullptr, "the LFO panel shows a live scope");
+            savePng (*ed, "mod-lfo-panel.png");
+            host->closeOverlay();
+
+            host->showOverlay (std::make_unique<MatrixPanel> (proc),
+                               MatrixPanel::kWidth, MatrixPanel::heightFor (proc));
+            auto* mp = findOne<MatrixPanel> (*ed);
+            CHECK (mp != nullptr, "the MOD MATRIX panel opens as an overlay");
+            std::vector<MatrixRowEditor*> mr;
+            if (mp != nullptr) findAll<MatrixRowEditor> (*mp, mr);
+            std::printf ("  matrix rows on screen: %d (stored row count %d)\n",
+                         (int) mr.size(), proc.state.mod.rowCount);
+            CHECK ((int) mr.size() == kDefaultMatrixRows, "the matrix shows the spec's eight rows");
+            CHECK (kMaxMatrixRows >= 16, "the row array is sized so eight can grow to sixteen");
+            savePng (*ed, "mod-matrix-panel.png");
+            host->closeOverlay();
+        }
+
+        // no default JUCE chrome anywhere in the two new panels
+        {
+            std::vector<juce::ComboBox*> boxes;
+            auto* lp2 = new LfoPanel (proc);
+            lp2->setSize (LfoPanel::kWidth, LfoPanel::kHeight);
+            findAll<juce::ComboBox> (*lp2, boxes);
+            bool styled = true;
+            for (auto* b : boxes) if (dynamic_cast<JmLookAndFeel*> (&b->getLookAndFeel()) == nullptr) styled = false;
+            CHECK (styled && ! boxes.empty(), "every control in the LFO panel is drawn by JmLookAndFeel");
+            delete lp2;
+        }
+
+        delete ed;
+        for (auto& r : proc.state.mod.rows) r = MatrixRow {};
+        for (auto& l : proc.state.mod.lfos) l = LfoSettings {};
+        proc.publishModulation();
+        for (auto& e : proc.engines) e.allNotesOff (false);
+    }
+
     // ------------------------- (3) engaged plate follows the button's own path
     std::printf ("\n== R4 (3) engaged button fill follows the plate outline ==\n");
     {

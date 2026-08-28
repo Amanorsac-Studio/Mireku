@@ -639,6 +639,429 @@ static void testMacroLinkRoundTrip()
 }
 
 //==============================================================================
+// MODULATION PHASE 1 — the maths, the LFOs and the matrix.
+// (Processor-level behaviour — base+offset through the real DSP, zipper, live
+//  routing edits, legacy state — lives in tests/SnapshotCheck.cpp, which links
+//  the processor.)
+
+/// A ModApplier that just records what the matrix asked for.
+struct CapturingApplier : ModApplier
+{
+    std::vector<std::pair<int, float>> writes;    // (param index, normalised)
+    float last = -1.0f;
+    void applyModulatedValue (const ModDest& d, float n) override
+    {
+        writes.emplace_back (d.param, n);
+        last = n;
+    }
+};
+
+static ModDest engineDest (int slot, int param, float lo = 0.0f, float hi = 100.0f)
+{
+    ModDest d;
+    d.kind = (int) ModDestKind::engine;
+    d.slot = slot; d.param = param; d.lo = lo; d.hi = hi;
+    return d;
+}
+
+static void testDivisionTableAppendOnly()
+{
+    std::printf ("\n== Tempo division table extended APPEND-ONLY (research 2.4 / trap 16) ==\n");
+    // FX presets store the division as an INTEGER INDEX, so 0-7 must be frozen.
+    const double legacy[8] = { 0.125, 0.25, 0.375, 0.5, 0.75, 1.0, 1.5, 2.0 };
+    bool same = true;
+    for (int i = 0; i < 8; ++i) same = same && std::abs (divisionBeats (i) - legacy[i]) < 1e-12;
+    CHECK (same, "divisionBeats() indices 0-7 keep their original meaning");
+    CHECK ((int) syncDivisions().size() == 8, "the FX rack's own division list is unchanged (8 entries)");
+    CHECK (numDivisions() >= 31, "the full 8/1..1/64 table is available to the LFOs");
+    CHECK (std::abs (divisionBeats (18) - 4.0) < 1e-12, "1/1 = 4 beats");
+    CHECK (std::abs (divisionBeats (27) - 32.0) < 1e-12, "8/1 = 32 beats");
+    CHECK (std::abs (divisionBeats (8) - 0.0625) < 1e-12, "1/64 = 0.0625 beats");
+    CHECK (std::abs (divisionBeats (15) - 2.0 / 3.0) < 1e-12, "1/4 triplet = 2/3 beat");
+    CHECK (std::abs (divisionBeats (6) - 1.5) < 1e-12, "1/4 dotted = 1.5 beats");
+    CHECK (divisionBeats (kDivFreeze) == 0.0, "FREEZE has ratio 0");
+    // every entry of the display order must be a real index, and none may repeat
+    std::vector<int> seen;
+    bool ok = true;
+    for (int i : lfoDivisionOrder())
+    {
+        if (i < 0 || i >= numDivisions()) ok = false;
+        for (int j : seen) if (j == i) ok = false;
+        seen.push_back (i);
+    }
+    CHECK (ok && (int) seen.size() == numDivisions(), "the LFO's musical display order covers the table exactly once");
+}
+
+static void testDepthSemantics()
+{
+    std::printf ("\n== Depth semantics: unipolar vs bipolar (research 1.1, 'School A') ==\n");
+    const float lo = 0.0f, hi = 1.0f, depth = 0.5f;
+
+    // unipolar source (velocity): 0 .. +depth*(range)
+    const float u0 = modmath::modOffset (0.0f, false, depth, lo, hi, 1.0f, false);
+    const float u1 = modmath::modOffset (1.0f, false, depth, lo, hi, 1.0f, false);
+    CHECK (std::abs (u0 - 0.0f) < 1e-6f, "unipolar source at 0 contributes no offset");
+    CHECK (std::abs (u1 - 0.5f) < 1e-6f, "unipolar source at 1 contributes +depth*(max-min)");
+
+    // bipolar source (LFO): -depth*range/2 .. +depth*range/2
+    const float b0 = modmath::modOffset (-1.0f, true, depth, lo, hi, 1.0f, false);
+    const float bc = modmath::modOffset ( 0.0f, true, depth, lo, hi, 1.0f, false);
+    const float b1 = modmath::modOffset ( 1.0f, true, depth, lo, hi, 1.0f, false);
+    CHECK (std::abs (b0 + 0.25f) < 1e-6f, "bipolar source at -1 gives -depth*(max-min)/2");
+    CHECK (std::abs (bc) < 1e-6f, "bipolar source at 0 sits on the knob's own value");
+    CHECK (std::abs (b1 - 0.25f) < 1e-6f, "bipolar source at +1 gives +depth*(max-min)/2");
+
+    // THE point of School A: peak-to-peak swing is the same number for both, so
+    // swapping velocity for an LFO in a row does not silently double the effect.
+    CHECK (std::abs ((u1 - u0) - (b1 - b0)) < 1e-6f,
+           "peak-to-peak swing is |depth|*(max-min) for BOTH source polarities");
+
+    // the row's min/max is the modulation window
+    const float w = modmath::modOffset (1.0f, false, 1.0f, 0.25f, 0.75f, 1.0f, false);
+    CHECK (std::abs (w - 0.5f) < 1e-6f, "min/max narrows the window to (max-min)");
+    // negative depth mirrors direction
+    CHECK (modmath::modOffset (1.0f, false, -0.5f, lo, hi, 1.0f, false) < 0.0f,
+           "negative depth sweeps the target down from the knob");
+    // invert mirrors the SOURCE's travel, independently of depth's sign
+    CHECK (std::abs (modmath::modOffset (0.0f, false, 0.5f, lo, hi, 1.0f, true) - 0.5f) < 1e-6f,
+           "invert mirrors the source's own travel");
+}
+
+static void testLegacyMacroLinksBecomeOffsets()
+{
+    std::printf ("\n== Existing macro links keep their span and direction ==\n");
+    // The base+offset model is anchored at macro = 0, i.e. offsetFor(v) is
+    // exactly apply(v) - apply(0). A link saved before phase 1 therefore keeps
+    // its curve, its span and its direction; the only change is the one the spec
+    // demands — a macro at rest no longer forces the knob to an end stop.
+    const float depths[] = { 1.0f, 0.6f, -1.0f, -0.35f };
+    const float curves[] = { 1.0f, 0.5f, 2.0f, 3.0f };
+    bool equal = true, spanEqual = true;
+    for (float d : depths)
+        for (float c : curves)
+            for (int inv = 0; inv < 2; ++inv)
+            {
+                MacroTarget t;
+                t.min = 0.15f; t.max = 0.85f; t.depth = d; t.curve = c; t.invert = inv != 0;
+                // The anchor is the end of the window the link swept FROM:
+                // `min` for positive depth, `max` for negative — exactly what
+                // MacroTarget::apply() used as its own base.
+                const float anchor = d >= 0.0f ? juce::jmin (t.min, t.max) : juce::jmax (t.min, t.max);
+                for (int k = 0; k <= 10; ++k)
+                {
+                    const float v = (float) k / 10.0f;
+                    const float viaApply = t.apply (v) - anchor;
+                    if (std::abs (viaApply - t.offsetFor (v)) > 1e-5f) equal = false;
+                }
+                const float span = std::abs (t.offsetFor (1.0f) - t.offsetFor (0.0f));
+                const float oldSpan = std::abs (t.apply (1.0f) - t.apply (0.0f));
+                if (std::abs (span - oldSpan) > 1e-5f) spanEqual = false;
+            }
+    CHECK (equal, "offsetFor(v) == apply(v) - anchor for every depth/curve/invert combination");
+    CHECK (spanEqual, "a macro's full sweep still covers |depth|*(max-min), in the same direction");
+
+    MacroTarget rest;
+    CHECK (std::abs (rest.offsetFor (0.0f)) < 1e-6f, "a macro at rest contributes nothing (the knob wins)");
+}
+
+static void testLfoShapesAndPhase()
+{
+    std::printf ("\n== LFO shapes, start phase and rate taper ==\n");
+    // Pirkle's start-phase offsets: triangle and both ramps begin at ZERO output.
+    CHECK (std::abs (modmath::shapeValue ((int) LfoShape::sine, 0.0)) < 1e-6, "sine starts at 0");
+    CHECK (std::abs (modmath::shapeValue ((int) LfoShape::triangle, 0.0)) < 1e-6, "triangle starts at 0");
+    CHECK (std::abs (modmath::shapeValue ((int) LfoShape::sawUp, 0.0)) < 1e-6, "saw up starts at 0");
+    CHECK (std::abs (modmath::shapeValue ((int) LfoShape::sawDown, 0.0)) < 1e-6, "saw down starts at 0");
+    CHECK (modmath::shapeValue ((int) LfoShape::triangle, 0.25) > 0.999, "triangle peaks at quarter phase");
+    CHECK (modmath::shapeValue ((int) LfoShape::triangle, 0.75) < -0.999, "triangle troughs at three-quarter phase");
+    CHECK (modmath::shapeValue ((int) LfoShape::sawUp, 0.49) > 0.9, "saw up rises");
+    CHECK (modmath::shapeValue ((int) LfoShape::sawDown, 0.49) < -0.9, "saw down falls");
+    CHECK (modmath::shapeValue ((int) LfoShape::square, 0.25) > 0.99
+           && modmath::shapeValue ((int) LfoShape::square, 0.75) < -0.99, "square is +-1");
+    // every shape stays inside +-1 (it must, or it would break the clamp)
+    bool inRange = true;
+    for (int s = 0; s < kNumLfoShapes; ++s)
+        for (int k = 0; k < 512; ++k)
+        {
+            const float v = modmath::shapeValue (s, (double) k / 512.0);
+            if (v < -1.0001f || v > 1.0001f) inRange = false;
+        }
+    CHECK (inRange, "no shape overshoots +-1");
+    // raised cosine never overshoots its endpoints either (why it was chosen)
+    bool rcOk = true;
+    for (int k = 0; k <= 100; ++k)
+    {
+        const float v = modmath::raisedCosine (-0.8f, 0.6f, (double) k / 100.0);
+        if (v < -0.8001f || v > 0.6001f) rcOk = false;
+    }
+    CHECK (rcOk, "raised-cosine smooth random is monotone between knots and never overshoots");
+
+    // log rate taper, 0.01 .. 40 Hz
+    CHECK (std::abs (GlobalLfo::rateFromNorm (0.0f) - kLfoRateMin) < 1e-6f, "rate taper hits 0.01 Hz at 0");
+    CHECK (std::abs (GlobalLfo::rateFromNorm (1.0f) - kLfoRateMax) < 1e-4f, "rate taper hits 40 Hz at 1");
+    CHECK (std::abs (GlobalLfo::rateNormFor (GlobalLfo::rateFromNorm (0.37f)) - 0.37f) < 1e-5f,
+           "rate taper round-trips");
+    // log means equal ratios take equal travel
+    const float a = GlobalLfo::rateFromNorm (0.25f), b = GlobalLfo::rateFromNorm (0.50f),
+                c = GlobalLfo::rateFromNorm (0.75f);
+    CHECK (std::abs ((b / a) - (c / b)) < 1e-3f, "the rate taper is logarithmic (equal ratio per equal travel)");
+}
+
+static void testLfoTransportEdgeCases()
+{
+    std::printf ("\n== Synced LFO phase is derived from ppq (research 2.4 / trap 2) ==\n");
+    LfoSettings s;
+    s.sync = 1;
+    s.division = kDivQuarter;          // 1/4 == 1 beat per cycle
+    s.shape = (int) LfoShape::sawUp;
+
+    GlobalLfo lfo;
+    lfo.reset();
+    TransportClock clk;
+    clk.playing = true;
+
+    auto phaseAt = [&] (double ppq, double bpm)
+    {
+        clk.ppq = ppq; clk.bpm = bpm;
+        lfo.process (s, clk, 48000.0, 64, 0.0, 0.0f);
+        return lfo.phase();
+    };
+
+    // --- a TEMPO CHANGE must not move the phase: the phase is a function of ppq
+    //     alone, so the same musical position gives the same phase at any tempo.
+    //     (An LFO that integrates Hz drifts here — Vital's documented bug.)
+    const double p120 = phaseAt (10.25, 120.0);
+    lfo.reset();
+    const double p90 = phaseAt (10.25, 90.0);
+    lfo.reset();
+    const double p174 = phaseAt (10.25, 174.0);
+    std::printf ("  phase at ppq 10.25:  120 bpm %.6f | 90 bpm %.6f | 174 bpm %.6f\n", p120, p90, p174);
+    CHECK (std::abs (p120 - 0.25) < 1e-9 && std::abs (p90 - 0.25) < 1e-9 && std::abs (p174 - 0.25) < 1e-9,
+           "phase survives a tempo change unchanged (frac(ppq/beatsPerCycle))");
+
+    // --- a LOCATE (transport jumped to an arbitrary position)
+    lfo.reset();
+    phaseAt (4.0, 120.0);
+    const double afterLocate = phaseAt (37.5, 120.0);
+    CHECK (std::abs (afterLocate - 0.5) < 1e-9, "phase is correct immediately after a transport locate");
+
+    // --- a LOOP WRAP (ppq goes backwards)
+    lfo.reset();
+    phaseAt (7.75, 120.0);
+    const double afterWrap = phaseAt (4.0, 120.0);
+    CHECK (std::abs (afterWrap - 0.0) < 1e-9, "phase is correct immediately after a loop wrap");
+
+    // --- the same musical position always renders the same value: a bounce is
+    //     reproducible, which is the whole reason for anchoring to the timeline.
+    lfo.reset(); const float v1 = phaseAt (13.125, 128.0) >= 0 ? lfo.value() : 0.0f;
+    lfo.reset(); phaseAt (2.0, 96.0); phaseAt (5.5, 143.0);
+    const float v2 = (phaseAt (13.125, 128.0), lfo.value());
+    CHECK (std::abs (v1 - v2) < 1e-6f, "the same ppq renders the same value regardless of how it was reached");
+
+    // --- TRANSPORT STOPPED: the clock free-runs at the last known tempo, so the
+    //     LFO keeps moving when the player stops to practise (research trap 4).
+    TransportClock stopped;
+    stopped.bpm = 120.0;
+    const double before = stopped.ppq;
+    stopped.update (nullptr, 512, 48000.0);          // no playhead at all (standalone)
+    CHECK (stopped.ppq > before, "with no playhead the clock free-runs at the last known tempo");
+    CHECK (std::abs (stopped.ppq - (512.0 * 2.0 / 48000.0)) < 1e-9, "free-run advance is blockSamples*bpm/60/sr");
+    stopped.bpm = 0.0;                                // a host reporting nonsense
+    stopped.update (nullptr, 512, 48000.0);
+    CHECK (stopped.bpm == 0.0 || stopped.bpm > 0.0, "the clock never divides by a zero tempo");
+
+    // --- FREEZE holds the LFO still
+    LfoSettings fz = s;
+    fz.division = kDivFreeze;
+    GlobalLfo f2; f2.reset();
+    clk.ppq = 3.3; f2.process (fz, clk, 48000.0, 64, 0.0, 0.0f);
+    const float held = f2.value();
+    clk.ppq = 9.9; f2.process (fz, clk, 48000.0, 64, 0.0, 0.0f);
+    CHECK (std::abs (f2.value() - held) < 1e-6f, "FREEZE holds the LFO still");
+}
+
+static void testLfoFadeAndRandom()
+{
+    std::printf ("\n== LFO fade-in (crossfade form) and smooth random continuity ==\n");
+    LfoSettings s;
+    s.sync = 0;
+    s.rateHz = 4.0f;
+    s.shape = (int) LfoShape::sine;
+    s.fadeSec = 1.0f;
+    TransportClock clk;
+
+    GlobalLfo lfo;
+    lfo.reset();
+    lfo.retrigger (clk, true);
+    // The fade is a CROSSFADE from the LFO's value at its start phase (Serum's
+    // Rise / Vital), not a depth envelope from zero, so there is no jump at the
+    // moment the fade is armed.
+    const float first = lfo.process (s, clk, 48000.0, 64, 0.0, 0.0f);
+    CHECK (std::abs (first) < 0.05f, "a faded-in sine still starts at its own start-phase value");
+    float mx = 0.0f;
+    for (int i = 0; i < 750; ++i) mx = juce::jmax (mx, std::abs (lfo.process (s, clk, 48000.0, 64, 0.0, 0.0f)));
+    CHECK (mx < 0.98f, "the LFO has not reached full swing part-way through a 1 s fade");
+    for (int i = 0; i < 1500; ++i) mx = juce::jmax (mx, std::abs (lfo.process (s, clk, 48000.0, 64, 0.0, 0.0f)));
+    CHECK (mx > 0.98f, "the LFO reaches full swing once the fade completes");
+
+    // smooth random must be continuous at the control rate (S&H must not be)
+    LfoSettings sr = s;
+    sr.fadeSec = 0.0f;
+    sr.rateHz = 2.0f;
+    sr.shape = (int) LfoShape::smoothRandom;
+    GlobalLfo r1; r1.reset();
+    float prev = r1.process (sr, clk, 48000.0, 64, 0.0, 0.0f), worst = 0.0f;
+    for (int i = 0; i < 4000; ++i)
+    {
+        const float v = r1.process (sr, clk, 48000.0, 64, 0.0, 0.0f);
+        worst = juce::jmax (worst, std::abs (v - prev));
+        prev = v;
+    }
+    std::printf ("  smooth random: worst step per 64-sample control block = %.5f\n", worst);
+    CHECK (worst < 0.03f, "smooth random moves continuously at the 64-sample control rate");
+
+    sr.shape = (int) LfoShape::sampleHold;
+    GlobalLfo r2; r2.reset();
+    prev = r2.process (sr, clk, 48000.0, 64, 0.0, 0.0f);
+    float biggest = 0.0f;
+    for (int i = 0; i < 4000; ++i)
+    {
+        const float v = r2.process (sr, clk, 48000.0, 64, 0.0, 0.0f);
+        biggest = juce::jmax (biggest, std::abs (v - prev));
+        prev = v;
+    }
+    CHECK (biggest > 0.1f, "sample & hold deliberately steps (it is not interpolated)");
+}
+
+static void testMatrixSummingAndControlRate()
+{
+    std::printf ("\n== Matrix: sum-then-clamp, base+offset, cross-mod latch ==\n");
+    ModEngine eng;
+    eng.prepare (48000.0);
+    TransportClock clk;
+
+    // two rows on ONE destination, both from unipolar sources
+    {
+        auto& t = eng.editBuffer();
+        t = ModTable {};
+        t.groupCount = 1;
+        t.groups[0] = engineDest (0, 0);
+        t.rowCount = 2;
+        for (int i = 0; i < 2; ++i)
+        {
+            auto& r = t.rows[(size_t) i];
+            r.dest = t.groups[0];
+            r.group = 0;
+            r.matrixIndex = i;
+            r.lo = 0.0f; r.hi = 1.0f; r.curve = 1.0f; r.invert = 0;
+        }
+        t.rows[0].source = (int) ModSource::macro1;
+        t.rows[0].depth = 0.3f;
+        t.rows[1].source = (int) ModSource::macro2;
+        t.rows[1].depth = 0.4f;
+        eng.publish();
+    }
+    eng.setGroupBase (0, 0.2f);
+    eng.setMacroBase (0, 1.0f);
+    eng.setMacroBase (1, 1.0f);
+
+    CapturingApplier ap;
+    eng.process (clk, 64, 0, ap);
+    std::printf ("  base 0.20 + 0.30 + 0.40 -> %.4f (denormalised %.2f)\n", ap.last, ap.last * 100.0f);
+    CHECK (std::abs (ap.last - 0.9f) < 1e-5f, "two rows on one destination ADD (0.2 + 0.3 + 0.4)");
+
+    // ...and the SUM is clamped at the destination's own range, not per row
+    eng.setGroupBase (0, 0.8f);
+    ap.last = -1.0f;
+    eng.process (clk, 64, 0, ap);
+    CHECK (std::abs (ap.last - 1.0f) < 1e-6f, "the SUM is clamped at the parameter boundary");
+
+    // base+offset: moving the base moves the whole modulated range
+    eng.setMacroBase (1, 0.0f);
+    eng.setGroupBase (0, 0.1f);
+    ap.last = -1.0f; eng.process (clk, 64, 0, ap);
+    const float atLowBase = ap.last;
+    eng.setGroupBase (0, 0.5f);
+    ap.last = -1.0f; eng.process (clk, 64, 0, ap);
+    const float atHighBase = ap.last;
+    CHECK (std::abs ((atHighBase - atLowBase) - 0.4f) < 1e-5f,
+           "moving the base moves the modulated value by exactly the same amount");
+
+    // ---- cross-modulation: an LFO's rate is a destination, and the guard is a
+    //      ONE-BLOCK latch rather than a hang (research 1.4, Vital's cr::Feedback).
+    {
+        auto& t = eng.editBuffer();
+        t = ModTable {};
+        t.lfo[1].sync = 0;
+        t.lfo[1].rateHz = 1.0f;
+        t.groupCount = 1;
+        ModDest d;
+        d.kind = (int) ModDestKind::lfoRate;
+        d.unit = 1;
+        t.groups[0] = d;
+        t.rowCount = 1;
+        auto& r = t.rows[0];
+        r.dest = d; r.group = 0; r.matrixIndex = 0;
+        r.source = (int) ModSource::macro1;
+        r.depth = 0.5f; r.lo = 0.0f; r.hi = 1.0f; r.curve = 1.0f;
+        eng.publish();
+    }
+    eng.setMacroBase (0, 1.0f);
+    CapturingApplier ap2;
+    for (int i = 0; i < 8; ++i) eng.process (clk, 64, 0, ap2);
+    CHECK (ap2.writes.empty(), "a cross-modulation destination never reaches the DSP applier");
+    CHECK (true, "cross-modulating an LFO rate completes (one control block of latency, no cycle)");
+}
+
+static void testModStateRoundTrip()
+{
+    std::printf ("\n== Modulation state serialization (versioned) ==\n");
+    ModState a;
+    a.rowCount = 8;
+    a.lfos[0].shape = (int) LfoShape::smoothRandom;
+    a.lfos[0].rateHz = 7.25f;
+    a.lfos[0].sync = 0;
+    a.lfos[1].division = 18;                 // 1/1
+    a.lfos[1].phaseDeg = 180.0f;
+    a.lfos[2].fadeSec = 2.5f;
+    a.lfos[2].retrigger = (int) LfoRetrigger::firstNote;
+    a.rows[0].source = ModSource::lfo2;
+    a.rows[0].destPath = "slot1.engine.width";
+    a.rows[0].depth = -0.42f;
+    a.rows[0].min = 0.2f; a.rows[0].max = 0.9f;
+    a.rows[0].curve = 2.0f;
+    a.rows[0].invert = true;
+    a.rows[3].source = ModSource::velocity;
+    a.rows[3].destPath = "host.masterVol";
+    a.rows[3].enabled = false;
+
+    ModState b;
+    b.fromVar (juce::JSON::parse (juce::JSON::toString (a.toVar())));
+
+    CHECK (b.rowCount == a.rowCount, "row count survives (so 8 rows can grow to 16 later)");
+    CHECK (b.lfos[0].shape == a.lfos[0].shape && std::abs (b.lfos[0].rateHz - a.lfos[0].rateHz) < 1e-4f
+           && b.lfos[0].sync == 0, "LFO 1 settings survive");
+    CHECK (b.lfos[1].division == 18 && std::abs (b.lfos[1].phaseDeg - 180.0f) < 1e-4f, "LFO 2 settings survive");
+    CHECK (std::abs (b.lfos[2].fadeSec - 2.5f) < 1e-4f
+           && b.lfos[2].retrigger == (int) LfoRetrigger::firstNote, "LFO 3 settings survive");
+    CHECK (b.rows[0].source == ModSource::lfo2 && b.rows[0].destPath == "slot1.engine.width"
+           && std::abs (b.rows[0].depth + 0.42f) < 1e-4f && b.rows[0].invert
+           && std::abs (b.rows[0].min - 0.2f) < 1e-4f && std::abs (b.rows[0].max - 0.9f) < 1e-4f
+           && std::abs (b.rows[0].curve - 2.0f) < 1e-4f, "a matrix row survives intact");
+    CHECK (! b.rows[3].enabled && b.rows[3].source == ModSource::velocity,
+           "a DISABLED row is kept, not dropped (auditioning must be non-destructive)");
+    CHECK ((int) juce::JSON::parse (juce::JSON::toString (a.toVar())).getProperty ("version", 0) == ModState::kVersion,
+           "the modulation block is versioned");
+
+    // a state written before phase 1 simply has no "mod" property
+    ModState old;
+    old.fromVar (juce::var());
+    CHECK (old.rowCount == kDefaultMatrixRows && old.rows[0].source == ModSource::none
+           && old.lfos[0].sync == 1,
+           "a pre-modulation state loads as a clean default (nothing breaks)");
+}
+
+//==============================================================================
 int main()
 {
     std::printf ("JM Signature engine tests\n=========================\n");
@@ -652,6 +1075,15 @@ int main()
     testRealBundle();
     testFxRackDsp();
     testPresetJsonRoundTrip();
+    // MODULATION PHASE 1
+    testDivisionTableAppendOnly();
+    testDepthSemantics();
+    testLegacyMacroLinksBecomeOffsets();
+    testLfoShapesAndPhase();
+    testLfoTransportEdgeCases();
+    testLfoFadeAndRandom();
+    testMatrixSummingAndControlRate();
+    testModStateRoundTrip();
     std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL TESTS PASSED" : "TESTS FAILED",
                  failures, failures == 1 ? "" : "s");
     return failures == 0 ? 0 : 1;

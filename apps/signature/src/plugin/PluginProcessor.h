@@ -11,7 +11,9 @@
 namespace jm {
 
 class JMSignatureProcessor : public juce::AudioProcessor,
-                             private juce::Timer
+                             public ModApplier,
+                             private juce::Timer,
+                             private juce::ChangeListener
 {
 public:
     JMSignatureProcessor();
@@ -116,13 +118,67 @@ public:
 
     void applyMacro (int macroIndex);
 
+    //====================================================== MODULATION PHASE 1
+    // The macro path and the modulation matrix are ONE system now. Macros are
+    // source #1 of the matrix; nothing writes a stored parameter value any more.
+    // See engine/Modulation.h for the base+offset model and the concurrency.
+    ModEngine mod;
+    TransportClock transport;
+
+    /// Message thread: rebuild the resolved routing table from `state.macros` +
+    /// `state.mod` and publish it to the audio thread. Call after ANY edit to a
+    /// macro link, a matrix row or an LFO setting.
+    void publishModulation();
+    /// Message thread: re-read every modulated destination's BASE value from the
+    /// authoritative state, so turning a knob moves the whole modulated range.
+    void refreshModulationBases();
+    /// Resolve a router path to the integer destination the audio thread uses.
+    bool resolveModDest (const juce::String& path, ModDest& out) const;
+    /// True if `path` names something modulation may drive.
+    bool isModulatableDest (const juce::String& path) const;
+
+    /// UI readback for the modulated-knob display: the offset span this path is
+    /// currently subject to, the live offset, and the dominant source's colour.
+    struct ModSpan
+    {
+        bool active = false;
+        float lo = 0.0f, hi = 0.0f, current = 0.0f;
+        juce::Colour colour { 0xffD9A648 };
+    };
+    ModSpan modSpanForPath (const juce::String& path) const;
+
+    /// Destination paths a matrix row may address, for the row editor's menu.
+    juce::StringArray modDestinationPaths() const;
+
+    /// Cross-modulation guard (spec section D): a row may not modulate its own source's
+    /// rate, nor its own depth.
+    bool modRowWouldCycle (int rowIndex, ModSource source, const juce::String& destPath) const;
+
     juce::ChangeBroadcaster stateChanged;    // UI listens: slots/presets/racks changed
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 
+    /// ModApplier — audio thread. Pushes one modulated NORMALISED value into the
+    /// DSP. It never touches `state`, never touches APVTS and never calls
+    /// setValueNotifyingHost(): the base value stays exactly where the player
+    /// put it (docs/MODULATION-RESEARCH.md section 0 / trap 1).
+    void applyModulatedValue (const ModDest& dest, float normalised) override;
+
 private:
     void timerCallback() override;
+    /// The processor listens to its OWN stateChanged broadcast so that anything
+    /// which reshapes the model — an FX unit added or removed, a preset loaded, a
+    /// macro link created — re-resolves the modulation routing table. Destination
+    /// paths carry FX unit INDICES, so a rack edit must not leave a row pointing
+    /// at the wrong unit.
+    void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void handleMidiAtBlockStart (const juce::MidiBuffer& midi);
+    /// One control block of audio: the modulation matrix is evaluated, then the
+    /// slots, their racks and the master rack render this chunk.
+    void renderChunk (juce::AudioBuffer<float>& buffer, int startSample, int numSamples);
+    /// Base value of a continuous host parameter + the matrix's normalised
+    /// offset, denormalised through the parameter's own range. Read-only.
+    float modulatedHostValue (int hostModTarget) const;
     /// One entry point for every MIDI source (host buffer, routed devices, the
     /// on-screen keyboard/wheels). `mask` is the 4-bit slot mask this message is
     /// routed to; note-ons, note-offs, sustain, CCs and bend all honour it.
@@ -144,6 +200,20 @@ private:
     std::atomic<float>* bendRangeParam = nullptr;
     std::array<std::atomic<float>*, 4> slotVol {}, slotPan {}, slotEnable {};
     std::array<float, 4> lastEnable { -1, -1, -1, -1 };
+
+    // MODULATION PHASE 1 — host-parameter destinations are applied as an OFFSET
+    // at the point of use, so the automated/stored base is never written.
+    std::array<juce::RangedAudioParameter*, hmCount> hostModParam {};
+    /// Research section 1.5: pan is smoothed as a POSITION and the equal-power law is
+    /// recomputed from it; smoothing the two channel gains independently would
+    /// break the power constraint. The per-sample path is only taken while a
+    /// value is actually moving, so an unmodulated slot costs nothing extra.
+    std::array<juce::SmoothedValue<float>, 4> slotVolSm, slotPanSm;
+    /// Message-thread mirror of the published table, for UI readback only.
+    std::vector<juce::String> pubPath_;
+    std::vector<int> pubSource_, pubGroup_;
+    std::vector<ModDest> pubGroupDest_;
+    std::vector<juce::String> pubGroupPath_;
 
     juce::SmoothedValue<float> expressionGain { 1.0f };   // CC11
     juce::AudioBuffer<float> slotBuf;

@@ -65,10 +65,53 @@ public:
         // ---- value arc (behind the hardware)
         const float ar = d * 0.545f;
         const float aw = juce::jmax (2.0f, d * 0.038f);
+        auto ang = [&] (float n) { return startAngle + n * (endAngle - startAngle); };
+
+        // ---- MODULATION PHASE 1: the modulation SPAN band.
+        // docs/MODULATION-RESEARCH.md §1.3 — every instrument surveyed draws three
+        // layers, and this is the only genuinely new piece of drawing in phase 1:
+        //   1. the base value as the pointer / value arc (unchanged, below);
+        //   2. the modulation SPAN, anchored at the base and reaching as far as
+        //      the routing can push the parameter, in the source's own colour;
+        //   3. a live marker at the value being swept right now.
+        // Serum draws (2) as a coloured halo on the value ring, which is what
+        // this is: a wide translucent band UNDER the value arc, so the pointer
+        // and its arc still read as the authoritative value. Negative depth is a
+        // dimmer variant of the same colour rather than a second hue, because our
+        // palette is one gold family and a rival hue would fight the chrome.
+        // Pigments documents the failure mode to design against — a ring lit but
+        // useless because the base pushed the modulation out of range — so the
+        // span is clipped at the -135/+135 ends and the clipped end is capped
+        // with a bright tick, which is what makes clamping visible.
+        const bool modActive = (bool) slider.getProperties().getWithDefault ("jmModActive", false);
+        const float mLo  = (float) slider.getProperties().getWithDefault ("jmModLo", 0.0);
+        const float mHi  = (float) slider.getProperties().getWithDefault ("jmModHi", 0.0);
+        const float mCur = (float) slider.getProperties().getWithDefault ("jmModCur", 0.0);
+        const juce::Colour mc { (juce::uint32) (juce::int64) slider.getProperties()
+                                    .getWithDefault ("jmModColour", (juce::int64) Theme::goldHi.getARGB()) };
         juce::Path track, arc;
         track.addCentredArc (c.x, c.y, ar, ar, 0, startAngle, endAngle, true);
         g.setColour (Theme::knobTrack.withAlpha (0.75f * alpha));
         g.strokePath (track, juce::PathStrokeType (aw, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        if (modActive)
+        {
+            const float a0 = juce::jlimit (0.0f, 1.0f, (float) pos + mLo);
+            const float a1 = juce::jlimit (0.0f, 1.0f, (float) pos + mHi);
+            if (std::abs (a1 - a0) > 1.0e-4f)
+            {
+                juce::Path span;
+                span.addCentredArc (c.x, c.y, ar, ar, 0, ang (juce::jmin (a0, a1)),
+                                    ang (juce::jmax (a0, a1)), true);
+                g.setColour (mc.withAlpha (0.22f * alpha));
+                g.strokePath (span, juce::PathStrokeType (aw * 3.0f, juce::PathStrokeType::curved,
+                                                          juce::PathStrokeType::butt));
+                g.setColour (mc.withAlpha ((mHi <= 0.0f ? 0.50f : 0.75f) * alpha));
+                g.strokePath (span, juce::PathStrokeType (aw * 1.9f, juce::PathStrokeType::curved,
+                                                          juce::PathStrokeType::butt));
+            }
+        }
+
         if (pos > 0.001f)
         {
             arc.addCentredArc (c.x, c.y, ar, ar, 0, startAngle, angle, true);
@@ -80,6 +123,30 @@ public:
             }
             g.setColour (accent.withAlpha (alpha));
             g.strokePath (arc, juce::PathStrokeType (aw, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
+
+        // ---- modulation: clamp caps and the live marker, on top of the value arc
+        if (modActive)
+        {
+            auto cap = [&] (float n)
+            {
+                juce::Path p;
+                p.addCentredArc (c.x, c.y, ar, ar, 0, ang (n) - 0.05f, ang (n) + 0.05f, true);
+                g.setColour (Theme::goldHi.withAlpha (0.95f * alpha));
+                g.strokePath (p, juce::PathStrokeType (aw * 2.1f, juce::PathStrokeType::curved,
+                                                       juce::PathStrokeType::butt));
+            };
+            if ((float) pos + mLo < -1.0e-4f)      cap (0.0f);    // modulation clamped away
+            if ((float) pos + mHi >  1.0f + 1e-4f) cap (1.0f);
+
+            const float live = juce::jlimit (0.0f, 1.0f, (float) pos + mCur);
+            const float la = ang (live);
+            const juce::Point<float> lp { c.x + ar * std::sin (la), c.y - ar * std::cos (la) };
+            const float md = juce::jmax (3.5f, aw * 1.35f);
+            g.setColour (juce::Colours::black.withAlpha (0.75f * alpha));
+            g.fillEllipse (juce::Rectangle<float> (md + 2.0f, md + 2.0f).withCentre (lp));
+            g.setColour (mc.withAlpha (alpha));
+            g.fillEllipse (juce::Rectangle<float> (md, md).withCentre (lp));
         }
 
         // ---- kit hardware (rotates about the optical centre; pressed = 1px)
@@ -541,6 +608,26 @@ public:
     {
         const int mi = macroIndex();
         if (mi != linkedMacro_) { linkedMacro_ = mi; link_.setLinked (mi); }
+
+        // MODULATION PHASE 1 — publish this parameter's modulation span onto the
+        // slider so the LookAndFeel can draw the second arc. Cheap enough to do
+        // on the editor's 15 Hz refresh; repaints only when something moved.
+        const auto span = proc_.modSpanForPath (path_);
+        auto& props = slider_.getProperties();
+        const bool wasActive = (bool) props.getWithDefault ("jmModActive", false);
+        const float lastCur = (float) props.getWithDefault ("jmModCur", 0.0);
+        if (span.active != wasActive || std::abs (span.current - lastCur) > 1.0e-4f
+            || std::abs ((float) props.getWithDefault ("jmModLo", 0.0) - span.lo) > 1.0e-4f
+            || std::abs ((float) props.getWithDefault ("jmModHi", 0.0) - span.hi) > 1.0e-4f)
+        {
+            props.set ("jmModActive", span.active);
+            props.set ("jmModLo", span.lo);
+            props.set ("jmModHi", span.hi);
+            props.set ("jmModCur", span.current);
+            props.set ("jmModColour", (juce::int64) span.colour.getARGB());
+            slider_.repaint();
+        }
+
         if (slider_.isMouseButtonDown()) return;
         slider_.setValue ((double) proc_.getParamNormalized (path_), juce::dontSendNotification);
         updateValueText();

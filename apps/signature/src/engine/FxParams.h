@@ -40,16 +40,72 @@ struct FxSpec {
     std::vector<ParamSpec> params;
 };
 
+/// The FX rack's OWN division list — the 8 entries whose integer indices are
+/// baked into every FX preset ever saved. Never reorder, never insert.
 inline const std::vector<const char*>& syncDivisions()
 {
     static const std::vector<const char*> d { "1/32", "1/16", "3/32", "1/8", "3/16", "1/4", "1/4d", "1/2" };
     return d;
 }
-/// Division length in quarter-notes.
+
+//------------------------------------------------------------------ MODULATION
+// PHASE 1: the LFOs need the full 8/1 ... 1/64 table with dotted and triplet
+// forms (spec section C), which is a SUPERSET of the FX rack's list above. Because FX
+// presets store the division as an INTEGER INDEX, the table is extended
+// APPEND-ONLY (docs/MODULATION-RESEARCH.md section 2.4 / trap 16): indices 0-7 keep
+// exactly the meaning they had, and everything new lives at 8 and above.
+// Index 30 is Vital's "Freeze" (ratio 0) — the LFO holds still.
+constexpr int kDivQuarter = 5;      // "1/4", the LFO's spec default
+constexpr int kDivFreeze  = 30;
+
+inline const std::vector<const char*>& allDivisionNames()
+{
+    static const std::vector<const char*> d {
+        // 0-7: the original FX list, frozen in place
+        "1/32", "1/16", "1/16d", "1/8", "1/8d", "1/4", "1/4d", "1/2",
+        // 8+: appended
+        "1/64", "1/64d", "1/64t", "1/32d", "1/32t", "1/16t", "1/8t", "1/4t",
+        "1/2d", "1/2t", "1/1", "1/1d", "1/1t", "2/1", "2/1d", "2/1t",
+        "4/1", "4/1d", "4/1t", "8/1", "8/1d", "8/1t", "FREEZE" };
+    return d;
+}
+
+/// Division length in quarter-notes. Index 30 (FREEZE) returns 0.
 inline double divisionBeats (int idx)
 {
-    static const double b[] = { 0.125, 0.25, 0.375, 0.5, 0.75, 1.0, 1.5, 2.0 };
-    return (idx >= 0 && idx < 8) ? b[idx] : 1.0;
+    static const double b[] = {
+        0.125, 0.25, 0.375, 0.5, 0.75, 1.0, 1.5, 2.0,
+        0.0625, 0.09375, 1.0 / 24.0, 0.1875, 1.0 / 12.0, 1.0 / 6.0, 1.0 / 3.0, 2.0 / 3.0,
+        3.0, 4.0 / 3.0, 4.0, 6.0, 8.0 / 3.0, 8.0, 12.0, 16.0 / 3.0,
+        16.0, 24.0, 32.0 / 3.0, 32.0, 48.0, 64.0 / 3.0, 0.0 };
+    constexpr int n = (int) (sizeof (b) / sizeof (b[0]));
+    return (idx >= 0 && idx < n) ? b[idx] : 1.0;
+}
+inline int numDivisions() { return (int) allDivisionNames().size(); }
+inline const char* divisionName (int idx)
+{
+    auto& d = allDivisionNames();
+    return (idx >= 0 && idx < (int) d.size()) ? d[(size_t) idx] : d[(size_t) kDivQuarter];
+}
+
+/// Musical display order for the LFO's division menu (slowest first). The stored
+/// value is always the canonical index above, so this ordering is presentation
+/// only and can change freely.
+inline const std::vector<int>& lfoDivisionOrder()
+{
+    static const std::vector<int> o {
+        27, 28, 29,   // 8/1  8/1d  8/1t
+        24, 25, 26,   // 4/1
+        21, 22, 23,   // 2/1
+        18, 19, 20,   // 1/1
+        7, 16, 17,    // 1/2
+        5, 6, 15,     // 1/4
+        3, 4, 14,     // 1/8
+        1, 2, 13,     // 1/16
+        0, 11, 12,    // 1/32
+        8, 9, 10,     // 1/64
+        30 };         // FREEZE
+    return o;
 }
 
 inline const std::array<FxSpec, kNumFxTypes>& fxRegistry()

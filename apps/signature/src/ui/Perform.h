@@ -7,6 +7,7 @@
 #pragma once
 #include "Panels.h"
 #include "Macro.h"
+#include "ModPanels.h"
 
 namespace jm {
 
@@ -1088,7 +1089,22 @@ public:
         }
         btns_[0].setClickingTogglesState (true);
         btns_[0].onClick = std::move (onKeyboard);
-        for (int i = 1; i < 4; ++i) btns_[(size_t) i].setEnabled (false);   // out of build-spec scope
+
+        // MODULATION PHASE 1 — MOD MATRIX and LFO are live now, opening as
+        // overlays in the same treatment as the macro editor and the settings
+        // window (spec §F). ARP stays a disabled placeholder: it is phase 2.
+        btns_[1].onClick = [this]
+        {
+            if (auto* h = OverlayHost::find (this))
+                h->showOverlay (std::make_unique<MatrixPanel> (proc_),
+                                MatrixPanel::kWidth, MatrixPanel::heightFor (proc_));
+        };
+        btns_[2].onClick = [this]
+        {
+            if (auto* h = OverlayHost::find (this))
+                h->showOverlay (std::make_unique<LfoPanel> (proc_), LfoPanel::kWidth, LfoPanel::kHeight);
+        };
+        btns_[3].setEnabled (false);        // ARP — phase 2, deliberately inert
     }
 
     void refresh() { repaint(); }

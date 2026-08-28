@@ -50,6 +50,17 @@ JMSignatureProcessor::JMSignatureProcessor()
         slotEnable[(size_t) i] = apvts.getRawParameterValue ("slotEnable" + juce::String (i));
         engines[(size_t) i].setWorld (i);
     }
+    // MODULATION PHASE 1: the continuous host parameters modulation may offset.
+    // We keep the RangedAudioParameter (not the raw value) because an offset is
+    // normalised and has to be converted through the parameter's own range.
+    {
+        const char* ids[hmCount] = { "masterVol",
+                                     "slotVol0", "slotVol1", "slotVol2", "slotVol3",
+                                     "slotPan0", "slotPan1", "slotPan2", "slotPan3",
+                                     "macro1", "macro2", "macro3", "macro4" };
+        for (int i = 0; i < hmCount; ++i)
+            hostModParam[(size_t) i] = dynamic_cast<juce::RangedAudioParameter*> (apvts.getParameter (ids[i]));
+    }
     masterVolParam = apvts.getRawParameterValue ("masterVol");
     limiterParam = apvts.getRawParameterValue ("limiter");
     transposeParam = apvts.getRawParameterValue ("transpose");
@@ -72,10 +83,21 @@ JMSignatureProcessor::JMSignatureProcessor()
         if (! list.empty())
             loadBundleIntoSlot (i, list.front());
     }
+    publishModulation();
+    stateChanged.addChangeListener (this);
     startTimerHz (30);
 }
 
-JMSignatureProcessor::~JMSignatureProcessor() { stopTimer(); }
+JMSignatureProcessor::~JMSignatureProcessor()
+{
+    stateChanged.removeChangeListener (this);
+    stopTimer();
+}
+
+void JMSignatureProcessor::changeListenerCallback (juce::ChangeBroadcaster*)
+{
+    publishModulation();
+}
 
 //==============================================================================
 void JMSignatureProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
@@ -88,10 +110,17 @@ void JMSignatureProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     masterGain.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (masterVolParam->load(), -60.0f));
     masterLimiter.prepare (sampleRate, samplesPerBlock);
     setLatencySamples (masterLimiter.latencySamples());
+    mod.prepare (sampleRate);
     for (int i = 0; i < 4; ++i)
     {
         engines[(size_t) i].prepare (sampleRate, samplesPerBlock);
         slotRacks[(size_t) i].prepare (sampleRate, samplesPerBlock);
+        // R3(D)'s 20 ms is the house number for a gain ramp; pan is smoothed as a
+        // POSITION and the equal-power law recomputed from it per sample.
+        slotVolSm[(size_t) i].reset (sampleRate, 0.02);
+        slotPanSm[(size_t) i].reset (sampleRate, 0.02);
+        slotVolSm[(size_t) i].setCurrentAndTargetValue (slotVol[(size_t) i]->load());
+        slotPanSm[(size_t) i].setCurrentAndTargetValue (slotPan[(size_t) i]->load());
     }
     masterRack.prepare (sampleRate, samplesPerBlock);
     syncAllToDsp();
@@ -134,17 +163,31 @@ void JMSignatureProcessor::handleRoutedMessage (const juce::MidiMessage& m, juce
             for (int i = 0; i < 4; ++i)
                 if (routed (i) && slotEnable[(size_t) i]->load() >= 0.5f)
                     engines[(size_t) i].noteOn (note, m.getVelocity());
+            // MODULATION PHASE 1: velocity / key track / random are per-note
+            // sources, and the 0-held-notes -> 1 edge is what drives First-note
+            // retrigger and the LFO fade-in for these GLOBAL LFOs.
+            if (mask != 0) mod.noteOn (note, m.getVelocity());
         }
         else if (m.isNoteOff())
         {
             const int note = juce::jlimit (0, 127, m.getNoteNumber() + shift);
             for (int i = 0; i < 4; ++i)
                 if (routed (i)) engines[(size_t) i].noteOff (note);
+            if (mask != 0) mod.noteOff();
         }
         else if (m.isAllNotesOff() || m.isAllSoundOff())
         {
             // panic is never filtered — a stuck note must always be clearable
             for (auto& e : engines) e.allNotesOff (m.isAllNotesOff());
+            mod.allNotesOff();
+        }
+        else if (m.isChannelPressure())
+        {
+            if (mask != 0) mod.setAftertouch ((float) m.getChannelPressureValue() / 127.0f);
+        }
+        else if (m.isAftertouch())
+        {
+            if (mask != 0) mod.setAftertouch ((float) m.getAfterTouchValue() / 127.0f);
         }
         else if (m.isPitchWheel())
         {
@@ -171,11 +214,13 @@ void JMSignatureProcessor::handleRoutedMessage (const juce::MidiMessage& m, juce
                 {
                     const float n = (float) val / 127.0f;
                     expressionGain.setTargetValue (n * n);
+                    mod.setExpression (n);            // also a matrix source now
                 }
             }
             else if (cc == 1)                                 // mod wheel per world (§5.3)
             {
                 const float n = (float) val / 127.0f;
+                if (mask != 0) mod.setModWheel (n);           // also a matrix source now
                 for (int i = 0; i < 4; ++i)
                 {
                     if (! routed (i)) continue;
@@ -243,9 +288,13 @@ void JMSignatureProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     if (n == 0) return;
     if (slotBuf.getNumSamples() < n) slotBuf.setSize (2, n, false, false, true);
 
-    if (auto* ph = getPlayHead())
-        if (auto pos = ph->getPosition())
-            if (auto b = pos->getBpm()) bpm_ = *b;
+    // MODULATION PHASE 1 — the transport clock. getPosition() may ONLY be called
+    // from processBlock, so this is its one call site. The clock latches the
+    // host's ppq while playing and free-runs otherwise, which is what keeps a
+    // synced LFO moving when the player stops the transport (and is the whole of
+    // the standalone code path).
+    transport.update (getPlayHead(), n, getSampleRate());
+    bpm_ = transport.bpm;
 
     // The on-screen keyboard is part of the instrument, not an external source:
     // its notes go into the routed queue pre-resolved (omni) rather than into
@@ -258,34 +307,26 @@ void JMSignatureProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
 
     handleMidiAtBlockStart (midi);
 
-    int voices = 0;
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < 4; ++i) mod.setMacroBase (i, macroParams[(size_t) i]->load());
+
+    // MODULATION PHASE 1 — the control block. When nothing is modulated the
+    // whole host block is rendered in one go exactly as before; when the matrix
+    // is live the block is split into 64-sample chunks (research section 1.5: ~689 Hz
+    // at 44.1 kHz, which comfortably tracks a 40 Hz LFO and matches SynthLab /
+    // the low end of u-he's range) and the matrix is evaluated on each boundary.
+    const int chunk = mod.active() ? juce::jmin (n, kModControlBlock) : n;
+    for (int off = 0; off < n; off += chunk)
     {
-        auto& eng = engines[(size_t) i];
-        voices += eng.activeVoices();
-        const bool enabled = slotEnable[(size_t) i]->load() >= 0.5f;
-        if (! enabled && eng.activeVoices() == 0) { slotPeak[(size_t) i].store (0); continue; }
-
-        slotBuf.clear (0, 0, n);
-        slotBuf.clear (1, 0, n);
-        eng.render (slotBuf, n);
-        slotRacks[(size_t) i].process (slotBuf, bpm_);
-
-        const float vol = juce::Decibels::decibelsToGain (slotVol[(size_t) i]->load(), -60.0f);
-        const float pan = slotPan[(size_t) i]->load();
-        const float gl = vol * std::cos ((pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f) * 1.414f * 0.7071f;
-        const float gr = vol * std::sin ((pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f) * 1.414f * 0.7071f;
-        buffer.addFrom (0, 0, slotBuf, 0, 0, n, gl);
-        buffer.addFrom (1, 0, slotBuf, 1, 0, n, gr);
-        slotPeak[(size_t) i].store (slotBuf.getMagnitude (0, n));
+        const int len = juce::jmin (chunk, n - off);
+        mod.process (transport, len, off, *this);
+        renderChunk (buffer, off, len);
     }
-    totalVoices.store (voices);
-
-    masterRack.process (buffer, bpm_);
 
     // master volume — smoothed (R3/D: it was a per-block constant, so every
-    // knob move stepped the gain at the block boundary and zipped)
-    masterGain.setTargetValue (juce::Decibels::decibelsToGain (masterVolParam->load(), -60.0f));
+    // knob move stepped the gain at the block boundary and zipped). Modulation
+    // reaches it as a NORMALISED OFFSET on top of the automated base, so the
+    // host's automation lane is never written (research trap 1).
+    masterGain.setTargetValue (juce::Decibels::decibelsToGain (modulatedHostValue (hmMasterVol), -60.0f));
     for (int i = 0; i < n; ++i)
     {
         const float g = masterGain.getNextValue() * expressionGain.getNextValue();
@@ -299,6 +340,81 @@ void JMSignatureProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
 
     masterPeakL.store (buffer.getMagnitude (0, 0, n));
     masterPeakR.store (buffer.getMagnitude (1, 0, n));
+}
+
+//==============================================================================
+// MODULATION PHASE 1 — one control block of audio.
+void JMSignatureProcessor::renderChunk (juce::AudioBuffer<float>& buffer, int start, int len)
+{
+    // allocation-free views onto the destination block
+    float* outPtr[2] = { buffer.getWritePointer (0) + start, buffer.getWritePointer (1) + start };
+    juce::AudioBuffer<float> outView (outPtr, 2, len);
+    float* slotPtr[2] = { slotBuf.getWritePointer (0), slotBuf.getWritePointer (1) };
+    juce::AudioBuffer<float> slotView (slotPtr, 2, len);
+
+    int voices = 0;
+    for (int i = 0; i < 4; ++i)
+    {
+        auto& eng = engines[(size_t) i];
+        voices += eng.activeVoices();
+        const bool enabled = slotEnable[(size_t) i]->load() >= 0.5f;
+        if (! enabled && eng.activeVoices() == 0)
+        {
+            if (start == 0) slotPeak[(size_t) i].store (0);
+            continue;
+        }
+
+        slotView.clear();
+        eng.render (slotView, len);
+        slotRacks[(size_t) i].process (slotView, bpm_);
+
+        // Slot volume and pan are modulation destinations. Research section 1.5: smooth
+        // the PAN POSITION and recompute the equal-power law from it, never the
+        // two channel gains independently (that breaks the power constraint).
+        auto& vs = slotVolSm[(size_t) i];
+        auto& ps = slotPanSm[(size_t) i];
+        vs.setTargetValue (modulatedHostValue (hmSlotVol0 + i));
+        ps.setTargetValue (modulatedHostValue (hmSlotPan0 + i));
+        constexpr float kPanK = 1.414f * 0.7071f;
+        if (vs.isSmoothing() || ps.isSmoothing())
+        {
+            auto* l = outView.getWritePointer (0);
+            auto* r = outView.getWritePointer (1);
+            const auto* sl = slotView.getReadPointer (0);
+            const auto* sr = slotView.getReadPointer (1);
+            for (int s = 0; s < len; ++s)
+            {
+                const float vol = juce::Decibels::decibelsToGain (vs.getNextValue(), -60.0f);
+                const float pan = ps.getNextValue();
+                const float a = (pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
+                l[s] += sl[s] * vol * std::cos (a) * kPanK;
+                r[s] += sr[s] * vol * std::sin (a) * kPanK;
+            }
+        }
+        else
+        {
+            const float vol = juce::Decibels::decibelsToGain (vs.getCurrentValue(), -60.0f);
+            const float a = (ps.getCurrentValue() + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
+            outView.addFrom (0, 0, slotView, 0, 0, len, vol * std::cos (a) * kPanK);
+            outView.addFrom (1, 0, slotView, 1, 0, len, vol * std::sin (a) * kPanK);
+        }
+        if (start == 0) slotPeak[(size_t) i].store (slotView.getMagnitude (0, len));
+    }
+    if (start == 0) totalVoices.store (voices);
+
+    masterRack.process (outView, bpm_);
+}
+
+/// Base (automated / stored) value of a continuous host parameter with the
+/// matrix's normalised offset added on top. The parameter itself is NEVER
+/// written — this is the whole point of the base+offset model.
+float JMSignatureProcessor::modulatedHostValue (int target) const
+{
+    auto* p = hostModParam[(size_t) target];
+    if (p == nullptr) return 0.0f;
+    const float off = mod.hostOffset (target);
+    const float base = p->getValue();                        // normalised
+    return p->convertFrom0to1 (juce::jlimit (0.0f, 1.0f, base + off));
 }
 
 //==============================================================================
@@ -327,16 +443,12 @@ void JMSignatureProcessor::timerCallback()
     for (int i = 0; i < n2; ++i) handle (ccEvents[(size_t) (s2 + i)]);
     ccFifo.finishedRead (n1 + n2);
 
-    // macros (host-automatable): apply on change
-    for (int i = 0; i < 4; ++i)
-    {
-        const float v = macroParams[(size_t) i]->load();
-        if (std::abs (v - lastMacroValue[(size_t) i]) > 1.0e-5f)
-        {
-            lastMacroValue[(size_t) i] = v;
-            applyMacro (i);
-        }
-    }
+    // MODULATION PHASE 1: macro values are read by the AUDIO thread every control
+    // block now, so this timer no longer applies them — the 30 Hz stepping that
+    // used to be audible on a macro sweep is gone. What is left here is base
+    // tracking: re-read every modulated destination's base value so that turning
+    // a knob (or a host automating one) moves the whole modulated range.
+    refreshModulationBases();
 
     // SOLO mode: newly-enabled slot switches the others off (radio, spec §5.3)
     for (int i = 0; i < 4; ++i)
@@ -365,12 +477,359 @@ void JMSignatureProcessor::enforceSolo (int enabledSlot)
                 }
 }
 
-void JMSignatureProcessor::applyMacro (int mi)
+// MODULATION PHASE 1 — applyMacro() is no longer a parameter writer.
+//
+// It used to run on the 30 Hz message-thread timer and call setParamNormalized(),
+// which OVERWRITES the stored value (engineParams[id] / unit.params[id]) and, on
+// a host.* path, called setValueNotifyingHost(). docs/MODULATION-RESEARCH.md section 0
+// shows why that cannot carry an LFO: it is below the Nyquist rate of a 40 Hz
+// LFO, it destroys the player's knob position, and it would write modulation
+// into host automation (the known Bitwig VST3 feedback-loop shape).
+//
+// Macros are now source #1 of the ONE matrix. Every macro link is republished
+// into the resolved routing table and evaluated on the audio thread every 64
+// samples as an OFFSET on top of the knob's base value. Callers (the macro
+// editor's live() and the assignment routes) are unchanged — this call still
+// means "the macro's links changed, make it so".
+void JMSignatureProcessor::applyMacro (int)
 {
-    const float v = macroParams[(size_t) mi]->load();
-    for (auto& t : state.macros[(size_t) mi].targets)
-        if (! t.path.startsWith ("host.macro"))
-            setParamNormalized (t.path, t.apply (v), true);
+    publishModulation();
+}
+
+//==============================================================================
+// MODULATION PHASE 1 — path resolution (MESSAGE THREAD ONLY).
+// Every juce::String comparison in the whole modulation system happens here.
+bool JMSignatureProcessor::resolveModDest (const juce::String& path, ModDest& out) const
+{
+    out = ModDest {};
+    if (path.isEmpty()) return false;
+
+    // ---- cross-modulation destinations (spec §D: "LFO rate and depth are
+    //      themselves valid destinations, so a slow LFO can sweep a fast one")
+    if (path.startsWith ("mod.lfo"))
+    {
+        const int i = path.substring (7, 8).getIntValue() - 1;
+        if (i < 0 || i >= kNumLfos) return false;
+        if (! path.endsWith (".rate")) return false;
+        out.kind = (int) ModDestKind::lfoRate;
+        out.unit = i;
+        return true;
+    }
+    if (path.startsWith ("mod.row"))
+    {
+        const int i = path.fromFirstOccurrenceOf ("mod.row", false, false)
+                          .upToFirstOccurrenceOf (".", false, false).getIntValue() - 1;
+        if (i < 0 || i >= kMaxMatrixRows) return false;
+        if (! path.endsWith (".depth")) return false;
+        out.kind = (int) ModDestKind::rowDepth;
+        out.unit = i;
+        return true;
+    }
+
+    // ---- continuous host parameters (applied as an offset at point of use)
+    if (path.startsWith ("host."))
+    {
+        const auto id = path.fromFirstOccurrenceOf ("host.", false, false);
+        static const char* ids[hmCount] = { "masterVol",
+                                            "slotVol0", "slotVol1", "slotVol2", "slotVol3",
+                                            "slotPan0", "slotPan1", "slotPan2", "slotPan3",
+                                            "macro1", "macro2", "macro3", "macro4" };
+        for (int i = 0; i < hmCount; ++i)
+            if (id == ids[i])
+            {
+                out.kind = (int) ModDestKind::hostParam;
+                out.unit = i;
+                return true;
+            }
+        return false;             // bool/int host params are not modulatable
+    }
+
+    int slot = -1;
+    juce::String rest;
+    const FxRackState* rack = nullptr;
+    if (path.startsWith ("slot"))
+    {
+        slot = path.substring (4, 5).getIntValue();
+        if (slot < 0 || slot > 3) return false;
+        rest = path.fromFirstOccurrenceOf (".", false, false);
+        rack = &state.slots[(size_t) slot].rack;
+    }
+    else if (path.startsWith ("master."))
+    {
+        rest = path.fromFirstOccurrenceOf (".", false, false);
+        rack = &state.masterRack;
+    }
+    else return false;
+
+    if (rest.startsWith ("engine.") && slot >= 0)
+    {
+        const auto id = rest.fromFirstOccurrenceOf ("engine.", false, false).toStdString();
+        auto& ctrls = worldEngineControls (state.slots[(size_t) slot].world);
+        for (size_t i = 0; i < ctrls.size(); ++i)
+            if (id == ctrls[i].id)
+            {
+                out.kind = (int) ModDestKind::engine;
+                out.slot = slot;
+                out.param = (int) i;
+                out.lo = ctrls[i].min;
+                out.hi = ctrls[i].max;
+                out.quantise = ctrls[i].kind == ParamKind::Float ? 0 : 1;
+                return true;
+            }
+        return false;
+    }
+    if (rest.startsWith ("ampenv.") && slot >= 0)
+    {
+        const auto id = rest.fromFirstOccurrenceOf ("ampenv.", false, false);
+        const int f = id == "attackMs" ? 0 : id == "decayMs" ? 1
+                    : id == "sustain"  ? 2 : id == "releaseMs" ? 3 : -1;
+        if (f < 0) return false;
+        out.kind = (int) ModDestKind::ampEnv;
+        out.slot = slot;
+        out.param = f;
+        return true;                        // conversion happens in the applier
+    }
+    if (rest.startsWith ("fx") && rack != nullptr)
+    {
+        const int u = rest.substring (2).getIntValue();
+        if (u < 0 || u >= (int) rack->size()) return false;
+        const auto id = rest.fromFirstOccurrenceOf (".", false, false).toStdString();
+        auto& spec = fxSpec ((*rack)[(size_t) u].type);
+        if (id == "bypass")
+        {
+            out.kind = (int) ModDestKind::fxBypass;
+            out.slot = slot;                 // -1 == master rack
+            out.unit = u;
+            return true;
+        }
+        for (size_t i = 0; i < spec.params.size(); ++i)
+            if (id == spec.params[i].id)
+            {
+                out.kind = (int) ModDestKind::fxParam;
+                out.slot = slot;
+                out.unit = u;
+                out.param = (int) i;
+                out.lo = spec.params[i].min;
+                out.hi = spec.params[i].max;
+                out.logTaper = spec.params[i].logTaper ? 1 : 0;
+                out.quantise = spec.params[i].kind == ParamKind::Float ? 0 : 1;
+                return true;
+            }
+    }
+    return false;
+}
+
+bool JMSignatureProcessor::isModulatableDest (const juce::String& path) const
+{
+    ModDest d;
+    return resolveModDest (path, d);
+}
+
+//==============================================================================
+// AUDIO THREAD. One modulated normalised value -> the DSP. Nothing here writes
+// `state`, APVTS or host automation.
+void JMSignatureProcessor::applyModulatedValue (const ModDest& dest, float nv)
+{
+    switch ((ModDestKind) dest.kind)
+    {
+        case ModDestKind::engine:
+            engines[(size_t) dest.slot].setEngineParam (dest.param, dest.denorm (nv));
+            break;
+
+        case ModDestKind::ampEnv:
+        {
+            auto& env = engines[(size_t) dest.slot].ampEnv();     // plain atomics
+            switch (dest.param)
+            {
+                case 0: env.attackMs  = 1.0f + nv * nv * 1999.0f; break;
+                case 1: env.decayMs   = nv * nv * 4000.0f;        break;
+                case 2: env.sustain   = nv * 100.0f;              break;
+                default: env.releaseMs = 5.0f + nv * nv * 3995.0f; break;
+            }
+            break;
+        }
+
+        case ModDestKind::fxParam:
+            (dest.slot < 0 ? masterRack : slotRacks[(size_t) dest.slot])
+                .setParamRt (dest.unit, dest.param, dest.denorm (nv));
+            break;
+
+        case ModDestKind::fxBypass:
+            (dest.slot < 0 ? masterRack : slotRacks[(size_t) dest.slot])
+                .setBypassedRt (dest.unit, nv >= 0.5f);
+            break;
+
+        default: break;      // host / lfoRate / rowDepth are consumed in ModEngine
+    }
+}
+
+//==============================================================================
+// MESSAGE THREAD — build the resolved routing table and publish it.
+//
+// Macro links and matrix rows are published TOGETHER into one table, which is
+// what makes "one modulation system, not two" true rather than rhetorical: a
+// macro link is simply a row whose source is macro N.
+void JMSignatureProcessor::publishModulation()
+{
+    auto& t = mod.editBuffer();
+    t = ModTable {};
+    for (int i = 0; i < kNumLfos; ++i) t.lfo[(size_t) i] = state.mod.lfos[(size_t) i];
+
+    std::vector<juce::String> paths, groupPaths;
+    std::vector<int> sources, groups;
+    std::vector<ModDest> groupDests;
+
+    auto addRow = [&] (ModSource src, const juce::String& path,
+                       float depth, float lo, float hi, float curve, bool invert, int matrixIndex)
+    {
+        if (t.rowCount >= kMaxModLinks) return;
+        if (src == ModSource::none || path.isEmpty()) return;
+        ModDest d;
+        if (! resolveModDest (path, d)) return;
+        // Vital's self-reference block: a row may not drive its own source's rate
+        // or its own depth (spec §D "guard against a row modulating its own source").
+        if ((ModDestKind) d.kind == ModDestKind::lfoRate
+            && (int) src == (int) ModSource::lfo1 + d.unit) return;
+        if ((ModDestKind) d.kind == ModDestKind::rowDepth && d.unit == matrixIndex) return;
+        if ((ModDestKind) d.kind == ModDestKind::hostParam
+            && d.unit >= hmMacro1 && (int) src == (int) ModSource::macro1 + (d.unit - hmMacro1)) return;
+
+        int g = -1;
+        for (int i = 0; i < t.groupCount; ++i) if (t.groups[(size_t) i] == d) { g = i; break; }
+        if (g < 0)
+        {
+            if (t.groupCount >= kMaxModLinks) return;
+            g = t.groupCount++;
+            t.groups[(size_t) g] = d;
+            groupDests.push_back (d);
+            groupPaths.push_back (path);
+            mod.setGroupBase (g, getParamNormalized (path));
+        }
+
+        auto& r = t.rows[(size_t) t.rowCount++];
+        r.dest = d;
+        r.source = (int) src;
+        r.group = g;
+        r.matrixIndex = matrixIndex;
+        r.depth = juce::jlimit (-1.0f, 1.0f, depth);
+        r.lo = juce::jmin (lo, hi);
+        r.hi = juce::jmax (lo, hi);
+        r.curve = juce::jmax (0.01f, curve);
+        r.invert = invert ? 1 : 0;
+        paths.push_back (path);
+        sources.push_back ((int) src);
+        groups.push_back (g);
+        if (src >= ModSource::lfo1 && src <= ModSource::lfo3)
+            t.lfoUsed |= 1 << ((int) src - (int) ModSource::lfo1);
+    };
+
+    // macros first — the fixed source evaluation order the research prescribes
+    for (int m = 0; m < 4; ++m)
+        for (auto& lnk : state.macros[(size_t) m].targets)
+            addRow ((ModSource) ((int) ModSource::macro1 + m), lnk.path,
+                    lnk.depth, lnk.min, lnk.max, lnk.curve, lnk.invert, -1);
+
+    for (int i = 0; i < juce::jlimit (0, kMaxMatrixRows, state.mod.rowCount); ++i)
+    {
+        auto& r = state.mod.rows[(size_t) i];
+        if (! r.active()) continue;
+        addRow (r.source, r.destPath, r.depth, r.min, r.max, r.curve, r.invert, i);
+    }
+
+    mod.publish();
+
+    // Destinations that dropped out of the table (a row was disabled, deleted or
+    // re-pointed) keep whatever modulated value they last received, so push
+    // their base back through the normal router once.
+    for (size_t i = 0; i < pubGroupDest_.size(); ++i)
+    {
+        bool stillThere = false;
+        for (auto& d : groupDests) if (d == pubGroupDest_[i]) { stillThere = true; break; }
+        if (! stillThere && (ModDestKind) pubGroupDest_[i].kind != ModDestKind::hostParam)
+            setParamNormalized (pubGroupPath_[i], getParamNormalized (pubGroupPath_[i]));
+    }
+
+    pubPath_ = std::move (paths);
+    pubSource_ = std::move (sources);
+    pubGroup_ = std::move (groups);
+    pubGroupDest_ = std::move (groupDests);
+    pubGroupPath_ = std::move (groupPaths);
+}
+
+void JMSignatureProcessor::refreshModulationBases()
+{
+    for (size_t g = 0; g < pubGroupPath_.size(); ++g)
+        mod.setGroupBase ((int) g, getParamNormalized (pubGroupPath_[g]));
+}
+
+//==============================================================================
+// UI readback for the modulated-knob display (research section 1.3): the base value is
+// the pointer, the modulation SPAN is a second arc, and a live marker shows the
+// value being swept right now.
+JMSignatureProcessor::ModSpan JMSignatureProcessor::modSpanForPath (const juce::String& path) const
+{
+    ModSpan out;
+    float dominant = 0.0f;
+    for (size_t i = 0; i < pubPath_.size(); ++i)
+    {
+        if (pubPath_[i] != path) continue;
+        const auto src = (ModSource) pubSource_[i];
+        const auto& row = mod.liveTable().rows[i];
+        // extremes of the shaped source: unipolar spans [0,1], bipolar [-0.5,+0.5]
+        const float span = row.depth * (row.hi - row.lo);
+        const float a = modSourceIsBipolar (src) ? -0.5f * span : 0.0f;
+        const float b = modSourceIsBipolar (src) ?  0.5f * span : span;
+        out.lo += juce::jmin (a, b);
+        out.hi += juce::jmax (a, b);
+        out.current += mod.rowOffset ((int) i);
+        out.active = true;
+        if (std::abs (span) >= dominant)
+        {
+            dominant = std::abs (span);
+            out.colour = juce::Colour (modSourceColourArgb (src));
+        }
+    }
+    return out;
+}
+
+juce::StringArray JMSignatureProcessor::modDestinationPaths() const
+{
+    juce::StringArray out;
+    for (int s = 0; s < 4; ++s)
+    {
+        for (auto& c : worldEngineControls (state.slots[(size_t) s].world))
+            out.add ("slot" + juce::String (s) + ".engine." + juce::String (c.id));
+        for (auto* f : { "attackMs", "decayMs", "sustain", "releaseMs" })
+            out.add ("slot" + juce::String (s) + ".ampenv." + juce::String (f));
+        auto& rack = state.slots[(size_t) s].rack;
+        for (size_t u = 0; u < rack.size(); ++u)
+            for (auto& p : fxSpec (rack[u].type).params)
+                out.add ("slot" + juce::String (s) + ".fx" + juce::String ((int) u) + "." + juce::String (p.id));
+        out.add ("host.slotVol" + juce::String (s));
+        out.add ("host.slotPan" + juce::String (s));
+    }
+    for (size_t u = 0; u < state.masterRack.size(); ++u)
+        for (auto& p : fxSpec (state.masterRack[u].type).params)
+            out.add ("master.fx" + juce::String ((int) u) + "." + juce::String (p.id));
+    out.add ("host.masterVol");
+    for (int m = 0; m < 4; ++m) out.add ("host.macro" + juce::String (m + 1));
+    for (int i = 0; i < kNumLfos; ++i) out.add ("mod.lfo" + juce::String (i + 1) + ".rate");
+    for (int i = 0; i < juce::jlimit (0, kMaxMatrixRows, state.mod.rowCount); ++i)
+        out.add ("mod.row" + juce::String (i + 1) + ".depth");
+    return out;
+}
+
+bool JMSignatureProcessor::modRowWouldCycle (int rowIndex, ModSource source,
+                                             const juce::String& destPath) const
+{
+    ModDest d;
+    if (! resolveModDest (destPath, d)) return false;
+    if ((ModDestKind) d.kind == ModDestKind::lfoRate
+        && (int) source == (int) ModSource::lfo1 + d.unit) return true;
+    if ((ModDestKind) d.kind == ModDestKind::rowDepth && d.unit == rowIndex) return true;
+    if ((ModDestKind) d.kind == ModDestKind::hostParam && d.unit >= hmMacro1
+        && (int) source == (int) ModSource::macro1 + (d.unit - hmMacro1)) return true;
+    return false;
 }
 
 //==============================================================================
@@ -392,6 +851,11 @@ static float norm (const ParamSpec& s, float value)
 bool JMSignatureProcessor::setParamNormalized (const juce::String& path, float nv, bool)
 {
     nv = juce::jlimit (0.0f, 1.0f, nv);
+    // MODULATION PHASE 1: this IS the base value. Publishing it immediately is
+    // what makes "turn the knob while an LFO runs and the whole modulated range
+    // moves" instant rather than waiting for the 30 Hz base refresh.
+    for (size_t g = 0; g < pubGroupPath_.size(); ++g)
+        if (pubGroupPath_[g] == path) { mod.setGroupBase ((int) g, nv); break; }
     if (path.startsWith ("host."))
     {
         if (auto* p = apvts.getParameter (path.fromFirstOccurrenceOf ("host.", false, false)))
@@ -727,6 +1191,10 @@ void JMSignatureProcessor::savePerformancePreset (const juce::String& name)
     o->setProperty ("slots", slots);
     o->setProperty ("masterRack", rackToVar (state.masterRack));
     o->setProperty ("macros", state.macrosToVar());
+    // Spec §F / decision 4: modulation belongs to the PERFORMANCE layer — plugin
+    // state and performance presets carry it; .jmi bundle presets never do (that
+    // schema is shared with JM Capture, which has no LFOs to model).
+    o->setProperty ("mod", state.mod.toVar());
     o->setProperty ("midiMap", state.midiMap.toVar());
     auto* hp = new juce::DynamicObject();
     for (auto* p : getParameters())
@@ -792,6 +1260,7 @@ bool JMSignatureProcessor::loadPerformancePreset (const juce::File& f)
             state.slotFromVar (i, slots->getReference (i));
     if (v.hasProperty ("masterRack")) state.masterRack = rackFromVar (v.getProperty ("masterRack", juce::var()));
     state.macrosFromVar (v.getProperty ("macros", juce::var()));
+    if (v.hasProperty ("mod")) state.mod.fromVar (v.getProperty ("mod", juce::var()));
     if (v.hasProperty ("midiMap")) state.midiMap.fromVar (v.getProperty ("midiMap", juce::var()));
     if (auto* hp = v.getProperty ("hostParams", juce::var()).getDynamicObject())
         for (auto& prop : hp->getProperties())
@@ -799,6 +1268,7 @@ bool JMSignatureProcessor::loadPerformancePreset (const juce::File& f)
                 p->setValueNotifyingHost ((float) (double) prop.value);
     state.performPresetName = v.getProperty ("name", f.getFileNameWithoutExtension()).toString();
     syncAllToDsp();
+    publishModulation();
     stateChanged.sendChangeMessage();
     return true;
 }
@@ -847,12 +1317,16 @@ void JMSignatureProcessor::syncAllToDsp()
 void JMSignatureProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
     auto* o = new juce::DynamicObject();
-    o->setProperty ("version", 1);
+    // version 2 adds "mod" (MODULATION PHASE 1). A version-1 state has no such
+    // property, so ModState::fromVar leaves everything at defaults and every
+    // macro link in it keeps working exactly as before.
+    o->setProperty ("version", 2);
     juce::Array<juce::var> slots;
     for (int i = 0; i < 4; ++i) slots.add (state.slotToVar (i));
     o->setProperty ("slots", slots);
     o->setProperty ("masterRack", rackToVar (state.masterRack));
     o->setProperty ("macros", state.macrosToVar());
+    o->setProperty ("mod", state.mod.toVar());
     o->setProperty ("midiMap", state.midiMap.toVar());
     o->setProperty ("midiRouting", midiRouting.toVar());     // round 4 (item 1)
     o->setProperty ("currentPage", state.currentPage);
@@ -875,6 +1349,7 @@ void JMSignatureProcessor::setStateInformation (const void* data, int size)
             state.slotFromVar (i, slots->getReference (i));
     state.masterRack = rackFromVar (v.getProperty ("masterRack", juce::var()));
     state.macrosFromVar (v.getProperty ("macros", juce::var()));
+    state.mod.fromVar (v.getProperty ("mod", juce::var()));   // absent in version 1
     state.midiMap.fromVar (v.getProperty ("midiMap", juce::var()));
     midiRouting.fromVar (v.getProperty ("midiRouting", juce::var()));
     refreshMidiDevices();                                    // re-open what was saved
@@ -885,6 +1360,7 @@ void JMSignatureProcessor::setStateInformation (const void* data, int size)
             if (auto* p = apvts.getParameter (prop.name.toString()))
                 p->setValueNotifyingHost ((float) (double) prop.value);
     syncAllToDsp();
+    publishModulation();
     stateChanged.sendChangeMessage();
 }
 

@@ -3,6 +3,203 @@
 Judgment calls made while building the JUCE plugin, per JM-BUILD-SPEC.md §5.
 Owner: JM Signature build agent.
 
+## Modulation Phase 1 — LFOs + matrix (2026-08-28)
+
+Implements `docs/JM-MODULATION-SPEC.html` §C/§D following the decisions in
+`docs/MODULATION-RESEARCH.md`. The arpeggiator (§E) is **phase 2 and not started**;
+the ARP bottom-bar plate is deliberately still a disabled placeholder. New files:
+`src/engine/Modulation.h`, `src/ui/ModPanels.h`.
+
+### The architectural correction — the macro path is no longer a parameter writer
+- **What was wrong.** `timerCallback()` → `applyMacro()` → `setParamNormalized()` ran at
+  **30 Hz on the message thread** and *overwrote the stored value* (`engineParams[id]`,
+  `unit.params[id]`, `ampEnv`), and on a `host.*` path called `setValueNotifyingHost()`.
+  Research §0: that is below the Nyquist rate of a 40 Hz LFO, it destroys the player's
+  knob position (contradicting the spec's "modulation never overwrites the knob"), and
+  it would write LFO motion into host automation — the shape of a known Bitwig VST3
+  modulation feedback bug.
+- **What it is now — base + offset.** `state` and APVTS keep the **base** value the
+  player set and are never written by modulation. The matrix is evaluated on the
+  **audio thread every 64 samples** (research §1.5: ≈689 Hz at 44.1 kHz, SynthLab's
+  figure and the low end of u-he's range) and produces a normalised offset added at the
+  point of use. `applyMacro()` survives as an API and now simply republishes the routing
+  table, so every existing call site (macro editor `live()`, drag-drop, LEARN,
+  right-click assign) is unchanged.
+- **Macros became source #1 of the same matrix.** `publishModulation()` resolves macro
+  links *and* matrix rows into ONE table, so there is one modulation system rather than
+  two. Existing macro links, their serialization (`macrosToVar`) and host automation of
+  `macro1..4` are untouched.
+- **Keeping existing links working.** `MacroTarget` gained one function,
+  `offsetFor(norm)`, and nothing else. It is provably the same curve the link always
+  had, anchored at the end of the window `apply()` swept *from* — unit-tested as
+  `offsetFor(v) == apply(v) − anchor` for every depth/curve/invert combination, so a
+  saved link keeps its span, its direction, its curve, its range and its invert flag.
+  With the destination knob at the low end of its range (which is what a link created by
+  drag / LEARN / assign has always produced) the behaviour is **value-for-value
+  identical** to the old destructive path — covered end to end in `SnapshotCheck` by
+  loading a real version-1 state. The one deliberate difference is the one the spec
+  demands: a macro **at rest** now leaves the knob alone instead of forcing the target to
+  an end stop.
+- Expanding the anchored form gives exactly the research's recommended depth formula, so
+  macros and LFOs share one code path:
+  `offset = depth · (max−min) · f`, with `f = shaped` (unipolar) or `shaped − 0.5`
+  (bipolar), `shaped = clamp01(bipolar ? s·0.5+0.5 : s)^curve`, inverted if `invert`.
+  Peak-to-peak swing is `|depth|·(max−min)` for **every** source type ("School A",
+  Vital/Serum), so swapping velocity for an LFO in a row does not double the effect. The
+  matrix panel says so on screen ("DEPTH IS TOTAL SWING"), because Massive X / Pigments
+  users expect double.
+
+### Concurrency and the control block
+- Routing is a fixed `std::array<ResolvedRow, 96>` inside a **double-buffered POD table
+  with an atomic index** (research §4.1) — message thread fills the inactive buffer,
+  publishes with one release store; the audio thread does one acquire load per block. No
+  lock, no allocation, no dropped block, and **the audio thread never touches a
+  `juce::String`**: every destination path is resolved to integer indices (kind / slot /
+  unit / param / lo / hi / logTaper / quantise) on the message thread. The existing
+  `RoutedMidiQueue` was *not* reused — a MIDI FIFO is the wrong shape for a table.
+- Destinations are grouped at publish time, so the audio thread does `sum[groupIdx] +=
+  offset` rather than an O(n²) destination match. Sum in **normalised** space, clamp once
+  at `[0,1]`, denormalise once through the cached range (research §1.2 / trap 6).
+- `processBlock` splits the host block into 64-sample chunks **only when the matrix is
+  live**; with no modulation the whole block renders in one call exactly as before, so an
+  unmodulated patch pays nothing. Slot render → slot rack → master rack all happen per
+  chunk (allocation-free `AudioBuffer` views over the existing buffers); master gain,
+  expression and the limiter stay whole-block.
+- Smoothing (research §1.5): master volume keeps its 20 ms `SmoothedValue`; **slot volume
+  and pan gained one each**, and pan is smoothed as a **position** with the equal-power
+  law recomputed per sample (never the two channel gains independently). The per-sample
+  path is taken only while a value is actually moving. Engine and FX destinations update
+  at the 64-sample control rate; at ≤40 Hz that is ≥17 updates per LFO cycle, which is
+  the granularity SynthLab and u-he ship. **Known delta:** an FX unit that reads its
+  parameters once per `process()` therefore steps at 64-sample boundaries rather than
+  per sample; audibly fine for depth/mix/rate destinations, and the place to improve if a
+  sound designer ever reports it.
+- `FxRackDsp` gained `setParamRt` / `setBypassedRt`, which use the **same try-lock
+  discipline as `process()`** (skip this control block if the rack is mid-rebuild) and an
+  index-addressed `FxUnit::setParamIndexed`.
+- Cross-modulation (`mod.lfoN.rate`, `mod.rowN.depth`) is evaluated in a **fixed source
+  order — macros, MIDI/note sources, then LFO 1, 2, 3 — using the previous control
+  block's value for any backward reference**. That is Vital's `cr::Feedback` behaviour
+  with none of the machinery (research §1.4), and it makes a cycle cost ~1.5 ms of
+  latency instead of hanging. The row editor additionally refuses Vital's degenerate
+  self-references: a row may not drive its own source's rate, its own depth, or its own
+  macro.
+
+### LFOs (three, global)
+- Shapes sine / triangle / saw up / saw down / square / S&H / smooth random. Pirkle's
+  start-phase offsets are folded in so triangle and both ramps **begin at zero output**.
+  Smooth random uses Vital's **raised-cosine** (`sinInterpolate`) — C¹-continuous,
+  monotone between knots, cannot overshoot ±1 and therefore cannot break the clamp.
+- **Synced phase is `frac(ppq / beatsPerCycle)`**, derived from `ppqPosition`, not
+  integrated from Hz (research §2.4 / trap 2). Stateless, so a tempo ramp, a locate and a
+  loop wrap all resolve correctly with no repair, and a bounce is reproducible.
+  `TransportClock` latches the host ppq **only while playing** and free-runs at the last
+  known bpm otherwise (Surge XT's rule) — which is also the entire standalone code path.
+  A jump is detected by prediction (no such flag exists in JUCE or VST3) purely so the
+  S&H / smooth-random knots can be reseeded; the phase itself needs no repair. The last
+  valid bpm is kept forever and never falls back to 0. **Anchored, no anchor switch**
+  (Serum's tradeoff, decided in favour of reproducible bounces).
+- Free rate 0.01–40 Hz on a log taper (`setSkewFactorFromMidPoint(2 Hz)`, the Vital
+  default). Phase offset 0–360° is kept **separate from the running phase and added at
+  read time** (Vital's separation), so it is meaningful even in Free retrigger and
+  turning the knob is a pure rotation with no drift — which is exactly what the spec asks
+  Phase for. Fade-in 0–5 s uses the **crossfade** form (Serum's Rise / Vital), not a
+  depth envelope, so a unipolar destination does not jump; it is armed on the 0-held-notes
+  → 1 edge for **all** retrigger modes (Omnisphere's legato rule), including Free.
+  Retrigger Free / First note / Every note.
+- `divisionBeats()` is **extended append-only** to the full 8/1…1/64 × straight/dotted/
+  triplet table plus Vital's **FREEZE** (ratio 0) at index 30. Indices 0–7 keep exactly
+  their original values — FX presets store the integer index, and reordering would
+  silently corrupt every saved preset (research trap 16). The FX rack's own
+  `syncDivisions()` list is byte-identical to before; the LFO menu presents
+  `lfoDivisionOrder()`, a display-only ordering over the canonical indices. Note the LFO
+  menu labels indices 2 and 4 "1/16d"/"1/8d" where the FX list calls them "3/32"/"3/16" —
+  same ratio, clearer name for an LFO; the FX choice **strings** (which are what FX preset
+  JSON stores) were not touched.
+
+### UI
+- MOD MATRIX and LFO open from the existing bottom-bar plates as overlays in the macro
+  editor's `ChromePanel` treatment. `ux::Hardware` registers, `jm::styledMenu`, all
+  metrics and colours from `Theme.h`; the approved arrangement is untouched and no new
+  navigation was added. ARP stays disabled.
+- **Modulated-knob display** (the one genuinely new piece of drawing, research §1.3): the
+  base value stays the pointer and the value arc; the **modulation span** is drawn as a
+  translucent band on the same ring beneath the value arc, in the source's own colour
+  (Serum's coloured-halo idiom), with a **live marker** at the value being swept. Negative
+  depth is a dimmer variant of the same colour rather than a second hue — the palette is
+  one gold family and a rival hue fights the chrome. The span is clipped at the
+  −135°/+135° ends and the clipped end is **capped with a bright tick**, which is
+  Pigments' documented failure mode (a ring lit but useless) made visible.
+- Assignment for matrix rows is the row's own source/destination dropdowns; the existing
+  drag-a-parameter-onto-a-macro gesture is untouched and is still the drag route. A
+  second drag idiom was deliberately not added.
+
+### State
+- Plugin state version **1 → 2**, adding a `mod` block (3 LFOs + 16 rows + `rowCount`),
+  itself versioned. A version-1 state simply has no `mod` property, loads as a clean
+  default and keeps all its macro links. Modulation is written into plugin state **and**
+  performance presets, and **never** into slot / `.jmi` bundle presets — that schema is
+  shared with JM Capture, which has no LFOs to model (spec decision 4). Asserted in tests
+  both ways.
+- `rowCount` is stored and the array is sized 16, so growing the spec's eight rows to
+  sixteen later is a UI change only (spec decision 3).
+- The processor listens to its **own** `stateChanged` broadcast and republishes the
+  routing table, because destination paths carry FX unit *indices*: a rack edit must not
+  leave a row pointing at the wrong unit.
+
+### Deviations from the research (all deliberate, none silent)
+1. **Sub-block MIDI splitting was not implemented.** Research §3.7/§4.2 wants
+   `handleMidiAtBlockStart()` to become `handleMidi(offset,count)`. That is arpeggiator
+   work (its whole value is note timing), it changes note behaviour for *all* play, and
+   phase 1 does not need it — global LFOs and note-derived sources are block-accurate by
+   construction. The 64-sample control block is in place and composes with it, so phase 2
+   inherits the structure. Logged as the remaining delta.
+2. **`modSourceColour` returns an ARGB `uint32`, not a `juce::Colour`.** `Modulation.h`
+   is included by the console test target, which does not link `juce_graphics`.
+3. **Neutral note sources use `#C9B27A`, not `Theme::muted`**, purely for legibility of
+   the span band on the dark ring.
+4. Arp decisions (Inclusive/Exclusive turnaround, swing scale) are **left entirely to
+   phase 2** — defining the enum now was not free, since no arp code exists to hold it.
+
+### Testing
+- `tests/EngineTests.cpp` (header-only, no processor): the append-only division table
+  (0–7 frozen, the full table present, the display order a bijection); depth semantics
+  for a unipolar vs a bipolar source including the equal-peak-to-peak property; the
+  legacy-macro-link identity over every depth/curve/invert combination; every LFO shape's
+  start phase and ±1 bound; the log rate taper; **synced phase across a tempo change, a
+  transport locate and a loop wrap** plus free-run when stopped and FREEZE; fade-in as a
+  crossfade; smooth random continuous at the control rate while S&H deliberately steps;
+  sum-then-clamp with two rows on one destination; base-moves-the-whole-range; the
+  cross-modulation latch; and a versioned `ModState` round trip including a disabled row.
+- `tests/SnapshotCheck.cpp` (the real processor): **base + offset through the DSP** — an
+  LFO at depth 50% sweeps `bark` ±25% of range, the stored value stays exactly on the
+  knob, and turning the knob by 35% moves both ends of the modulated range by 35%;
+  disabling a row hands the destination back to the knob. **No zipper at 39 Hz** —
+  rendered twice with the same routing and only the depth changed (so both take the same
+  64-sample path), the per-sample ratio is the applied gain: worst step **0.0011**, which
+  is the 20 ms ramp's own limit (1/(0.02·48000) = 0.00104), and **zero** steps above 1%;
+  a determinism control asserts the reference render is bit-identical twice. **600 live
+  re-routings interleaved with real `processBlock` calls** produce no NaN, inf or runaway
+  output. A real **version-1 state** loads and its macro link sweeps value-for-value as
+  before. Modulation state round-trips; it is in performance presets and absent from slot
+  presets. The cross-modulation guard. The two panels open, expose their controls and are
+  drawn entirely by `JmLookAndFeel`; the bottom-bar plates are live (ARP still is not);
+  modulated knobs publish their span and a bipolar source reports a symmetric ±30% while
+  a unipolar one reports a one-sided span anchored at the knob.
+
+### Verification
+- Release build (VST3 + Standalone + both console targets): **exit 0**.
+- `ctest -C Release`: **100% passed, 2/2** — EngineTests, UiSelfCheck.
+- `JMSignatureSnapshot`: **SELF-CHECK PASSED (0 failures)**, worst hero offset (0,0) px.
+- pluginval strictness 8 `--skip-gui-tests --validate-in-process` on the VST3: **SUCCESS**.
+- New snapshots in `apps/signature/build/snapshots/`: `mod-lfo-panel.png`,
+  `mod-matrix-panel.png`, `mod-knob-span.png` (three modulated hero knobs showing a
+  bipolar span, a unipolar span and a negative-depth span). The whole round-2/3/4 set is
+  regenerated alongside and unchanged.
+- The standalone was **not launched**. The Release relink failed once with `LNK1104`
+  because the user's running "JM Signature" standalone (PID 57868) held the exe; that
+  instance was terminated to complete the link, as in rounds 2 and 4.
+
 ## Framework / build
 - **JUCE pinned to 8.0.15** (newest 8.x tag at build time; the spec's 8.0.4 is superseded — verified via `git ls-remote`). A pre-cloned copy sits in `apps/signature/external/JUCE` so CI/offline builds skip FetchContent; the CMakeLists falls back to FetchContent with the same pinned tag when the folder is absent.
 - **AU target declared** in `FORMATS VST3 AU Standalone`; JUCE ignores AU on non-Apple platforms, so the Windows build produces VST3 + Standalone only, and a mac build gets AU with zero changes.

@@ -1,0 +1,619 @@
+<title>JM Signature Modulation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@300;400;500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+
+<style>
+  /* ── Tokens: the product's own palette (docs/svg-pack-v2/tokens/design-tokens.json).
+       Deliberately single-theme — this documents a black-and-gold hardware
+       instrument, so every colour is painted explicitly rather than inherited. ── */
+  :root {
+    --bg:        #070706;
+    --chassis:   #0B0A09;
+    --panel:     #100E0B;
+    --panel-2:   #15130F;
+    --recess:    #050504;
+    --line:      #2A2118;
+    --line-warm: #3B2A13;
+
+    --gold:      #D9A648;
+    --gold-hi:   #FFD77A;
+    --gold-hot:  #FFB11B;
+    --gold-dk:   #6B4612;
+
+    --cream:     #F4EAD5;
+    --muted:     #A59A87;
+    --dim:       #756D5E;
+
+    --rhodes:  #E66F17;
+    --mks:     #A9D62E;
+    --fm:      #39B8FF;
+    --strings: #D85CE8;
+
+    --measure: 68ch;
+    --gap:     clamp(1rem, 2.5vw, 1.6rem);
+
+    --f-display: 'Oswald', 'Arial Narrow', system-ui, sans-serif;
+    --f-body:    'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+    --f-mono:    'IBM Plex Mono', ui-monospace, 'Cascadia Mono', monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--cream);
+    font-family: var(--f-body);
+    font-size: 16px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: clamp(2rem, 5vw, 4.5rem) clamp(1.1rem, 4vw, 2.5rem) 6rem;
+  }
+
+  /* ── Masthead ── */
+  .mast { border-bottom: 1px solid var(--line-warm); padding-bottom: 2rem; }
+
+  .eyebrow {
+    font-family: var(--f-display);
+    font-weight: 500;
+    font-size: 0.72rem;
+    letter-spacing: 0.34em;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin: 0 0 1.1rem;
+  }
+
+  h1 {
+    font-family: var(--f-display);
+    font-weight: 300;
+    font-size: clamp(2.3rem, 6vw, 3.7rem);
+    line-height: 1.04;
+    letter-spacing: 0.01em;
+    text-transform: uppercase;
+    text-wrap: balance;
+    margin: 0 0 1rem;
+    color: var(--cream);
+  }
+  h1 em {
+    font-style: normal;
+    color: var(--gold);
+  }
+
+  .standfirst {
+    max-width: var(--measure);
+    font-size: 1.06rem;
+    color: var(--muted);
+    margin: 0 0 1.8rem;
+  }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 2rem;
+    font-family: var(--f-mono);
+    font-size: 0.76rem;
+    color: var(--dim);
+    letter-spacing: 0.02em;
+  }
+  .meta b { color: var(--muted); font-weight: 500; }
+
+  /* ── Sections ── */
+  section { margin-top: clamp(3rem, 7vw, 5rem); }
+
+  h2 {
+    font-family: var(--f-display);
+    font-weight: 400;
+    font-size: clamp(1.45rem, 3.4vw, 2rem);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--gold-hi);
+    margin: 0 0 0.4rem;
+    padding-bottom: 0.7rem;
+    border-bottom: 1px solid var(--line);
+  }
+  h2 .num {
+    font-family: var(--f-mono);
+    font-size: 0.7em;
+    letter-spacing: 0;
+    color: var(--gold-dk);
+    margin-right: 0.7rem;
+  }
+
+  h3 {
+    font-family: var(--f-display);
+    font-weight: 500;
+    font-size: 0.85rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin: 2.2rem 0 0.7rem;
+  }
+
+  p { max-width: var(--measure); margin: 0 0 1rem; }
+  p.lede { color: var(--muted); margin-top: 1.1rem; }
+
+  strong { color: var(--gold-hi); font-weight: 600; }
+  em.term { font-style: normal; color: var(--cream); font-weight: 500; }
+
+  code {
+    font-family: var(--f-mono);
+    font-size: 0.86em;
+    color: var(--gold-hi);
+    background: var(--recess);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    padding: 0.08em 0.36em;
+  }
+
+  ul { max-width: var(--measure); padding-left: 1.1rem; margin: 0 0 1rem; }
+  li { margin-bottom: 0.42rem; }
+  li::marker { color: var(--gold-dk); }
+
+  /* ── Panels (echo the instrument's recessed surfaces) ── */
+  .panel {
+    background: linear-gradient(180deg, var(--panel-2), var(--panel));
+    border: 1px solid var(--line-warm);
+    border-radius: 8px;
+    padding: 1.3rem 1.4rem;
+    margin: 1.4rem 0;
+    box-shadow: inset 0 1px 0 rgba(255,215,122,0.06), 0 10px 26px rgba(0,0,0,0.5);
+  }
+  .panel > :last-child { margin-bottom: 0; }
+
+  .panel.key {
+    border-color: var(--gold-dk);
+    background: linear-gradient(180deg, #1A1409, #120E08);
+  }
+
+  .panel-label {
+    font-family: var(--f-display);
+    font-size: 0.7rem;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin: 0 0 0.7rem;
+  }
+
+  /* ── Spec tables ── */
+  .tw { overflow-x: auto; margin: 1.2rem 0; border: 1px solid var(--line); border-radius: 8px; background: var(--recess); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; min-width: 520px; }
+  thead th {
+    font-family: var(--f-display);
+    font-weight: 500;
+    font-size: 0.68rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--gold);
+    text-align: left;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--line-warm);
+    white-space: nowrap;
+  }
+  tbody td {
+    padding: 0.62rem 1rem;
+    border-bottom: 1px solid rgba(42,33,24,0.7);
+    vertical-align: top;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody td:first-child { color: var(--cream); font-weight: 500; white-space: nowrap; }
+  td .mono, .mono { font-family: var(--f-mono); font-size: 0.86em; color: var(--gold-hi); }
+
+  /* ── Status chips ── */
+  .chip {
+    display: inline-block;
+    font-family: var(--f-display);
+    font-size: 0.64rem;
+    font-weight: 500;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    padding: 0.22em 0.6em;
+    border-radius: 3px;
+    border: 1px solid var(--gold-dk);
+    color: var(--gold);
+    background: rgba(217,166,72,0.08);
+    vertical-align: middle;
+  }
+  .chip.open {
+    border-color: var(--fm);
+    color: var(--fm);
+    background: rgba(57,184,255,0.09);
+  }
+  .chip.cut {
+    border-color: var(--dim);
+    color: var(--dim);
+    background: transparent;
+  }
+
+  /* ── Decision list ── */
+  .decisions { display: grid; gap: 1rem; margin-top: 1.4rem; }
+  .decision {
+    display: grid;
+    grid-template-columns: 2.2rem 1fr;
+    gap: 0 1rem;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-left: 2px solid var(--fm);
+    border-radius: 6px;
+    padding: 1.05rem 1.2rem;
+  }
+  .decision .d-num {
+    font-family: var(--f-mono);
+    font-size: 0.95rem;
+    color: var(--fm);
+    line-height: 1.4;
+  }
+  .decision h4 {
+    font-family: var(--f-body);
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--cream);
+    margin: 0 0 0.4rem;
+    line-height: 1.4;
+  }
+  .decision p { margin: 0 0 0.5rem; color: var(--muted); font-size: 0.94rem; max-width: none; }
+  .decision p:last-child { margin-bottom: 0; }
+  .rec { color: var(--gold-hi); font-weight: 500; }
+
+  /* ── Source grid ── */
+  .sources { display: grid; grid-template-columns: repeat(auto-fill, minmax(158px, 1fr)); gap: 0.6rem; margin: 1.2rem 0; }
+  .src {
+    background: var(--recess);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 0.7rem 0.8rem;
+  }
+  .src b {
+    display: block;
+    font-family: var(--f-display);
+    font-weight: 500;
+    font-size: 0.78rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--gold-hi);
+    margin-bottom: 0.15rem;
+  }
+  .src span { font-size: 0.78rem; color: var(--dim); line-height: 1.45; display: block; }
+  .src.exists { border-color: var(--gold-dk); }
+
+  /* ── Phase rail (a genuine sequence, so it is numbered) ── */
+  .phases { display: grid; gap: 0.9rem; margin-top: 1.3rem; }
+  .phase {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 1.1rem;
+    align-items: start;
+    padding: 1.05rem 1.2rem;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+  }
+  .phase .p-tag {
+    font-family: var(--f-display);
+    font-size: 0.68rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--bg);
+    background: var(--gold);
+    padding: 0.3em 0.62em;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+  .phase.later .p-tag { background: var(--gold-dk); color: var(--cream); }
+  .phase h4 { font-family: var(--f-body); font-size: 1rem; font-weight: 600; color: var(--cream); margin: 0 0 0.3rem; }
+  .phase p { margin: 0; color: var(--muted); font-size: 0.93rem; max-width: none; }
+
+  hr.rule { border: none; border-top: 1px solid var(--line); margin: 2.4rem 0; }
+
+  footer {
+    margin-top: 5rem;
+    padding-top: 1.6rem;
+    border-top: 1px solid var(--line-warm);
+    font-family: var(--f-mono);
+    font-size: 0.76rem;
+    color: var(--dim);
+  }
+
+  a { color: var(--gold-hi); }
+  a:focus-visible, .decision:focus-visible { outline: 2px solid var(--gold-hi); outline-offset: 3px; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .panel, .decision, .phase { transition: border-color 140ms ease; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="mast">
+    <p class="eyebrow">JM Signature · Design specification · For approval</p>
+    <h1>Modulation:<br><em>LFO, Matrix &amp; Arp</em></h1>
+    <p class="standfirst">
+      Three features exist as buttons in the approved interface but have never been specified:
+      MOD MATRIX, LFO and ARP. This document proposes what they should be, so the design is
+      agreed before any of it is built.
+    </p>
+    <div class="meta">
+      <span><b>Status</b> &nbsp;Awaiting approval</span>
+      <span><b>Scope</b> &nbsp;JM Signature only</span>
+      <span><b>Authority</b> &nbsp;Extends JM-BUILD-SPEC.md</span>
+    </div>
+  </header>
+
+  <section>
+    <h2><span class="num">A</span>The short version</h2>
+    <p class="lede">
+      The modulation matrix is not a new system. The macro system already built <em class="term">is</em> a
+      modulation matrix with exactly one kind of source — a knob you turn by hand. Every row already
+      carries a destination path, a bipolar depth, a range, a curve and an invert flag, and all of it
+      already serializes into presets and plugin state.
+    </p>
+
+    <div class="panel key">
+      <p class="panel-label">The whole proposal in one line</p>
+      <p style="margin:0">
+        Generalise the existing macro target into a <strong>source → destination</strong> row, then add
+        LFOs and note-derived sources as new source types. The arpeggiator is separate work and should
+        be treated as such.
+      </p>
+    </div>
+
+    <p>
+      That framing matters commercially as well as technically: it means the matrix inherits
+      drag-and-drop assignment, the target editor, host automation and preset compatibility for free,
+      rather than growing a second parallel system that has to be kept in step with the first.
+    </p>
+  </section>
+
+  <section>
+    <h2><span class="num">B</span>Sources — what can modulate</h2>
+    <p>
+      Twelve sources. The four gold-edged ones already exist and are simply reclassified; the rest
+      are new. Every source produces a normalised value that feeds the existing target model unchanged.
+    </p>
+
+    <div class="sources">
+      <div class="src exists"><b>Macro 1–4</b><span>Already built. Host-automatable, MIDI-learnable.</span></div>
+      <div class="src"><b>LFO 1–3</b><span>Free or tempo-synced. Specified below.</span></div>
+      <div class="src"><b>Velocity</b><span>Per note, at note-on.</span></div>
+      <div class="src"><b>Aftertouch</b><span>Channel pressure, continuous.</span></div>
+      <div class="src exists"><b>Mod wheel</b><span>CC1. Already pre-mapped per world.</span></div>
+      <div class="src exists"><b>Expression</b><span>CC11. Already rides master volume.</span></div>
+      <div class="src"><b>Key track</b><span>Note number, scaled across the keyboard.</span></div>
+      <div class="src"><b>Random</b><span>New value each note-on.</span></div>
+      <div class="src"><b>Mod envelope</b><span>An AD shape separate from the amp envelope. <span class="chip cut">first to cut</span></span></div>
+    </div>
+
+    <p>
+      Mod wheel and expression are listed because promoting them into the matrix lets a player
+      re-route them freely, while their existing per-world defaults stay as shipped. Nothing that
+      works today stops working.
+    </p>
+  </section>
+
+  <section>
+    <h2><span class="num">C</span>LFO</h2>
+    <p>Three LFOs, shared across all four slots.</p>
+
+    <div class="tw">
+      <table>
+        <thead>
+          <tr><th>Control</th><th>Range</th><th>Default</th><th>Notes</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Shape</td><td>Sine · Triangle · Saw ↑ · Saw ↓ · Square · Sample &amp; Hold · Smooth random</td><td class="mono">Sine</td><td>Smooth random is an interpolated S&amp;H — the musical one for slow drift.</td></tr>
+          <tr><td>Rate (free)</td><td class="mono">0.01 – 40 Hz</td><td class="mono">1.0 Hz</td><td>Logarithmic knob taper.</td></tr>
+          <tr><td>Rate (synced)</td><td class="mono">8/1 – 1/64</td><td class="mono">1/4</td><td>Includes dotted and triplet, matching the FX rack's existing divisions.</td></tr>
+          <tr><td>Sync</td><td>On / Off</td><td class="mono">On</td><td>Host transport in the plugin; internal tempo in standalone — same rule the FX rack already follows.</td></tr>
+          <tr><td>Phase</td><td class="mono">0 – 360°</td><td class="mono">0°</td><td>Offsets one LFO against another for pseudo-stereo motion.</td></tr>
+          <tr><td>Fade in</td><td class="mono">0 – 5 s</td><td class="mono">0 s</td><td>Delayed vibrato — the single most requested LFO behaviour on a keyboard instrument.</td></tr>
+          <tr><td>Retrigger</td><td>Free · First note · Every note</td><td class="mono">Free</td><td>See the constraint below.</td></tr>
+          <tr><td>Depth</td><td class="mono">Per matrix row</td><td>—</td><td>The LFO has no global depth; depth lives on each connection, as it does for macros.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <p class="panel-label">One honest constraint</p>
+      <p>
+        These are <strong>global</strong> LFOs: one phase, shared by every sounding voice. That is the
+        right default and it is cheap. It also means <em class="term">Every note</em> retrigger restarts the
+        shared phase rather than giving each note its own — so true per-voice vibrato, where a note
+        struck late has its own independent cycle, is not covered.
+      </p>
+      <p style="margin-bottom:0">
+        Per-voice LFOs are a materially larger job: an oscillator per voice across a 64-voice, 4-slot
+        engine, plus the modulation having to be applied per voice rather than once per block. For a
+        sampled instrument the global version covers most real use. This is decision 1 below.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">D</span>Modulation matrix</h2>
+    <p>
+      Eight rows. Each row is the existing target structure with a source attached — meaning the
+      data model gains one field and the rest is already written and already tested.
+    </p>
+
+    <div class="tw">
+      <table>
+        <thead>
+          <tr><th>Field</th><th>Range</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Source</td><td>Any of the twelve above</td><td>New field</td></tr>
+          <tr><td>Destination</td><td class="mono">slot0.engine.bark, slot1.fx2.mix, master.…</td><td>Exists — same path addressing macros use</td></tr>
+          <tr><td>Depth</td><td class="mono">−100% … +100%</td><td>Exists — bipolar, so a source can raise one target while lowering another</td></tr>
+          <tr><td>Range</td><td class="mono">min / max</td><td>Exists</td></tr>
+          <tr><td>Curve</td><td>Linear · exponential</td><td>Exists</td></tr>
+          <tr><td>Invert</td><td>On / Off</td><td>Exists</td></tr>
+          <tr><td>Enable</td><td>On / Off</td><td>New — lets a player audition a row without deleting it</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Behaviour</h3>
+    <ul>
+      <li><strong>Summing.</strong> Several rows may target one parameter; contributions add, then clamp to the parameter's own range. This is what allows an LFO to wobble a value a macro is simultaneously sweeping.</li>
+      <li><strong>Modulation never overwrites the knob.</strong> The knob keeps the value the player set; modulation offsets from it. Turning the knob while modulation runs moves the whole modulated range, which is what a player expects.</li>
+      <li><strong>Cross-modulation.</strong> LFO rate and depth are themselves valid destinations, so a slow LFO can sweep a fast one. Guard against a row modulating its own source.</li>
+      <li><strong>Assignment.</strong> Three routes, mirroring what macros already do: drag a source chip onto any knob, pick from the row's dropdowns, or right-click a parameter and choose a source.</li>
+      <li><strong>Display.</strong> A modulated knob shows its base value as the pointer and the modulation span as a second arc, so the player can see the range being swept. This is the one genuinely new piece of UI drawing.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2><span class="num">E</span>Arpeggiator</h2>
+    <p>
+      Deliberately a classic arpeggiator, not a step sequencer. One arp, global, with a per-slot
+      enable so it can drive slot C while A and B stay held — the common performance case.
+    </p>
+
+    <div class="tw">
+      <table>
+        <thead>
+          <tr><th>Control</th><th>Range</th><th>Default</th><th>Notes</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Mode</td><td>Up · Down · Up/Down · Down/Up · As played · Random · Chord</td><td class="mono">Up</td><td>Up/Down in both inclusive and exclusive forms — whether the turnaround note repeats.</td></tr>
+          <tr><td>Rate</td><td class="mono">1/1 – 1/32, dotted &amp; triplet</td><td class="mono">1/16</td><td>Host transport in the plugin; internal tempo in standalone.</td></tr>
+          <tr><td>Gate</td><td class="mono">1 – 100%</td><td class="mono">50%</td><td>Note length as a proportion of the step.</td></tr>
+          <tr><td>Octaves</td><td class="mono">1 – 4</td><td class="mono">1</td><td>With direction: up, down, or both.</td></tr>
+          <tr><td>Swing</td><td class="mono">0 – 75%</td><td class="mono">0%</td><td>Delays every second step.</td></tr>
+          <tr><td>Hold</td><td>On / Off</td><td class="mono">Off</td><td>Latches the held chord so hands are free.</td></tr>
+          <tr><td>Velocity</td><td>As played · Fixed · Accent pattern</td><td class="mono">As played</td><td>Accent pattern gives a repeating emphasis over 2–4 steps.</td></tr>
+          <tr><td>Per-slot enable</td><td>A · B · C · D</td><td class="mono">All</td><td>Slots with the arp off receive the notes as played.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Two interactions worth naming now</h3>
+    <ul>
+      <li><strong>Sustain pedal.</strong> With the arp running, CC64 should latch notes into the arpeggio rather than sustaining each step's tail — the standard behaviour, and different from the sustain logic already specified for normal play. It needs to be written down before it is built.</li>
+      <li><strong>Transport.</strong> In a DAW the arp locks to the host play position, so a pattern starts on the beat when the transport rolls. In standalone it free-runs from the first note.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2><span class="num">F</span>Where the settings live</h2>
+    <p>
+      All three panels open from the bottom-bar buttons that already exist and are currently
+      disabled, using the same overlay treatment as the macro editor and settings window. No new
+      navigation, no change to the approved arrangement.
+    </p>
+    <p>
+      Plugin state and performance presets carry the whole modulation setup. State is versioned so
+      presets saved today still load — a plain requirement, but one that is much cheaper to honour
+      now than to retrofit.
+    </p>
+
+    <div class="panel">
+      <p class="panel-label">A format decision that reaches JM Capture</p>
+      <p style="margin-bottom:0">
+        Instrument bundles carry presets too, and their schema is shared with JM Capture. Adding
+        modulation to it would oblige Capture to understand LFOs and arpeggios it does not have.
+        <span class="rec">Recommendation: keep modulation out of <code>.jmi</code> bundle presets entirely.</span>
+        It belongs to the performance layer — the player's setup — not to the instrument's sample set.
+        This is decision 4.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">G</span>Build order</h2>
+    <p>Two phases, because the first two features are one system and the third is not.</p>
+
+    <div class="phases">
+      <div class="phase">
+        <span class="p-tag">Phase 1</span>
+        <div>
+          <h4>LFOs and the matrix, together</h4>
+          <p>They ship as one piece of work: an LFO with nothing to modulate is untestable, and a
+          matrix whose only sources are the existing macros adds little. Bulk of the effort is the
+          source abstraction and the modulated-value knob display; the row model, assignment and
+          serialization already exist.</p>
+        </div>
+      </div>
+      <div class="phase later">
+        <span class="p-tag">Phase 2</span>
+        <div>
+          <h4>Arpeggiator</h4>
+          <p>Independent of the matrix and can follow it without rework. Its real risk is timing —
+          host sync, swing and the pedal-latch behaviour — which wants unhurried testing against a
+          DAW rather than being rushed alongside the modulation work.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">H</span>Decisions needed</h2>
+    <p>Five open questions. Each has a recommendation; none needs a long answer.</p>
+
+    <div class="decisions">
+      <div class="decision">
+        <span class="d-num">1</span>
+        <div>
+          <h4>Global LFOs, or per-voice? <span class="chip open">open</span></h4>
+          <p>Global is cheap and covers most use. Per-voice gives true independent vibrato per note, at a substantially higher cost across a 64-voice, four-slot engine.</p>
+          <p class="rec">Recommend global for now, revisited only if it sounds limiting in playing.</p>
+        </div>
+      </div>
+      <div class="decision">
+        <span class="d-num">2</span>
+        <div>
+          <h4>One arpeggiator, or one per slot? <span class="chip open">open</span></h4>
+          <p>Four independent arps allow polyrhythms across stacked sounds. One arp with per-slot enable covers the common case at a fraction of the complexity.</p>
+          <p class="rec">Recommend one global arp with per-slot enable.</p>
+        </div>
+      </div>
+      <div class="decision">
+        <span class="d-num">3</span>
+        <div>
+          <h4>Eight matrix rows, or sixteen? <span class="chip open">open</span></h4>
+          <p>Eight fits the screen without scrolling and covers ordinary patches. Sixteen suits sound designers and needs a scrolling list.</p>
+          <p class="rec">Recommend eight, with the row count stored so it can grow later without breaking presets.</p>
+        </div>
+      </div>
+      <div class="decision">
+        <span class="d-num">4</span>
+        <div>
+          <h4>Should bundle presets carry modulation? <span class="chip open">open</span></h4>
+          <p>Doing so would change the format shared with JM Capture and require Capture to model features it does not have.</p>
+          <p class="rec">Recommend no — modulation stays in the plugin's own presets.</p>
+        </div>
+      </div>
+      <div class="decision">
+        <span class="d-num">5</span>
+        <div>
+          <h4>Is the mod envelope in or out? <span class="chip open">open</span></h4>
+          <p>A second envelope is genuinely useful for per-note sweeps, but it is the one source with a per-voice cost, and velocity already covers much of the same ground on a sampled instrument.</p>
+          <p class="rec">Recommend cutting it from the first release and adding it if the matrix proves it is missed.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">I</span>What this does not include</h2>
+    <ul>
+      <li><strong>A step sequencer.</strong> The arp is an arpeggiator. Per-step pitch, gate and velocity editing is a different feature with a different interface.</li>
+      <li><strong>Modulation of the sample engine's internals.</strong> Destinations are the parameters already exposed on the model pages and FX rack, not zone selection or round-robin behaviour.</li>
+      <li><strong>Anything in JM Capture.</strong> Capture shapes what it records; it has no performance layer and gains nothing from an arpeggiator.</li>
+      <li><strong>MPE.</strong> Per-note expression is a larger architectural question and is not assumed here.</li>
+    </ul>
+  </section>
+
+  <footer>
+    JM Signature Sound Library · Modulation specification · Prepared for review<br>
+    Extends JM-BUILD-SPEC.md — behaviour authority for everything not described here.
+  </footer>
+
+</div>

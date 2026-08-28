@@ -3,7 +3,7 @@ import { midiToNoteName } from '@jm/jmi-format/web';
 import { clearTake, serializeSession, takeKey, windowLayers } from './guidedUtil';
 import { useApp } from '../../state/appStore';
 import { bridge, services } from '../../state/services';
-import { Button, Panel } from '../common';
+import { Button, Panel, Toggle } from '../common';
 import { ArcMeter } from './ArcMeter';
 import { LedMeter } from './LedMeter';
 import { ProgressMap } from './ProgressMap';
@@ -15,6 +15,9 @@ export function GuidedScreen() {
   const verdict = useApp((s) => s.verdict);
   const cc64 = useApp((s) => s.cc64Warning);
   const rrOutlier = useApp((s) => s.rrOutlier);
+  const noteGate = useApp((s) => s.noteGate);
+  const pitchWarning = useApp((s) => s.pitchWarning);
+  const pitchCheck = useApp((s) => s.pitchCheck);
 
   useEffect(() => {
     if (!session) return;
@@ -36,6 +39,14 @@ export function GuidedScreen() {
     const t = setTimeout(() => useApp.getState().setCc64Warning(false), 4000);
     return () => clearTimeout(t);
   }, [cc64]);
+
+  // The note-gate coaching outlives the verdict flash a little, because the
+  // "play it again to switch" offer has its own 4 s confirmation window.
+  useEffect(() => {
+    if (!noteGate) return;
+    const t = setTimeout(() => useApp.getState().setNoteGate(null), 4500);
+    return () => clearTimeout(t);
+  }, [noteGate]);
 
   if (!session) return null;
   const layers = windowLayers(session);
@@ -106,7 +117,66 @@ export function GuidedScreen() {
               </div>
             </div>
           )}
+          {/* Layer 1 — note gate. Corrections instruct: the gold/cream
+              coaching register, never warning-red (design law). */}
+          {noteGate && (
+            <div className="jm-coach-detail">
+              You played <span className="played">{midiToNoteName(noteGate.played)}</span> · nothing was
+              recorded
+            </div>
+          )}
+          {noteGate?.switchOffered && (
+            <div className="jm-coach-switch">
+              <span className="note">{midiToNoteName(noteGate.played)}</span> is in this session — play it
+              again to switch
+            </div>
+          )}
+          <div className="jm-row" style={{ gap: 'calc(var(--jm-size-gap-unit) * 1.5)' }}>
+            <Toggle
+              checked={pitchCheck.enabled}
+              onChange={(on) => useApp.getState().setPitchCheck({ enabled: on })}
+              label="Pitch check"
+            />
+          </div>
           {cc64 && <div className="jm-warning">Sustain pedal detected — release CC64 for clean takes</div>}
+          {/* Layer 2 — audio pitch verification. A warning, never a block. */}
+          {pitchWarning && pitchWarning.source === 'guided' && (
+            <div
+              className={`jm-warning stack${pitchWarning.firstOfSession || pitchWarning.trendMessage ? ' prominent' : ''}`}
+            >
+              <div className="jm-warning-title">
+                {pitchWarning.firstOfSession ? 'First take — pitch check' : 'Pitch check'} ·{' '}
+                {midiToNoteName(pitchWarning.note)} · Layer {pitchWarning.layer} · Take {pitchWarning.rr}
+              </div>
+              <div>{pitchWarning.message}</div>
+              {pitchWarning.trendMessage && (
+                <div className="jm-warning-strong">{pitchWarning.trendMessage}</div>
+              )}
+              <div className="jm-row" style={{ gap: 'var(--jm-size-gap-unit)' }}>
+                <Button
+                  compact
+                  onClick={() => {
+                    void redoCell(pitchWarning.note, pitchWarning.layer);
+                    useApp.getState().setPitchWarning(null);
+                  }}
+                >
+                  Retake
+                </Button>
+                <Button compact onClick={() => useApp.getState().setPitchWarning(null)}>
+                  Keep Take
+                </Button>
+                <Button
+                  compact
+                  onClick={() => {
+                    useApp.getState().setPitchCheck({ enabled: false });
+                    useApp.getState().setPitchWarning(null);
+                  }}
+                >
+                  Stop Checking
+                </Button>
+              </div>
+            </div>
+          )}
           {rrOutlier && (
             <div className="jm-warning">
               {midiToNoteName(rrOutlier.note)} takes exceed 3 dB spread — retake {rrOutlier.rr}?{' '}

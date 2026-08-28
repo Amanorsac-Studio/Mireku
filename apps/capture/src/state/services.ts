@@ -4,9 +4,10 @@
  */
 
 import type { Preset } from '@jm/jmi-format/web';
-import { buildDefaultRack } from '@jm/jmi-format/web';
+import { buildDefaultRack, midiToNoteName } from '@jm/jmi-format/web';
 import { AutoModeEngine, measureLatencyMs } from '../engine/autoMode';
 import { audioIo, realClock, WebAudioCapturePort } from '../engine/audioIo';
+import { dbToLin } from '../engine/dsp/level';
 import { buildExportManifest, buildInstrument, defaultPreset } from '../engine/export';
 import { FxRack } from '../engine/fx/rack';
 import { registerJmWorklets } from '../engine/fx/worklets';
@@ -68,6 +69,8 @@ class Services {
   voices: VoiceManager | null = null;
   rack: FxRack | null = null;
   meterPoll: ReturnType<typeof setInterval> | null = null;
+  /** true once the audible bus has been pointed at the persisted output device */
+  private outputRouted = false;
   liveMeterValue = 0;
   liveVelocity = 0;
 
@@ -79,9 +82,13 @@ class Services {
     await registerJmWorklets(audioIo.ctx);
     if (!this.rack) {
       this.rack = new FxRack(audioIo.ctx);
-      this.rack.output.connect(audioIo.ctx.destination);
+      // everything audible leaves through the output bus, never ctx.destination,
+      // so the user's chosen playback device applies to audition, loop audition,
+      // the FX rack and every test tone alike
+      this.rack.output.connect(audioIo.output);
       this.rack.setTempo(useApp.getState().tempo);
     }
+    await this.applyOutputRouting();
     if (!this.sink) {
       this.sink = new WebAudioVoiceSink(audioIo.ctx);
       this.sink.output.connect(this.rack.input);
@@ -90,6 +97,24 @@ class Services {
   }
 
   /* ---------------- devices / settings ---------------- */
+
+  /**
+   * Point the audible bus at the persisted output device and set the monitor
+   * send. Idempotent, so it is safe to call on every ensureAudio().
+   */
+  private async applyOutputRouting(): Promise<void> {
+    const d = useApp.getState().devices;
+    if (!this.outputRouted || audioIo.outputDeviceId !== d.audioOutputId) {
+      try {
+        await audioIo.setOutputDevice(d.audioOutputId);
+        this.outputRouted = true;
+      } catch {
+        /* a device that vanished mid-session: stay on the default rather than
+           losing audition entirely; the panel's re-scan will show it gone */
+      }
+    }
+    audioIo.setMonitor(d.monitorEnabled, dbToLin(d.monitorLevelDb));
+  }
 
   /**
    * Restore the persisted device selection at startup and point the MIDI
@@ -137,6 +162,10 @@ class Services {
     if (!busy && audioIo.inputOpen && !audioIo.matchesInput(next.audioInputId, next.audioInputChannels)) {
       await audioIo.openInput(next.audioInputId, next.audioInputChannels);
     }
+
+    // Output and monitoring apply immediately and unconditionally — neither
+    // touches the capture graph, so neither has to wait for a take to finish.
+    if (audioIo.ctx) await this.applyOutputRouting();
 
     const session = app.session;
     if (session) {
@@ -210,7 +239,43 @@ class Services {
         },
         onCc64Warning: () => useApp.getState().setCc64Warning(true),
         onRrOutlier: (note, layer, rr) => useApp.getState().setRrOutlier({ note, layer, rr }),
+        // Layer 1 — the note gate. Nothing was recorded; coach and re-arm.
+        onWrongNote: (info) => {
+          const app2 = useApp.getState();
+          app2.setVerdict({
+            kind: 'coaching',
+            text: `WRONG NOTE — PLAY ${midiToNoteName(info.expected)}`,
+            at: Date.now(),
+          });
+          app2.setNoteGate({ ...info, at: Date.now() });
+        },
+        onNoteSwitched: (pos) => {
+          const app2 = useApp.getState();
+          app2.setNoteGate(null);
+          app2.setVerdict({
+            kind: 'accepted',
+            text: `SWITCHED TO ${midiToNoteName(pos.note)}`,
+            at: Date.now(),
+          });
+        },
+        // Layer 2 — pitch verification of an accepted take (warning only).
+        onPitchReport: (report) => {
+          const { verdict, trend } = report;
+          useApp.getState().setPitchWarning({
+            source: 'guided',
+            message: verdict.message,
+            trendMessage: trend.message,
+            note: report.position.note,
+            layer: report.position.layer,
+            rr: report.position.rr,
+            cents: verdict.cents,
+            confidence: verdict.confidence,
+            firstOfSession: report.firstOfSession,
+            at: Date.now(),
+          });
+        },
       },
+      { pitchCheck: () => useApp.getState().pitchCheck },
     );
     app.setGuidedPosition(this.guided.getPosition());
 
@@ -265,7 +330,12 @@ class Services {
     }, capture);
     app.setAuto({ message: `Latency ${latencyMs.toFixed(1)} ms — sequencing…` });
 
-    this.autoEngine = new AutoModeEngine(midiOut, capture, realClock, { latencyMs }, {
+    const pitch = useApp.getState().pitchCheck;
+    this.autoEngine = new AutoModeEngine(midiOut, capture, realClock, {
+      latencyMs,
+      pitchCheckTakes: pitch.enabled ? undefined : 0,
+      pitchToleranceCents: pitch.toleranceCents,
+    }, {
       onPosition: (pos: SessionPosition) => useApp.getState().setAuto({ position: pos }),
       onTake: (take, processed) => {
         void bridge.writeTake(
@@ -286,6 +356,22 @@ class Services {
       },
       onNote: (msg) => useApp.getState().setAuto({ message: msg }),
       onSoundTypeDetected: (t) => useApp.getState().setAuto({ message: `Detected: ${t}` }),
+      // The app sent the note — if the audio that came back is a fixed
+      // interval away, the rig is transposed and the whole run is wrong.
+      onPitchAlert: (alert) => {
+        useApp.getState().setPitchWarning({
+          source: 'auto',
+          message: alert.verdict.message,
+          trendMessage: alert.trend.message,
+          note: alert.position.note,
+          layer: alert.position.layer,
+          rr: alert.position.rr,
+          cents: alert.verdict.cents,
+          confidence: alert.verdict.confidence,
+          firstOfSession: alert.checked === 1,
+          at: Date.now(),
+        });
+      },
     });
     const final = await this.autoEngine.run(session);
     useApp.getState().setSession(final);
@@ -365,7 +451,7 @@ class Services {
     src.loop = true;
     src.loopStart = take.loop.startSample / cached.sampleRate;
     src.loopEnd = take.loop.endSample / cached.sampleRate;
-    src.connect(this.rack ? this.rack.input : ctx.destination);
+    src.connect(this.rack ? this.rack.input : audioIo.output);
     src.start();
     // attack → loop ×4 → stop
     const loopDur = src.loopEnd - src.loopStart;

@@ -22,6 +22,8 @@ export interface SimOptions {
   jitter?: boolean;
   channels?: number;
   latencySec?: number;
+  /** the rig is transposed: every returned note sounds this many semitones off */
+  transposeSemitones?: number;
 }
 
 export class SimulatedInstrument implements MidiOut, CapturePort, ClockPort {
@@ -40,6 +42,7 @@ export class SimulatedInstrument implements MidiOut, CapturePort, ClockPort {
       jitter: opts.jitter ?? false,
       channels: opts.channels ?? 2,
       latencySec: opts.latencySec ?? 0,
+      transposeSemitones: opts.transposeSemitones ?? 0,
     };
     this.sampleRate = this.opts.sampleRate;
   }
@@ -100,7 +103,8 @@ export class SimulatedInstrument implements MidiOut, CapturePort, ClockPort {
       }
       const detune = this.opts.jitter ? 1 + (this.random() - 0.5) * 0.006 : 1;
       const gainJit = this.opts.jitter ? 1 + (this.random() - 0.5) * 0.12 : 1;
-      const freq = 440 * Math.pow(2, (ev.note - 69) / 12) * detune;
+      const sounding = ev.note + this.opts.transposeSemitones;
+      const freq = 440 * Math.pow(2, (sounding - 69) / 12) * detune;
       const amp = (ev.velocity / 127) * 0.8 * gainJit;
       const noteStart = ev.tSec + lat;
 

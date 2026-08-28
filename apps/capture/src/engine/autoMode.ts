@@ -9,6 +9,14 @@
 import type { SoundType } from '@jm/jmi-format/web';
 import { AUTO_MODE_VELOCITIES } from '@jm/jmi-format/web';
 import { nullTestDb } from './dsp/level';
+import {
+  DEFAULT_PITCH_TOLERANCE_CENTS,
+  pitchTrend,
+  verifyTakePitch,
+  type PitchObservation,
+  type PitchTrend,
+  type PitchVerdict,
+} from './dsp/pitch';
 import { findSilenceEnd, HARD_CAP_S } from './dsp/silence';
 import { detectSoundType, processCapture, SUSTAIN_HOLD_S, type ProcessedTake } from './processing';
 import type { SessionPosition, SessionState, TakeRecord } from './session';
@@ -43,6 +51,22 @@ export interface ClockPort {
   wait(ms: number): Promise<void>;
 }
 
+/**
+ * Auto Mode's pitch alarm. The app sends A3; if the hardware synth is
+ * transposed (or the wrong patch is up) EVERY returned sample is wrong by a
+ * fixed interval — and an unattended two-hour run would find out far too late.
+ * The first few takes are verified and the result surfaced; the run is never
+ * stopped by the engine itself, the operator decides (§3.4).
+ */
+export interface AutoPitchAlert {
+  verdict: PitchVerdict;
+  trend: PitchTrend;
+  position: SessionPosition;
+  /** how many of the checked takes have come back off-pitch */
+  offCount: number;
+  checked: number;
+}
+
 export interface AutoModeCallbacks {
   onPosition?(pos: SessionPosition): void;
   onTake?(take: TakeRecord, processed: ProcessedTake): void;
@@ -50,6 +74,8 @@ export interface AutoModeCallbacks {
   onNote?(msg: string): void;
   /** persist snapshot after every accepted take */
   onSnapshot?(state: SessionState): void;
+  /** a verified take did not sound like the note that was sent */
+  onPitchAlert?(alert: AutoPitchAlert): void;
 }
 
 export interface AutoModeOptions {
@@ -62,10 +88,16 @@ export interface AutoModeOptions {
   settleMs?: number;
   /** cap for each raw capture (s) */
   captureCapS?: number;
+  /** verify the returned audio's pitch on the first N takes (0 disables) */
+  pitchCheckTakes?: number;
+  /** deviation from the sent note tolerated before alerting (cents) */
+  pitchToleranceCents?: number;
 }
 
 export const SETTLE_MS = 500;
 export const DECAYING_NOTE_OFF_S = 2;
+/** Enough takes to tell a transposed rig from one odd unpitched sample. */
+export const AUTO_PITCH_CHECK_TAKES = 4;
 
 /**
  * Measure round-trip latency: the caller sends a ping (short MIDI note or
@@ -132,6 +164,7 @@ export class AutoModeEngine {
         s = acceptTake(s, take);
         this.cb.onTake?.(take, processed);
         this.cb.onSnapshot?.(s);
+        this.verifyPitch(processed.channels, pos);
 
         // Smart RR: after the last planned RR of a cell, null-test the takes.
         s = await this.maybeSmartRr(s, pos, processed);
@@ -210,6 +243,51 @@ export class AutoModeEngine {
       acceptedAt: new Date().toISOString(),
     };
     return { take, processed };
+  }
+
+  private pitchChecked = 0;
+  private pitchOff = 0;
+  private pitchHistory: PitchObservation[] = [];
+
+  /** Confident pitch observations from the verified head of the run. */
+  getPitchHistory(): readonly PitchObservation[] {
+    return this.pitchHistory;
+  }
+
+  /**
+   * Verify the first few returned takes against the note that was SENT.
+   * Analysis only — it never alters the audio, and it never stops the run.
+   */
+  private verifyPitch(channels: Float32Array[], pos: SessionPosition): void {
+    const budget = this.opts.pitchCheckTakes ?? AUTO_PITCH_CHECK_TAKES;
+    if (budget <= 0 || this.pitchChecked >= budget) return;
+    this.pitchChecked++;
+    let verdict: PitchVerdict;
+    try {
+      verdict = verifyTakePitch(channels, this.capture.sampleRate, pos.note, {
+        toleranceCents: this.opts.pitchToleranceCents ?? DEFAULT_PITCH_TOLERANCE_CENTS,
+      });
+    } catch {
+      return;
+    }
+    if (verdict.status === 'unknown') return; // unpitched source — say nothing
+    this.pitchHistory.push({
+      note: pos.note,
+      semitones: verdict.semitones ?? 0,
+      cents: verdict.cents ?? 0,
+      confidence: verdict.confidence,
+    });
+    if (verdict.status !== 'off') return;
+    this.pitchOff++;
+    const trend = pitchTrend(this.pitchHistory);
+    this.cb.onNote?.(verdict.message);
+    this.cb.onPitchAlert?.({
+      verdict,
+      trend,
+      position: pos,
+      offCount: this.pitchOff,
+      checked: this.pitchChecked,
+    });
   }
 
   private lastProcessed = new Map<string, ProcessedTake>();

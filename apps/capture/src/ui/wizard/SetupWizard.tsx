@@ -78,7 +78,15 @@ export function SetupWizard() {
     await bridge.saveSession(config.id, serializeSession(session));
     setSession(session);
     // the wizard's picks become the remembered app-wide selection
-    await services.applyDevices({ audioInputId, audioInputChannels, midiInputId, midiOutputId });
+    // output device and monitoring are app-wide settings the wizard does not
+    // ask about (they live in the Devices panel) — carry them through unchanged
+    await services.applyDevices({
+      ...useApp.getState().devices,
+      audioInputId,
+      audioInputChannels,
+      midiInputId,
+      midiOutputId,
+    });
     setScreen(mode === 'guided' ? 'guided' : 'loopback');
   };
 
@@ -149,7 +157,7 @@ export function SetupWizard() {
                 value={mode}
                 onChange={(vv) => setMode(vv)}
                 options={[
-                  { value: 'guided', label: 'Guided — James plays' },
+                  { value: 'guided', label: 'Guided — you play' },
                   { value: 'auto', label: 'Auto — app plays via MIDI out' },
                 ]}
               />

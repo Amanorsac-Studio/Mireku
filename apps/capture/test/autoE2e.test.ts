@@ -10,7 +10,12 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterAll, describe, expect, it } from 'vitest';
 import { encodeWav, validateBundle } from '@jm/jmi-format';
-import { AutoModeEngine, measureLatencyMs } from '../src/engine/autoMode';
+import {
+  AUTO_PITCH_CHECK_TAKES,
+  AutoModeEngine,
+  measureLatencyMs,
+  type AutoPitchAlert,
+} from '../src/engine/autoMode';
 import { buildExportManifest } from '../src/engine/export';
 import { createSession, isComplete, planFromRange, type SessionConfig, type SessionState } from '../src/engine/session';
 import type { ProcessedTake } from '../src/engine/processing';
@@ -152,5 +157,60 @@ describe('Auto Mode end-to-end (§3.4 + §3.7 + §7)', () => {
     const final = await engine2.run(partial);
     expect(isComplete(final)).toBe(true);
     expect(Object.keys(final.takes).length).toBe(8);
+  }, 30000);
+
+  it('an in-tune rig raises no pitch alert', async () => {
+    const sim = new SimulatedInstrument({ sampleRate: SR, mode: 'decaying', jitter: true });
+    const session = createSession(makeConfig({ plan: planFromRange(60, 60, 3, 1) }));
+    const alerts: AutoPitchAlert[] = [];
+    const engine = new AutoModeEngine(sim, sim, sim, { captureCapS: 6 }, {
+      onPitchAlert: (a) => alerts.push(a),
+    });
+    await engine.run(session);
+    expect(alerts).toEqual([]);
+  }, 30000);
+
+  it('a transposed rig is caught on the head of the run, not after two hours', async () => {
+    // The app sends C4 but the synth is an octave up — every returned sample
+    // would be wrong by a fixed interval (§3.4).
+    const sim = new SimulatedInstrument({
+      sampleRate: SR,
+      mode: 'decaying',
+      jitter: true,
+      transposeSemitones: 12,
+    });
+    const session = createSession(makeConfig({ plan: planFromRange(60, 60, 3, 1) }));
+    const alerts: AutoPitchAlert[] = [];
+    const engine = new AutoModeEngine(sim, sim, sim, { captureCapS: 6 }, {
+      onPitchAlert: (a) => alerts.push(a),
+    });
+    const final = await engine.run(session);
+
+    expect(alerts.length).toBeGreaterThan(0);
+    expect(alerts[0].position.rr).toBe(1);
+    expect(alerts[0].verdict.issue).toBe('octave');
+    expect(alerts[0].verdict.semitones).toBe(12);
+    // the alert lands within the first few takes, not at the end of the run
+    expect(alerts[0].checked).toBeLessThanOrEqual(AUTO_PITCH_CHECK_TAKES);
+    const trend = alerts[alerts.length - 1].trend;
+    expect(trend.consistentSemitones).toBe(12);
+    expect(trend.message).toContain('TRANSPOSED');
+    // warning, not a block: the run still completed and the operator decides
+    expect(isComplete(final)).toBe(true);
+  }, 30000);
+
+  it('pitch verification can be switched off', async () => {
+    const sim = new SimulatedInstrument({
+      sampleRate: SR,
+      mode: 'decaying',
+      transposeSemitones: 12,
+    });
+    const session = createSession(makeConfig({ plan: planFromRange(60, 60, 3, 1) }));
+    const alerts: AutoPitchAlert[] = [];
+    const engine = new AutoModeEngine(sim, sim, sim, { captureCapS: 6, pitchCheckTakes: 0 }, {
+      onPitchAlert: (a) => alerts.push(a),
+    });
+    await engine.run(session);
+    expect(alerts).toEqual([]);
   }, 30000);
 });

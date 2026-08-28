@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { audioIo } from '../../engine/audioIo';
 import { linToDb } from '../../engine/dsp/level';
 import { useApp } from '../../state/appStore';
+import { services } from '../../state/services';
 import { Button, Panel } from '../common';
 import { GoldDivider } from '../hardware';
 
@@ -22,6 +23,10 @@ export function LoopbackHelper() {
     setTesting(true);
     setResult(null);
     try {
+      // Point the audible bus at the chosen output device before the tone is
+      // played: the loop test must go out of exactly the device the rest of the
+      // app auditions through, which for a VST loop is the virtual cable.
+      await services.ensureAudio();
       await audioIo.openInput(session.config.audioInputId, session.config.audioInputChannels);
       audioIo.startRecording();
       audioIo.playTestTone(1);
@@ -69,7 +74,7 @@ export function LoopbackHelper() {
           <div className="jm-title">Verify the Loop</div>
           <GoldDivider />
           <div className="jm-value">
-            Plays a 1 kHz test tone through the system output and checks that it returns on the selected input. (For a VST loop, route
+            Plays a 1 kHz test tone through the output device selected in Devices (the gear in the header) and checks that it returns on the selected input. (For a VST loop, route
             the tone through the same cable device or simply hit a note in your host while the test runs.)
           </div>
           <div className="jm-row">

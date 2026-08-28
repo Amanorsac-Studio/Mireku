@@ -15,6 +15,7 @@ const HOTPLUG_DEBOUNCE_MS = 400;
 
 export interface DeviceScan {
   audioInputs: AudioDeviceInfo[];
+  audioOutputs: AudioDeviceInfo[];
   audioPermission: AudioPermission;
   midiInputs: MidiDeviceInfo[];
   midiOutputs: MidiDeviceInfo[];
@@ -26,6 +27,7 @@ export interface DeviceScan {
 
 export function useDeviceScan(active = true): DeviceScan {
   const [audioInputs, setAudioInputs] = useState<AudioDeviceInfo[]>([]);
+  const [audioOutputs, setAudioOutputs] = useState<AudioDeviceInfo[]>([]);
   const [audioPermission, setAudioPermission] = useState<AudioPermission>('granted');
   const [midiInputs, setMidiInputs] = useState<MidiDeviceInfo[]>([]);
   const [midiOutputs, setMidiOutputs] = useState<MidiDeviceInfo[]>([]);
@@ -40,10 +42,17 @@ export function useDeviceScan(active = true): DeviceScan {
     let live = true;
     setScanning(true);
     void (async () => {
+      // inputs first: that scan is the one that unlocks device labels, and
+      // outputs are gated behind the same permission, so by the time the
+      // output scan runs the labels are already populated.
       const scan = await audioIo.scanInputs();
       if (!live) return;
       setAudioInputs(scan.devices);
       setAudioPermission(scan.permission);
+
+      const outs = await audioIo.scanOutputs();
+      if (!live) return;
+      setAudioOutputs(outs.devices);
 
       await midi.init();
       if (!live) return;
@@ -80,5 +89,5 @@ export function useDeviceScan(active = true): DeviceScan {
     };
   }, [active, rescan]);
 
-  return { audioInputs, audioPermission, midiInputs, midiOutputs, midiPermission, scanning, rescan };
+  return { audioInputs, audioOutputs, audioPermission, midiInputs, midiOutputs, midiPermission, scanning, rescan };
 }

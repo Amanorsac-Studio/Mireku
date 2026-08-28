@@ -444,3 +444,296 @@ Capture behaviour, DSP, session logic, the sampler, export and the `.jmi`
 format are unchanged. `SessionConfig.audioInputChannels` already existed and
 was written but never read; it is now actually honoured by `openInput`, with
 the default `[0, 1]` producing the identical graph it always did.
+
+## Audio output selection & input monitoring — "how will I be able to hear what I'm sampling?" (2026-08-28)
+
+Client report: *"I don't have an option for output in JM Capture — how will I
+be able to hear what I'm sampling?"* Both halves of that were true.
+
+### 39. Root cause — two separate gaps
+1. **No output device choice existed anywhere.** Every audible node connected
+   to `this.ctx.destination`, which is always the OS default output. In a
+   studio with an interface, a virtual cable and a display's HDMI audio all
+   enumerated, "the default" is rarely the one the engineer wants.
+2. **The input was deliberately never monitored.** `openInput()` routes the
+   capture worklet through a gain node at `gain.value = 0` purely to keep the
+   worklet pulled. Correct for capture, but it means the app itself is silent
+   while the instrument is being played.
+
+### 40. One audible bus (`src/engine/audioIo.ts`)
+Nothing in the app touches `ctx.destination` any more. `AudioIo.output` is a
+single `GainNode` that the sampler, the FX rack, loop audition, the Devices
+test tone and the Auto-mode loopback tone all join. Routing to a device means
+re-pointing exactly that node; the output meter taps exactly that node. The one
+deliberate exception is the zero-gain worklet-pull sink, which stays on
+`ctx.destination` by construction so no device choice can ever stall the
+recorder.
+
+### 41. Sink routing: `AudioContext.setSinkId()` — measured, not assumed
+Both mechanisms are implemented; the runtime picks. Probed in the running app:
+Electron 33.4.11 = **Chromium 130.0.6723.191**, and
+`typeof AudioContext.prototype.setSinkId === 'function'` (shipped Chromium
+110). So `setSinkId` on the context is the path that actually carries audio
+here — one call, no extra graph, no `HTMLAudioElement` in the chain. The
+`MediaStreamAudioDestinationNode` -> `<audio>.setSinkId()` fallback is kept and
+wired for any runtime that lacks it, and is also used if a `setSinkId` call
+rejects (e.g. a device that vanished). The mechanism in use is logged once per
+change: `[jm] audio output -> <id> via context`, observed live.
+
+### 42. Devices panel: output picker, Test Tone, output meter
+`Audio Output` section, same shape and behaviour as the input side: the shared
+`useDeviceScan` hook now also enumerates `audiooutput` (same one-shot
+`getUserMedia` label unlock, only paid for when labels are withheld — the
+re-scan loop fixed in §34 would otherwise come straight back), same hot-plug
+rescan, same manual Re-scan, same calm gold-edged advisory when the list is
+empty. Plus:
+- **Test Tone** — a gentle A440 at **−18 dBFS** for 0.7 s with 15 ms fades top
+  and tail, mirroring the MIDI-out Test Note. (The loopback helper keeps its
+  louder 1 kHz / −6 dBFS verification tone; same code, different arguments.)
+- **Output Level meter** — the kit LED columns plus a tabular dBFS readout,
+  tapped off the bus, so a test tone, an audition or the monitor send are all
+  visibly confirmed on the chosen device.
+- A meter floor was added while doing this: the exponential release ran off to
+  nonsense (`-2357.6 dBFS`, seen live) once a meter decayed with no signal.
+  Below 1e-7 both meters now read "−∞".
+
+`audioOutputId`, `monitorEnabled` and `monitorLevelDb` join the existing
+`userData/settings.json` payload, apply immediately, and are restored at launch
+(`Services.applyOutputRouting()`, idempotent, called from `ensureAudio()` and
+from `applyDevices()`). Output and monitoring apply **unconditionally** — unlike
+the input device they never touch the capture graph, so they do not have to
+wait for a take to finish.
+
+### 43. Input monitoring — opt-in, and what it does about feedback
+A toggle (**off by default, and never turned on by anything but the user**), a
+`Knob` for level in dB (−60…0, default −12), and plain-language copy that says
+software monitoring adds latency and that the interface's own zero-latency
+direct monitoring is the better choice where it exists.
+
+The monitor send is a **parallel branch off the capture head**, taken after the
+recorder's tap: `head -> monitorTap(gain) -> output`. The capture path is
+untouched, the zero-gain worklet pull is untouched, and recorded audio is
+bit-identical to before. Gain changes are ramped 20 ms, never stepped.
+
+**Monitoring is force-muted for the whole of a take.** `startRecording()` ramps
+the monitor to zero and `stopRecording()` restores it, which covers Guided,
+Auto and the loopback test alike. The reasoning, since it is a real trade-off:
+the monitor leaves through the user's speakers or through whatever device is
+selected as the output, and in either case it can re-enter the take —
+acoustically through an open microphone, or electrically through the very
+loopback cable Auto mode is built around. A take must be exactly the
+instrument, so the safe behaviour is unconditional and deterministic rather
+than conditional on a device-name guess. The panel says so, and the output
+meter's label changes to "monitor muted for take" while it is held.
+
+**Feedback advisory.** `feedbackRisk(inputLabel, outputLabel)` is a pure
+function over device names with three verdicts, shown only when monitoring is
+on: `loop` (input and output name the *same* virtual routing device — the
+build-up case), `virtual` (input is a loopback/cable, so the monitor can find
+its way back through the host's routing), `acoustic` (a microphone-style input
+— the speaker-into-mic howl). It **warns**; it never silently disables
+anything on the strength of a string match.
+
+### 44. Everything audible now follows the selection
+`Services.ensureAudio()` connects `rack.output -> audioIo.output`, and the loop
+audition's rack-less fallback goes to the same bus, so the audition sampler,
+loop audition, FX rack playback and both test tones are all on the chosen
+device. `LoopbackHelper.runTest()` now calls `services.ensureAudio()` before
+playing its tone, so the Auto-mode loop test goes out of exactly the device the
+rest of the app auditions through — which for a VST loop is the virtual cable,
+which is the point. Its copy was updated to say so.
+
+### 45. Verification (the real Electron app, driven over CDP)
+`npm run typecheck -w jm-capture` clean · `npm run build -w jm-capture` exit 0 ·
+`npm run test -w jm-capture` **all green**. The 7 pre-existing files / **50
+tests** all pass; the run also picks up a concurrent workstream's new pitch
+tests landing in the same tree, so the final total reads 9 files / 91 tests.
+(While that other work was mid-flight the shared `src/engine/autoMode.ts`
+transiently failed typecheck — TS6133 unused pitch imports and a missing
+`verifyPitch` member. No file touched by this change ever reported an error,
+and the tree typechecks clean now that it has landed.)
+
+Real devices, real measurements, on the client's own rig:
+
+- **Audio outputs (11, all with labels):** Default - OUT 1-2 (4- BEHRINGER UMC
+  404HD 192k) · Communications - OUT 1-2 (same) · OUT 3-4 (same) · OUT 1-2
+  (same) · OUT 1-4 (same) · Speakers (Waves SoundGrid) · Speaker (Realtek(R)
+  Audio) · Line (4- MODX) (0499:172a) · C27F398 (2- HD Audio Driver for Display
+  Audio) · CABLE Input (VB-Audio Virtual Cable) · CABLE In 16ch (VB-Audio
+  Virtual Cable). 0 native `<select>` elements in the panel, asserted live.
+- **The tone really leaves the chosen device.** Output = *CABLE Input*, input =
+  *CABLE Output* (the two ends of the same VB-Cable). Test Tone: the output
+  meter hit exactly **−18.0 dBFS** and ~180 ms later the **input** meter rose
+  from its −90.3 dBFS floor to **−18.0 dBFS** — the tone physically went out of
+  a non-default device and came back. Control: with output switched to
+  *OUT 3-4 (Behringer)* the output meter still read −18.0 dBFS while the CABLE
+  input stayed flat at −90.3 dBFS for the whole burst.
+- **Persistence.** `settings.json` carried `audioOutputId` for OUT 3-4; after a
+  full relaunch the picker showed *OUT 3-4*, the console logged `via context`
+  at startup, and Test Tone measured −18.0 dBFS on it again.
+- **Monitoring.** Input = Behringer IN 1-2 (floor −67…−72 dBFS). Monitor OFF:
+  the output bus was silent (decaying to −∞). Monitor ON at the default −12 dB
+  knob: the output bus tracked the input **exactly 12.0 dB below it**
+  (−69.9→−81.9, −68.0→−80.0, −69.5→−81.5). Monitor OFF again: back to silence.
+  With the CABLE input selected and monitoring on, the `virtual` advisory
+  appeared as designed.
+- **Auto-mode loopback still correct with an explicit output.** Auto session ->
+  loopback screen -> output *CABLE Input*, input *CABLE Output* -> *Play Test
+  Tone & Verify* returned **"Loop verified — test tone returned at −6.0 dBFS."**
+- **Audition follows the output too.** Resumed the 12-take Rhodes session, FX
+  rack loaded, played keys on the on-screen keybed with the cable loop in
+  place: the input returned **−0.1 dBFS** from a −90.3 dBFS floor, so
+  sampler -> FX rack -> bus -> chosen device is live.
+
+New screenshot: `apps/capture/screenshots/22-settings-output-monitor.png`.
+
+### 46. Found while testing, deliberately NOT fixed here
+The FX rack's output **diverges to `Infinity`** after auditioning a few notes
+through the default preset chain and stays there until relaunch (measured:
++7 dBFS after one note -> +589 dBFS -> `Infinity`, self-sustaining with the
+sampler silent and no input signal). This is internal to the rack — the
+explicit feedback gains in `fx/units.ts` are capped at 0.9, so it is elsewhere
+(the Freeverb comb core, the drive worklet, or a NaN that never clears). It is
+pre-existing: the only change on that path here is a read-only analyser tap and
+moving one `connect()` from `ctx.destination` to the bus. Flagged as its own
+task rather than touched, because this change is not allowed near the DSP. The
+new output meter is what made it visible at all.
+
+### 47. Not touched
+Capture behaviour, DSP, session logic, the sampler engine, export and the
+`.jmi` format are unchanged. Recorded audio is bit-identical: the monitor is a
+parallel branch taken after the recorder's tap, and the zero-gain worklet pull
+still runs on `ctx.destination` exactly as before.
+
+---
+
+## Wrong-note protection — "the app should flag that" (2026-08-28)
+
+Client report: *"There's no way for the app to tell I'm sampling the wrong note?
+If I'm to sample A and I hit B, the app should flag that, so you don't mess up
+the sampling by mistake."*
+
+### 48. Root cause — a real data-integrity defect, not a cosmetic one
+`GuidedController.noteOn` took `_note` and ignored it: guided mode auto-armed on
+**any** note-on and filed the resulting audio under the **expected** note's file
+name. The verdict only judged velocity window and peak level, so a B3 played
+when the app asked for A3 was **accepted**, filled a round-robin dot and
+advanced. Nothing surfaced until the `.jmi` was loaded in JM Signature and
+played the wrong pitch. Over a 360-take session that silently corrupts an
+instrument. Two layers were added.
+
+### 49. Layer 1 — MIDI note gate (`src/engine/guided.ts`)
+`noteOn` now compares the incoming note number with `position.note` **before**
+arming. A mismatch never starts a recording, never writes a file and never
+touches session state; the controller emits `onWrongNote` and stays in
+`waiting`, so the re-arm is instant exactly like PLAY HARDER / PLAY SOFTER.
+CC64, RR consistency, click-to-redo, auto-arm and session resume are untouched.
+
+### 50. The plan-note switch: a **confirming repeat**, not a button
+The progress map already lets him click any cell to jump, so a wrong note may be
+a deliberate move. Options considered:
+
+- *switch on the first wrong note* — rejected outright; that is the original bug
+  wearing a friendlier face, and one fat finger silently re-targets the session.
+- *an on-screen "Switch to B3?" button* — rejected: guided capture is played
+  two-handed at an instrument. Reaching for a mouse mid-session is the exact
+  friction the auto-arm design exists to avoid.
+- *a modifier (sustain pedal + note)* — rejected: CC64 already means something
+  in this app (the sustain-pedal guard), and overloading it would fight §3.3.
+- **chosen: play the same in-plan note a second time.** The offer appears as
+  coaching ("B3 IS IN THIS SESSION — PLAY IT AGAIN TO SWITCH") and is confirmed
+  only by a repeat of the *same* note, no sooner than **250 ms**
+  (`SWITCH_CONFIRM_MIN_MS`, so a bouncing key or a doubled note-on cannot
+  confirm) and no later than **4 s** (`SWITCH_CONFIRM_WINDOW_MS`, so an offer
+  never lingers into an unrelated later mistake). Any different note cancels it.
+  The gesture stays on the keyboard, where his hands already are.
+
+The confirming hit **re-targets and re-arms but records nothing**. Deliberately:
+the take that fills a dot should be played at the new target with the coaching
+UI already showing it, not captured from a keystroke whose purpose was
+confirmation. It also means a mistaken confirm costs a re-target, never a
+mislabelled sample. A switch only offers on a note that still has takes
+outstanding — repeating a *completed* plan note says so and changes nothing,
+rather than silently arming a redo over good audio.
+
+### 51. Layer 2 — audio pitch verification (`src/engine/dsp/pitch.ts`)
+MIDI can only report which key was pressed. It cannot see a **transposed
+instrument**, a latched **octave switch** or the **wrong patch** — where every
+take of a session is wrong by a fixed interval. So each accepted take is
+analysed and compared to the frequency of the note it was filed under.
+
+**Algorithm: YIN** (cumulative mean normalized difference), not the plain
+autocorrelation `dsp/loop.ts` uses. Autocorrelation peaks at multiples of the
+true period and so biases toward the **sub-octave** — precisely the error class
+this check exists to catch. YIN's absolute-threshold rule takes the *first* dip
+below 0.15, which is octave-robust. Pipeline: mono mix → skip the attack
+(analyse 12 %–75 % of the take) → box-decimate to ~8 samples per period at the
+top of the search band → 4 frames of YIN with parabolic interpolation → median
+vote → **refinement at the full sample rate** in a ±3 % lag band. The refinement
+matters: one lag sample at the decimated rate is worth tens of cents, which
+would swamp a 50-cent tolerance.
+
+Measured on synthetic decaying harmonic tones (5 partials, 48 kHz): **max error
+0.59 cents, mean 0.06 cents across MIDI 24–96**; injected detunes of ±10/±30/±45
+cents were recovered to **< 0.01 cents**. Also verified at 44.1 kHz.
+
+Reporting is in **cents**, with the musically meaningful cases named: an octave
+(`SOUNDS 1 OCTAVE ABOVE A3 — CHECK THE OCTAVE SWITCH`), a semitone, any other
+interval (with the note actually heard), or a sub-semitone detune. `pitchTrend`
+watches the whole session for a **fixed** offset and escalates to
+`EVERY TAKE IS +1 OCTAVE — IS YOUR INSTRUMENT TRANSPOSED?`.
+
+### 52. Unpitched sources are "can't tell", never an accusation
+Confidence = YIN periodicity x cross-frame agreement. Below **0.6** the verdict
+is `unknown`, no observation is recorded and nothing is shown. Silence, white
+noise and percussive transients all land there in tests. Search is limited to
+±2 octaves around the expected note, and the detector refuses windows below
+−80 dBFS RMS outright.
+
+### 53. Warning, never a block — and it checks early
+The take is written and accepted first; verification runs **after** it is on
+disk, on the processed channels, and cannot alter what was written (the `.jmi`
+format, the export pipeline and the recorded audio are untouched). The user gets
+**Retake / Keep Take / Stop Checking**, plus an always-visible PITCH CHECK toggle
+on the guided panel. The first take of a session is flagged `firstOfSession` and
+the panel renders in the raised (`prominent`) state — the whole point is to
+catch a transposed rig before 359 more takes join it. Default tolerance is
+**50 cents**, configurable through the store (`pitchCheck.toleranceCents`).
+
+### 54. Auto Mode gets the same alarm (§3.4)
+`AutoModeEngine` verifies the **first 4** returned takes
+(`AUTO_PITCH_CHECK_TAKES`; `pitchCheckTakes: 0` disables) against the note it
+**sent**. An off-pitch result raises `onPitchAlert`; the Auto screen offers
+**Abort Run / Continue / Stop Checking**. The engine never stops itself — a
+two-hour unattended run belongs to the operator, not to the analysis.
+
+### 55. Design law held
+Nothing added here is warning-red. The note-gate coaching uses the cream/muted
+detail line and a gold plaque for the switch offer; the pitch panel is the
+existing gold `.jm-warning` with a `stack` layout and a brighter, lifted
+`prominent` state. All colour and size values come from `theme/tokens.ts` via
+CSS variables — the components carry no literals, and no native `<select>` or
+default browser chrome was introduced.
+
+### 56. Verification
+- `npm run typecheck -w jm-capture` — clean (renderer + electron).
+- `npm run test -w jm-capture` — **91/91 passed, 9/9 files**; the pre-existing
+  50 are green and untouched. New: `test/pitch.test.ts` (19 — accuracy sweep,
+  octave / semitone / interval / detune classification, noise and percussion →
+  low confidence, trend detection) and `test/noteGate.test.ts` (19 — right note
+  recorded, wrong note refused and nothing written, switch offer / debounce /
+  expiry / cancel, recording under the new note name after a switch, CC64 and
+  velocity coaching still intact, pitch report on the first take, unpitched
+  silence, toggle off). `test/autoE2e.test.ts` gained 3 (in-tune rig silent,
+  transposed rig caught at the head of the run, check disabled) and
+  `test/simInstrument.ts` a `transposeSemitones` option.
+- `npm run build -w jm-capture` — renderer + electron main/preload, exit 0.
+- New screenshots: `23-guided-wrong-note.png`, `24-guided-pitch-warning.png`,
+  `25-auto-pitch-warning.png` (headless-Chrome CDP harness against the live Vite
+  dev server, seeded through the app's own modules; page console clean).
+
+### 57. Not touched
+`src/engine/audioIo.ts`, the Devices / Settings panel and the settings IPC were
+being edited concurrently and were left alone. The `.jmi` format, the export
+pipeline, `processCapture` output and the recorded audio are unchanged — pitch
+detection is analysis only.

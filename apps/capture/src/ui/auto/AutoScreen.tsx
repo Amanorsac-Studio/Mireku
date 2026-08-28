@@ -11,6 +11,7 @@ export function AutoScreen() {
   const session = useApp((s) => s.session);
   const auto = useApp((s) => s.auto);
   const monoFold = useApp((s) => s.monoFoldOffer);
+  const pitch = useApp((s) => s.pitchWarning);
   const setScreen = useApp((s) => s.setScreen);
 
   if (!session) return null;
@@ -62,6 +63,42 @@ export function AutoScreen() {
             )}
             <Button onClick={() => setScreen('loopback')}>Loopback Setup</Button>
           </div>
+          {/* Pitch verification of the head of the run (§3.4): the app sent
+              the note — if what came back is a fixed interval away, every
+              sample of an unattended run would be wrong. Warning, not a block:
+              the operator aborts or carries on. */}
+          {pitch && pitch.source === 'auto' && (
+            <div className="jm-warning stack prominent">
+              <div className="jm-warning-title">
+                Pitch check · sent {midiToNoteName(pitch.note)} · Layer {pitch.layer} · Take {pitch.rr}
+              </div>
+              <div>{pitch.message}</div>
+              {pitch.trendMessage && <div className="jm-warning-strong">{pitch.trendMessage}</div>}
+              <div className="jm-row" style={{ gap: 'var(--jm-size-gap-unit)' }}>
+                <Button
+                  compact
+                  onClick={() => {
+                    services.cancelAuto();
+                    useApp.getState().setPitchWarning(null);
+                  }}
+                >
+                  Abort Run
+                </Button>
+                <Button compact onClick={() => useApp.getState().setPitchWarning(null)}>
+                  Continue
+                </Button>
+                <Button
+                  compact
+                  onClick={() => {
+                    useApp.getState().setPitchCheck({ enabled: false });
+                    useApp.getState().setPitchWarning(null);
+                  }}
+                >
+                  Stop Checking
+                </Button>
+              </div>
+            </div>
+          )}
           {monoFold && (
             <div className="jm-warning">
               Stereo channels null below −60 dB — this source is effectively mono. Fold to mono?

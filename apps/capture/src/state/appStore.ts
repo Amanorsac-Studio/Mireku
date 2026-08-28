@@ -23,15 +23,68 @@ export interface VerdictFlash {
 export interface DeviceSettings {
   audioInputId: string | null;
   audioInputChannels: [number] | [number, number];
+  /** playback device for auditioning; null = system default output */
+  audioOutputId: string | null;
+  /** software input monitoring — opt-in, never on by default */
+  monitorEnabled: boolean;
+  /** monitor send level in dBFS (−60 … 0) */
+  monitorLevelDb: number;
   midiInputId: string | null;
   midiOutputId: string | null;
 }
 
+/** Monitor default: audible but conservative once the user switches it on. */
+export const MONITOR_DEFAULT_DB = -12;
+
 export const DEFAULT_DEVICES: DeviceSettings = {
   audioInputId: null,
   audioInputChannels: [0, 1],
+  audioOutputId: null,
+  monitorEnabled: false,
+  monitorLevelDb: MONITOR_DEFAULT_DB,
   midiInputId: null,
   midiOutputId: null,
+};
+
+/**
+ * Note gate (Layer 1): the last note-on that was refused because it was not
+ * the note being sampled. Nothing was recorded — this is coaching only.
+ */
+export interface NoteGateFlash {
+  played: number;
+  expected: number;
+  inPlan: boolean;
+  /** the played note is in the plan and can be switched to by repeating it */
+  switchOffered: boolean;
+  at: number;
+}
+
+/**
+ * Pitch verification (Layer 2): a captured take that does not sound like the
+ * note it is filed under. A warning the user can accept — never a block.
+ */
+export interface PitchWarning {
+  source: 'guided' | 'auto';
+  message: string;
+  trendMessage: string | null;
+  note: number;
+  layer: number;
+  rr: number;
+  cents: number | null;
+  confidence: number;
+  firstOfSession: boolean;
+  at: number;
+}
+
+/** User-controlled pitch-check settings (§3.5 — they stay in control). */
+export interface PitchCheckSettings {
+  enabled: boolean;
+  toleranceCents: number;
+}
+
+export const DEFAULT_PITCH_CHECK_SETTINGS: PitchCheckSettings = {
+  enabled: true,
+  toleranceCents: 50,
 };
 
 export interface AutoProgress {
@@ -57,6 +110,9 @@ interface AppState {
   verdict: VerdictFlash | null;
   cc64Warning: boolean;
   rrOutlier: { note: number; layer: number; rr: number } | null;
+  noteGate: NoteGateFlash | null;
+  pitchWarning: PitchWarning | null;
+  pitchCheck: PitchCheckSettings;
   auto: AutoProgress;
   presets: { fileName: string; preset: Preset }[];
   activePresetIndex: number;
@@ -74,6 +130,9 @@ interface AppState {
   setVerdict(v: VerdictFlash | null): void;
   setCc64Warning(b: boolean): void;
   setRrOutlier(o: { note: number; layer: number; rr: number } | null): void;
+  setNoteGate(g: NoteGateFlash | null): void;
+  setPitchWarning(w: PitchWarning | null): void;
+  setPitchCheck(p: Partial<PitchCheckSettings>): void;
   setAuto(a: Partial<AutoProgress>): void;
   setPresets(p: { fileName: string; preset: Preset }[]): void;
   setActivePresetIndex(i: number): void;
@@ -93,6 +152,9 @@ export const useApp = create<AppState>((set) => ({
   verdict: null,
   cc64Warning: false,
   rrOutlier: null,
+  noteGate: null,
+  pitchWarning: null,
+  pitchCheck: DEFAULT_PITCH_CHECK_SETTINGS,
   auto: { running: false, position: null, message: null },
   presets: [],
   activePresetIndex: 0,
@@ -110,6 +172,9 @@ export const useApp = create<AppState>((set) => ({
   setVerdict: (verdict) => set({ verdict }),
   setCc64Warning: (cc64Warning) => set({ cc64Warning }),
   setRrOutlier: (rrOutlier) => set({ rrOutlier }),
+  setNoteGate: (noteGate) => set({ noteGate }),
+  setPitchWarning: (pitchWarning) => set({ pitchWarning }),
+  setPitchCheck: (p) => set((st) => ({ pitchCheck: { ...st.pitchCheck, ...p } })),
   setAuto: (a) => set((st) => ({ auto: { ...st.auto, ...a } })),
   setPresets: (presets) => set({ presets }),
   setActivePresetIndex: (activePresetIndex) => set({ activePresetIndex }),

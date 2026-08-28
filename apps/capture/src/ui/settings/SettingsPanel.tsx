@@ -16,18 +16,48 @@
  */
 
 import { useEffect, useState } from 'react';
-import { midiToNoteName } from '@jm/jmi-format/web';
-import { audioIo } from '../../engine/audioIo';
-import { linToDb } from '../../engine/dsp/level';
+import { midiToNoteName, type ParamSpec } from '@jm/jmi-format/web';
+import { audioIo, feedbackRisk, type FeedbackRisk } from '../../engine/audioIo';
+import { dbToLin, linToDb } from '../../engine/dsp/level';
 import { midi } from '../../engine/midi';
-import { useApp, type DeviceSettings } from '../../state/appStore';
+import { MONITOR_DEFAULT_DB, useApp, type DeviceSettings } from '../../state/appStore';
 import { services } from '../../state/services';
-import { Button, Field, Label, Select } from '../common';
+import { Button, Field, Label, Select, Toggle } from '../common';
+import { Knob } from '../fx/Knob';
 import { GoldDivider, KitMeter, Screws, Segmented, type ListOption } from '../hardware';
 import { useDeviceScan } from './useDeviceScan';
 
 /** A MIDI message counts as "just now" for this long (ms). */
 const ACTIVITY_HOLD_MS = 260;
+
+/** Output confirmation ping: gentle A440 at −18 dBFS, fades top and tail. */
+const TEST_TONE_DB = -18;
+const TEST_TONE_HZ = 440;
+const TEST_TONE_S = 0.7;
+
+/** Meter release, and the floor below which a decaying meter reads as silence.
+ *  Without the floor the exponential release runs off to absurd dB numbers. */
+const METER_RELEASE = 0.88;
+const METER_FLOOR = 1e-7;
+
+/** Monitor level knob — the same hardware knob the FX rack uses. */
+const MONITOR_SPEC: ParamSpec = {
+  id: 'monitorLevel',
+  label: 'Monitor',
+  kind: 'float',
+  min: -60,
+  max: 0,
+  default: MONITOR_DEFAULT_DB,
+  unit: 'dB',
+};
+
+const FEEDBACK_COPY: Record<Exclude<FeedbackRisk, null>, string> = {
+  loop: 'The input and the output are the same virtual routing device. Monitoring would feed the signal straight back into itself and build up fast. Choose a real playback device — your interface or headphones — before switching monitoring on.',
+  virtual:
+    'The selected input is a virtual/loopback device. Anything monitored out can find its way back in through your host’s routing, so check the loop before raising the level.',
+  acoustic:
+    'The selected input is a microphone-style input. If the monitored output reaches it through the air, it will howl — use headphones, or keep the level low.',
+};
 
 export function SettingsPanel({ onClose }: { onClose(): void }) {
   const devices = useApp((s) => s.devices);
@@ -71,6 +101,15 @@ export function SettingsPanel({ onClose }: { onClose(): void }) {
     { value: '', label: 'System default input', section: 'Audio Input' },
     ...scan.audioInputs.map((d) => ({ value: d.id, label: d.label, section: 'Audio Input' })),
   ];
+
+  const outputOptions: ListOption[] = [
+    { value: '', label: 'System default output', section: 'Audio Output' },
+    ...scan.audioOutputs.map((d) => ({ value: d.id, label: d.label, section: 'Audio Output' })),
+  ];
+
+  const inputLabel = scan.audioInputs.find((d) => d.id === devices.audioInputId)?.label ?? 'System default input';
+  const outputLabel = scan.audioOutputs.find((d) => d.id === devices.audioOutputId)?.label ?? 'System default output';
+  const risk = feedbackRisk(inputLabel, outputLabel);
 
   const channelOptions: ListOption[] = stereo
     ? Array.from({ length: pairCount }, (_, i) => ({
@@ -185,6 +224,72 @@ export function SettingsPanel({ onClose }: { onClose(): void }) {
 
         <GoldDivider />
 
+        {/* ------------------------------- output ------------------------- */}
+        <div className="jm-chrome-header">Audio Output</div>
+
+        {scan.audioOutputs.length === 0 ? (
+          <EmptyState
+            title={scan.audioPermission === 'unsupported' ? 'Audio playback is unavailable here' : 'No audio outputs found'}
+            body={
+              scan.audioPermission === 'unsupported'
+                ? 'This build is running outside the JM Capture shell, which is what provides audio device access.'
+                : 'Switch on your interface or headphones, then press Re-scan. JM Capture will use the system default output until one is chosen.'
+            }
+          />
+        ) : (
+          <Field label="Output Device — audition, loop playback and FX are heard here">
+            <div className="jm-row jm-settings-row">
+              <Select
+                style={{ flex: 1 }}
+                value={devices.audioOutputId ?? ''}
+                onChange={(v) => set({ audioOutputId: v || null })}
+                options={outputOptions}
+              />
+              <Button
+                compact
+                title="Play a short, quiet A440 tone through the selected output"
+                onClick={() => audioIo.playTestTone(TEST_TONE_S, TEST_TONE_HZ, dbToLin(TEST_TONE_DB))}
+              >
+                Test Tone
+              </Button>
+            </div>
+          </Field>
+        )}
+
+        <OutputMeter />
+
+        {/* ----------------------------- monitoring ----------------------- */}
+        <div className="jm-plaque jm-settings-monitor">
+          <div className="jm-row jm-settings-row">
+            <div className="jm-col jm-settings-monitor-copy">
+              <Toggle
+                checked={devices.monitorEnabled}
+                onChange={(v) => set({ monitorEnabled: v })}
+                label={devices.monitorEnabled ? 'Input monitoring — ON' : 'Input monitoring — off'}
+              />
+              <Label>
+                Passes the live input through to the output so you can hear what you are sampling. Software monitoring
+                always adds a little latency; most interfaces offer zero-latency direct monitoring on the box itself, and
+                that is the better choice whenever you have it.
+              </Label>
+              <Label>
+                Monitoring mutes itself for the whole of a take, so it can never bleed into the capture. What gets
+                recorded is unchanged either way.
+              </Label>
+            </div>
+            <Knob
+              spec={MONITOR_SPEC}
+              value={devices.monitorLevelDb}
+              onChange={(v) => set({ monitorLevelDb: v })}
+              motif="flow"
+            />
+          </div>
+        </div>
+
+        {devices.monitorEnabled && risk && <EmptyState title="Check this routing before you turn it up" body={FEEDBACK_COPY[risk]} />}
+
+        <GoldDivider />
+
         {/* -------------------------------- MIDI -------------------------- */}
         <div className="jm-chrome-header">MIDI</div>
 
@@ -283,7 +388,8 @@ function InputMeter({ error }: { error: string | null }) {
     let raf = 0;
     let smoothed = 0;
     const tick = () => {
-      smoothed = Math.max(audioIo.livePeak(), smoothed * 0.88);
+      smoothed = Math.max(audioIo.livePeak(), smoothed * METER_RELEASE);
+      if (smoothed < METER_FLOOR) smoothed = 0;
       setLevel(smoothed);
       raf = requestAnimationFrame(tick);
     };
@@ -300,6 +406,44 @@ function InputMeter({ error }: { error: string | null }) {
   return (
     <div className="jm-panel recessed jm-settings-meter">
       <div className="jm-label">Input Level</div>
+      <div className="jm-col" style={{ gap: '3px', flex: 1 }}>
+        <KitMeter level={level} horizontal height={220} width={11} />
+        <KitMeter level={level} channel="right" horizontal height={220} width={11} />
+      </div>
+      <div className="jm-value jm-settings-db">{db === -Infinity ? '−∞' : db.toFixed(1)} dBFS</div>
+    </div>
+  );
+}
+
+/**
+ * Live output level, tapped off the audible bus — a cheap analyser on the one
+ * node everything audible passes through, so a Test Tone, an audition or the
+ * monitor send all show here. Visible confirmation that the chosen device is
+ * actually being fed.
+ */
+function OutputMeter() {
+  const [level, setLevel] = useState(0);
+  const [held, setHeld] = useState(false);
+
+  useEffect(() => {
+    let raf = 0;
+    let smoothed = 0;
+    const tick = () => {
+      smoothed = Math.max(audioIo.outputPeak(), smoothed * METER_RELEASE);
+      if (smoothed < METER_FLOOR) smoothed = 0;
+      setLevel(smoothed);
+      setHeld(audioIo.monitorHeldForTake);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  const db = linToDb(level);
+
+  return (
+    <div className="jm-panel recessed jm-settings-meter">
+      <div className="jm-label">{held ? 'Output Level — monitor muted for take' : 'Output Level'}</div>
       <div className="jm-col" style={{ gap: '3px', flex: 1 }}>
         <KitMeter level={level} horizontal height={220} width={11} />
         <KitMeter level={level} channel="right" horizontal height={220} width={11} />

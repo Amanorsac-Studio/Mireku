@@ -294,7 +294,7 @@ function generateBundle(spec) {
       channels: 'stereo',
       sampleRate: SR,
       bitDepth: 24,
-      notes: `Synthesized placeholder for the ${spec.world} world. Deterministic; replace with James's real bundle.`,
+      notes: `Synthesized placeholder for the ${spec.world} world. Deterministic development and CI fixture; replace with a production sample set.`,
     },
     soundType: spec.soundType,
     zones,

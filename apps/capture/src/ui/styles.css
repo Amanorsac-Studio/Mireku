@@ -1330,6 +1330,17 @@ input.jm-well[type='number']::-webkit-inner-spin-button {
   box-shadow: 0 0 9px var(--jm-color-gold-hot);
 }
 
+/* Monitoring plaque: the toggle + its plain-language caution on the left,
+   the kit knob for level on the right. */
+.jm-settings-monitor {
+  padding: calc(var(--jm-size-gap-unit) * 1.25) calc(var(--jm-size-gap-unit) * 1.5);
+}
+
+.jm-settings-monitor-copy {
+  flex: 1;
+  gap: calc(var(--jm-size-gap-unit) * 0.75);
+}
+
 .jm-settings-format {
   display: flex;
   align-items: baseline;
@@ -1356,4 +1367,70 @@ input.jm-well[type='number']::-webkit-inner-spin-button {
   border: 1px solid var(--jm-color-gold-dark);
   border-left: 2px solid var(--jm-color-gold);
   box-shadow: 0 3px 10px var(--jm-color-shadow-soft);
+}
+
+/* ================================================================== */
+/* Note gate + pitch verification                                      */
+/*                                                                     */
+/* Design law: acceptance GLOWS, corrections INSTRUCT. Nothing here is  */
+/* warning-red — the whole register is the gold/cream coaching family   */
+/* the PLAY HARDER / PLAY SOFTER verdicts already live in.              */
+/* ================================================================== */
+
+.jm-coach-detail {
+  font-family: var(--jm-font-display);
+  letter-spacing: var(--jm-tracking-label);
+  text-transform: uppercase;
+  font-size: var(--jm-type-label);
+  color: var(--jm-color-muted);
+  text-align: center;
+}
+
+.jm-coach-detail .played {
+  color: var(--jm-color-cream);
+}
+
+/* the plan-note switch offer — an invitation, so it sits on a plaque */
+.jm-coach-switch {
+  font-family: var(--jm-font-display);
+  letter-spacing: var(--jm-tracking-label);
+  text-transform: uppercase;
+  font-size: var(--jm-type-label);
+  color: var(--jm-color-gold-bright);
+  background: linear-gradient(180deg, var(--jm-color-plaque-top), var(--jm-color-plaque-bottom));
+  border: 1px solid var(--jm-color-gold-dark);
+  border-radius: var(--jm-size-radius-control);
+  padding: calc(var(--jm-size-gap-unit) * 0.75) calc(var(--jm-size-gap-unit) * 2);
+  box-shadow: 0 3px 10px var(--jm-color-shadow-soft);
+}
+
+.jm-coach-switch .note {
+  color: var(--jm-color-gold-hot);
+}
+
+/* multi-line warning bodies (pitch check) stack instead of running inline */
+.jm-warning.stack {
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: calc(var(--jm-size-gap-unit) * 1.25);
+}
+
+/* raised on the first take of a session, or once a fixed offset is proven —
+   still gold, only brighter and lifted, never red */
+.jm-warning.prominent {
+  border-left-width: 5px;
+  border-color: var(--jm-color-gold);
+  box-shadow:
+    0 0 26px var(--jm-color-gold-glow-soft),
+    0 4px 16px var(--jm-color-shadow-deep);
+}
+
+.jm-warning-title {
+  color: var(--jm-color-chrome-header);
+  letter-spacing: var(--jm-tracking-chrome);
+}
+
+.jm-warning-strong {
+  color: var(--jm-color-gold-hot);
 }

@@ -5,7 +5,7 @@
  */
 
 import type { FxType } from '@jm/jmi-format/web';
-import { BaseFxUnit, divisionToMs, makeLfo, type ParamValue } from './fxTypes';
+import { BaseFxUnit, BUTTERWORTH_Q_DB, divisionToMs, feedbackGain, makeLfo, type ParamValue } from './fxTypes';
 
 /* ------------------------------------------------------------------ */
 /* 1. JM Chorus (BBD-style)                                            */
@@ -30,6 +30,7 @@ class JmChorus extends BaseFxUnit {
     const lpR = ctx.createBiquadFilter();
     lpL.type = lpR.type = 'lowpass';
     lpL.frequency.value = lpR.frequency.value = 8000;
+    lpL.Q.value = lpR.Q.value = BUTTERWORTH_Q_DB;
     this.wetIn.connect(this.dry).connect(this.wetOut);
     this.wetIn.connect(this.delayL).connect(lpL).connect(this.widthPanL).connect(this.wet);
     this.wetIn.connect(this.delayR).connect(lpR).connect(this.widthPanR).connect(this.wet);
@@ -180,7 +181,9 @@ class Phaser extends BaseFxUnit {
         this.setAP(this.lfoDepth.gain, (Number(value) / 100) * 900);
         break;
       case 'feedback':
-        this.setAP(this.fb.gain, (Number(value) / 100) * 0.9);
+        // the allpass chain is magnitude-flat (|H| = 1 at every frequency), so
+        // the loop gain is exactly this coefficient
+        this.setAP(this.fb.gain, feedbackGain(Number(value)));
         break;
       case 'stages':
         this.rebuildChain(Number(value));
@@ -217,7 +220,7 @@ class Flanger extends BaseFxUnit {
         this.setAP(this.lfo.depthGain.gain, (Number(value) / 100) * 0.002);
         break;
       case 'feedback':
-        this.setAP(this.fb.gain, (Number(value) / 100) * 0.9); // sign preserved
+        this.setAP(this.fb.gain, feedbackGain(Number(value))); // sign preserved
         break;
       case 'manual':
         this.setAP(this.delay.delayTime, Number(value) / 1000);
@@ -247,6 +250,23 @@ class EpPreamp extends BaseFxUnit {
     this.applyAll();
   }
 
+  /** coefficient the shaper curve currently holds, so a knob drag does not
+   * rebuild an identical 2048-point table on every frame */
+  private curveK = Number.NaN;
+
+  private setCurve(drive: number): void {
+    const k = 1 + (drive / 100) * 24;
+    if (k === this.curveK) return;
+    try {
+      this.shaper.curve = this.makeCurve(drive);
+      this.curveK = k;
+    } catch {
+      // Some strictly-spec'd engines refuse to re-assign an already-set curve.
+      // Keep the curve we have: this stage has no feedback path, so the worst
+      // case is a slightly different drive character, never an instability.
+    }
+  }
+
   private makeCurve(drive: number): Float32Array<ArrayBuffer> {
     const k = 1 + (drive / 100) * 24;
     const n = 2048;
@@ -262,7 +282,7 @@ class EpPreamp extends BaseFxUnit {
     switch (id) {
       case 'drive': {
         const d = Number(value);
-        this.shaper.curve = this.makeCurve(d);
+        this.setCurve(d);
         this.setAP(this.pre.gain, 1 + (d / 100) * 2);
         // rough drive compensation (auto-trim, not normalization of samples)
         this.setAP(this.post.gain, Math.pow(10, Number(this.params.output) / 20) / (1 + (d / 100) * 1.2));
@@ -294,7 +314,7 @@ class VintageEq extends BaseFxUnit {
     super(ctx, 'vintageEq');
     this.lowCut.type = 'highpass';
     this.lowCut.frequency.value = 5;
-    this.lowCut.Q.value = 0.71;
+    this.lowCut.Q.value = BUTTERWORTH_Q_DB;
     this.bass.type = 'lowshelf';
     this.bass.frequency.value = 100;
     this.mid.type = 'peaking';
@@ -382,6 +402,9 @@ class TapeDelay extends BaseFxUnit {
   constructor(ctx: BaseAudioContext) {
     super(ctx, 'tapeDelay');
     this.toneL.type = this.toneR.type = 'lowpass';
+    // the tone filter sits *inside* the repeat loop, so it must be flat: any
+    // passband resonance multiplies the feedback coefficient every pass
+    this.toneL.Q.value = this.toneR.Q.value = BUTTERWORTH_Q_DB;
     this.wetIn.connect(this.wetOut); // dry
     this.wetIn.connect(this.dL);
     this.wetIn.connect(this.dR);
@@ -425,7 +448,7 @@ class TapeDelay extends BaseFxUnit {
         break;
       }
       case 'feedback': {
-        const f = (Number(value) / 100) * 0.9;
+        const f = feedbackGain(Number(value));
         this.setAP(this.fbL.gain, f);
         this.setAP(this.fbR.gain, f);
         break;
@@ -468,6 +491,7 @@ class DigitalDelay extends BaseFxUnit {
     super(ctx, 'digitalDelay');
     this.hp.type = 'highpass';
     this.lp.type = 'lowpass';
+    this.hp.Q.value = this.lp.Q.value = BUTTERWORTH_Q_DB;
     this.wetIn.connect(this.wetOut);
     this.wetIn.connect(this.dL);
     this.wetIn.connect(this.dR);
@@ -494,7 +518,7 @@ class DigitalDelay extends BaseFxUnit {
         break;
       }
       case 'feedback': {
-        const f = (Number(value) / 100) * 0.9;
+        const f = feedbackGain(Number(value));
         this.setAP(this.fbL.gain, f);
         this.setAP(this.fbR.gain, f);
         break;
@@ -516,11 +540,27 @@ class DigitalDelay extends BaseFxUnit {
 /* Freeverb-style reverb core (combs + feedback damping), shared by     */
 /* Plate and Hall.                                                     */
 /* ------------------------------------------------------------------ */
+/**
+ * Ceiling on a comb's per-pass gain. The damping filter is Butterworth
+ * (|H| ≤ 1), so the loop gain *is* this number; the remaining 4 % is headroom
+ * for the time-varying delay length (size changes, Hall's modulation), which
+ * momentarily raises the effective loop gain while the delay line shortens.
+ * A comb's tail is still ~150 loop-times long here, so long decays keep their
+ * tail — the ceiling only bites on the shortest combs at the longest decays,
+ * where the longer combs carry the tail anyway.
+ */
+const MAX_COMB_FEEDBACK = 0.96;
+
 class ReverbCore {
   readonly input: GainNode;
   readonly output: GainNode;
-  private combs: { delay: DelayNode; fb: GainNode; damp: BiquadFilterNode; baseMs: number }[] = [];
+  private combs: { delay: DelayNode; fb: GainNode; damp: BiquadFilterNode; baseMs: number; loopS: number }[] = [];
   private modLfos: { osc: OscillatorNode; depth: GainNode }[] = [];
+  /** false until the owning unit has applied its initial parameters: while
+   * false every coefficient is written directly instead of glided, so the
+   * combs never run at a GainNode's default gain of 1.0 (an exactly-unity
+   * loop) for the half second a setTargetAtTime ramp would take. */
+  private primed = false;
 
   constructor(
     private ctx: BaseAudioContext,
@@ -535,19 +575,25 @@ class ReverbCore {
       const delay = ctx.createDelay(1);
       delay.delayTime.value = ms / 1000;
       const fb = ctx.createGain();
+      fb.gain.value = 0; // silent until applyDecay() computes a real coefficient
       const damp = ctx.createBiquadFilter();
       damp.type = 'lowpass';
       damp.frequency.value = 6000;
+      // flat, not the node's default +1 dB of resonance: this filter is inside
+      // the comb's feedback path, so any peak above 1.0 is added to the loop
+      // gain on every single pass
+      damp.Q.value = BUTTERWORTH_Q_DB;
       this.input.connect(delay);
       delay.connect(damp).connect(fb).connect(delay);
       damp.connect(sum);
-      this.combs.push({ delay, fb, damp, baseMs: ms });
+      this.combs.push({ delay, fb, damp, baseMs: ms, loopS: ms / 1000 });
       if (mod && i % 2 === 0) {
         const { osc, depthGain } = makeLfo(ctx, delay.delayTime, 0.2 + i * 0.07, 0);
         this.modLfos.push({ osc, depth: depthGain });
       }
     }
-    // simple diffusion: two allpass biquads
+    // simple diffusion: two allpass biquads (magnitude-flat by construction,
+    // and outside the comb loops in any case)
     const ap1 = ctx.createBiquadFilter();
     const ap2 = ctx.createBiquadFilter();
     ap1.type = ap2.type = 'allpass';
@@ -556,10 +602,24 @@ class ReverbCore {
     sum.connect(ap1).connect(ap2).connect(this.output);
   }
 
+  /** Called once by the owning unit after its initial applyAll(). */
+  prime(): void {
+    this.primed = true;
+  }
+
+  private write(p: AudioParam, v: number, tau: number): void {
+    if (this.primed) p.setTargetAtTime(v, this.ctx.currentTime, tau);
+    else p.value = v;
+  }
+
   setSize(pct: number): void {
     const scale = 0.5 + (pct / 100) * 1.2;
     for (const c of this.combs) {
-      c.delay.delayTime.setTargetAtTime((c.baseMs * scale) / 1000, this.ctx.currentTime, 0.1);
+      // remember the *target* loop time; delayTime.value still reads the old
+      // one while a glide is in flight, and computing the decay coefficient
+      // from a stale (shorter) loop time over-estimates it
+      c.loopS = (c.baseMs * scale) / 1000;
+      this.write(c.delay.delayTime, c.loopS, 0.1);
     }
     this.applyDecay();
   }
@@ -573,23 +633,20 @@ class ReverbCore {
 
   private applyDecay(): void {
     for (const c of this.combs) {
-      const loopS = c.delay.delayTime.value || c.baseMs / 1000;
       // gain per pass for −60 dB in decayS
-      const g = Math.pow(10, (-3 * loopS) / this.decayS);
-      c.fb.gain.setTargetAtTime(Math.min(0.97, g), this.ctx.currentTime, 0.1);
+      const g = Math.pow(10, (-3 * c.loopS) / this.decayS);
+      this.write(c.fb.gain, Math.min(MAX_COMB_FEEDBACK, g), 0.1);
     }
   }
 
   setDamp(pct: number): void {
     const f = 12000 - (pct / 100) * 10500; // 0 → 12 kHz, 100 → 1.5 kHz
-    for (const c of this.combs) c.damp.frequency.setTargetAtTime(f, this.ctx.currentTime, 0.05);
+    for (const c of this.combs) this.write(c.damp.frequency, f, 0.05);
   }
 
   setMod(pct: number): void {
     if (!this.mod) return;
-    for (const l of this.modLfos) {
-      l.depth.gain.setTargetAtTime((pct / 100) * 0.0015, this.ctx.currentTime, 0.05);
-    }
+    for (const l of this.modLfos) this.write(l.depth.gain, (pct / 100) * 0.0015, 0.05);
   }
 }
 
@@ -607,6 +664,7 @@ class PlateReverb extends BaseFxUnit {
     this.wetIn.connect(this.predelay).connect(this.core.input);
     this.core.output.connect(this.wet).connect(this.wetOut);
     this.applyAll();
+    this.core.prime();
   }
 
   protected applyParam(id: string, value: ParamValue): void {
@@ -633,10 +691,15 @@ class PlateReverb extends BaseFxUnit {
 /* ------------------------------------------------------------------ */
 /* 11. Hall / Shimmer (+12 st pitch feed via jm-pitch-shift worklet)    */
 /* ------------------------------------------------------------------ */
+/** Send gain at shimmer = 100. See the loop-gain note in the constructor. */
+const MAX_SHIMMER_SEND = 0.22;
+
 class HallShimmer extends BaseFxUnit {
   private core = new ReverbCore(this.ctx, [50.1, 56.9, 63.7, 71.3, 79.9, 86.2, 94.1, 103.7], true);
   private wet = this.ctx.createGain();
   private shimmerGain = this.ctx.createGain();
+  private shimmerHp = this.ctx.createBiquadFilter();
+  private shimmerLp = this.ctx.createBiquadFilter();
   private shifter: AudioWorkletNode | null = null;
 
   constructor(ctx: BaseAudioContext) {
@@ -645,15 +708,34 @@ class HallShimmer extends BaseFxUnit {
     this.wetIn.connect(this.core.input);
     this.core.output.connect(this.wet).connect(this.wetOut);
     this.shimmerGain.gain.value = 0;
-    // shimmer: reverb output → +12 st → back into the reverb
+    // Shimmer: reverb output → +12 st → back into the reverb. This is a second
+    // feedback loop wrapped *around* the comb bank, so its gain is the send
+    // gain times the core's own resonant magnitude (up to ~1/(1−0.96) per comb
+    // before the 1/8 sum). Two things keep it below unity: the send tops out at
+    // MAX_SHIMMER_SEND, and the return is band-limited — the octave-up copy is
+    // rolled off so the loop cannot regenerate the band where the combs
+    // resonate hardest. Both are also what the effect wants musically: a soft
+    // octave halo rather than a full-bandwidth re-injection.
+    this.shimmerLp.type = 'lowpass';
+    this.shimmerLp.frequency.value = 5000;
+    this.shimmerLp.Q.value = BUTTERWORTH_Q_DB;
+    this.shimmerHp.type = 'highpass';
+    this.shimmerHp.frequency.value = 300;
+    this.shimmerHp.Q.value = BUTTERWORTH_Q_DB;
     try {
       this.shifter = new AudioWorkletNode(ctx as AudioContext, 'jm-pitch-shift');
-      this.core.output.connect(this.shimmerGain).connect(this.shifter).connect(this.core.input);
+      this.core.output
+        .connect(this.shimmerGain)
+        .connect(this.shifter)
+        .connect(this.shimmerHp)
+        .connect(this.shimmerLp)
+        .connect(this.core.input);
     } catch {
       // worklet not registered (headless / tests) — shimmer silently disabled
       this.shifter = null;
     }
     this.applyAll();
+    this.core.prime();
   }
 
   protected applyParam(id: string, value: ParamValue): void {
@@ -665,7 +747,7 @@ class HallShimmer extends BaseFxUnit {
         this.core.setDecay(Number(value));
         break;
       case 'shimmer':
-        this.setAP(this.shimmerGain.gain, (Number(value) / 100) * 0.5);
+        this.setAP(this.shimmerGain.gain, (Number(value) / 100) * MAX_SHIMMER_SEND);
         break;
       case 'mod':
         this.core.setMod(Number(value));

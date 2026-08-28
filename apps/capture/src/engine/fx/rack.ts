@@ -14,10 +14,34 @@ export class FxRack {
   readonly output: GainNode;
   private units: BaseFxUnit[] = [];
   private tempo = 120;
+  /**
+   * Defensive guard, not a fix: `jm-safety` replaces NaN/Infinity with silence
+   * and clamps at +12 dBFS. It belongs here rather than in a unit because the
+   * rack output is the one node every processed sample passes through on its
+   * way to the output bus — downstream of all twelve units and of every
+   * feedback loop, upstream of the speakers. Null when the worklet has not
+   * been registered (offline renders, tests), in which case the rack is simply
+   * wired straight through.
+   */
+  private safety: AudioWorkletNode | null = null;
+  /** last non-finite / clamped-sample report from the safety worklet */
+  unsafeReport: { nonFinite: number; clamped: number; at: number } | null = null;
 
   constructor(private ctx: BaseAudioContext) {
     this.input = ctx.createGain();
     this.output = ctx.createGain();
+    try {
+      this.safety = new AudioWorkletNode(ctx as AudioContext, 'jm-safety');
+      this.safety.port.onmessage = (e: MessageEvent) => {
+        const d = e.data as { type?: string; nonFinite?: number; clamped?: number };
+        if (d?.type !== 'fx-unsafe') return;
+        this.unsafeReport = { nonFinite: d.nonFinite ?? 0, clamped: d.clamped ?? 0, at: Date.now() };
+        console.warn('[fx] safety guard engaged', this.unsafeReport);
+      };
+      this.safety.connect(this.output);
+    } catch {
+      this.safety = null;
+    }
     this.reconnect();
   }
 
@@ -65,7 +89,7 @@ export class FxRack {
       node.connect(u.input);
       node = u.output;
     }
-    node.connect(this.output);
+    node.connect(this.safety ?? this.output);
   }
 
   serialize(): FxUnitState[] {

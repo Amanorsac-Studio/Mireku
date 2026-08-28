@@ -103,6 +103,39 @@ export abstract class BaseFxUnit implements FxUnitNode {
   }
 }
 
+/**
+ * Web Audio's `BiquadFilterNode.Q` is **resonance in decibels** for the
+ * `lowpass` and `highpass` types, not a linear quality factor — the spec's
+ * coefficient formula is `alpha = sin(w0) / (2 * 10^(Q/20))`. The node's
+ * default `Q` of 1 therefore means *+1 dB of resonance* (linear Q ≈ 1.12) and
+ * a passband peak of ~1.25× (+1.96 dB), not the flat response a "tone" or
+ * "damping" filter wants. Inside a feedback loop that peak is up to +2 dB of
+ * extra gain per pass, and it pushes an otherwise-sane coefficient over unity.
+ *
+ * This constant is the linear Q of 1/√2 expressed the way Web Audio wants it:
+ * maximally flat, peak magnitude exactly 1.0, so a loop's gain is exactly its
+ * feedback coefficient. Use it on every lowpass/highpass that is meant to be
+ * non-resonant — mandatory for any filter inside a feedback path.
+ */
+export const BUTTERWORTH_Q_DB = 20 * Math.log10(Math.SQRT1_2); // −3.0103
+
+/**
+ * Hard ceiling on any realised feedback coefficient in the rack. Every
+ * documented feedback range tops out at 90 (FX_REGISTRY), so the mapping below
+ * reaches 0.81 at the top of the knob; the clamp is a second line of defence so
+ * no future range change, no preset written by another app, and no arithmetic
+ * slip can hand a loop a coefficient of 1 or more.
+ */
+export const MAX_FEEDBACK = 0.9;
+
+/** Map a documented 0..90 (or ±90) feedback parameter onto a loop coefficient
+ * that provably cannot reach unity. */
+export function feedbackGain(pct: number): number {
+  const g = (pct / 100) * MAX_FEEDBACK;
+  if (!Number.isFinite(g)) return 0;
+  return Math.max(-MAX_FEEDBACK, Math.min(MAX_FEEDBACK, g));
+}
+
 /** Tempo-sync division → milliseconds. */
 export function divisionToMs(bpm: number, division: string): number {
   const beatMs = 60000 / bpm; // quarter note

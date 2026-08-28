@@ -737,3 +737,209 @@ default browser chrome was introduced.
 being edited concurrently and were left alone. The `.jmi` format, the export
 pipeline, `processCapture` output and the recorded audio are unchanged — pitch
 detection is analysis only.
+
+## FX rack stability — self-oscillating reverb / delay loops
+
+### 58. The defect, measured
+Auditioning a few notes through any default rack drove the FX output to
+`Infinity` and kept it there after the sampler went silent. Reproduced headless
+against the real `units.ts` graphs (Chrome `OfflineAudioContext`, impulse then
+silence, peak per second in dBFS):
+
+| unit, default params | s1 | s3 | s5 | s7 |
+|---|---|---|---|---|
+| `plateReverb` | −19.6 | +21.2 | +62.4 | +105.9 |
+| `hallShimmer` | −33.3 | −10.1 | +13.1 | +39.2 |
+
+and end to end, four note bursts inside the first 2 s then twenty seconds of
+silence, `rhodes-ep` default rack: **+5.2 → +6.8 → … → +351.5 dBFS at t=20 s**
+(about +21.6 dB/s, self-sustaining). All four worlds' default racks were
+affected — every one of them ends in a reverb. This matches the reported
++7 → +589 → `Infinity` progression exactly.
+
+### 59. Root cause: Web Audio's `Q` is decibels on lowpass/highpass
+`BiquadFilterNode.Q` is **resonance in dB** for the `lowpass` and `highpass`
+types — the spec's coefficient is `alpha = sin(w0) / (2 * 10^(Q/20))`, not
+`sin(w0) / (2*Q)`. The node's default `Q` of 1 therefore means *+1 dB of
+resonance* (linear Q about 1.12), and a lowpass built by simply setting `type`
+and `frequency` has a **passband peak of 1.253 (+1.96 dB)**, not the flat
+response the code wanted. Measured with `getFrequencyResponse` at fc = 7.8 kHz:
+
+| `Q` | peak magnitude | at |
+|---|---|---|
+| 1 (node default) | **1.2533** | 6.27 kHz |
+| 0 | 1.1547 | 5.77 kHz |
+| −3.0103 (linear Q = 1/sqrt2) | **1.0000** | DC |
+
+Two of those filters sat *inside* feedback loops:
+
+- **`ReverbCore` comb damping** (`delay -> damp -> fb -> delay`, both reverbs).
+  At plate defaults the coefficient is 0.911 and the loop is 32.7 ms, so the
+  loop gain at the damper's resonance was 0.911 x 1.155 = **1.052** — +0.44 dB
+  per pass x 30.6 passes/s = **+13 dB/s of self-oscillation from silence**.
+- **`TapeDelay` tone filter** (`delay -> tone -> fb -> delay`). At the
+  documented maximum feedback of 90 the coefficient was 0.81, so
+  0.81 x 1.25 = **1.013**; measured +4.8 dB/s at feedback 90 / time 20 ms.
+
+Isolated proof: a bare `delay -> gain(0.911) -> delay` comb decays at −25 dB/s;
+add a `lowpass` with the default `Q` and the identical loop **grows at
++20 dB/s**.
+
+Two smaller faults in the same code compounded it:
+
+- `ReverbCore`'s feedback `GainNode`s were left at their default gain of **1.0**
+  and only glided to the real coefficient with `setTargetAtTime(tau=0.1)`. For
+  the first ~0.5 s of every unit construction and every preset load, each comb
+  ran at an exactly-unity loop.
+- `applyDecay()` derived the coefficient from `delay.delayTime.value`, which
+  still reads the *old* loop time while a `setSize` glide is in flight, so the
+  coefficient was computed for a shorter loop than the one it was applied to.
+
+### 60. The fix (at the source, not a limiter)
+`fxTypes.ts` gained two shared pieces of contract:
+
+- `BUTTERWORTH_Q_DB = 20*log10(1/sqrt2) = −3.0103` — Web Audio's spelling of a
+  maximally-flat filter, peak magnitude exactly 1.0. Applied to every
+  lowpass/highpass that is meant to be non-resonant, mandatory for any filter
+  in a feedback path: reverb comb damping, tape-delay tone, digital-delay
+  HP/LP, chorus BBD darkening, vintage-EQ low cut. A loop's gain is now
+  *exactly* its feedback coefficient.
+- `feedbackGain(pct)` — the single mapping from a documented 0..90 (±90 for the
+  flanger) knob to a loop coefficient, `pct/100 * 0.9` hard-clamped to ±0.9 and
+  failing to 0 on NaN/Infinity. Used by the phaser, flanger, tape delay and
+  digital delay. The realised maximum is 0.81; the clamp is there so no future
+  range change, foreign preset or arithmetic slip can hand a loop unity.
+
+`ReverbCore` additionally:
+- initialises comb feedback gains to **0** and writes coefficients directly
+  (not as a ramp) until the owning unit has finished its first `applyAll()` —
+  a new `prime()` call at the end of `PlateReverb`/`HallShimmer` construction;
+- tracks each comb's **target** loop time in `loopS` instead of re-reading the
+  in-flight `delayTime.value`;
+- caps a comb at `MAX_COMB_FEEDBACK = 0.96` (was 0.97). With the damper now
+  flat this is a strict decay; the remaining 4 % is headroom for the
+  time-varying delay length (size changes, Hall's modulation), which
+  momentarily raises the effective loop gain as a delay line shortens.
+
+`HallShimmer`'s shimmer feed is a second loop wrapped *around* the comb bank,
+so its gain is the send times the core's own resonant magnitude. The send now
+tops out at `MAX_SHIMMER_SEND = 0.22` (was 0.5) and the return is band-limited
+(300 Hz Butterworth HP -> 5 kHz Butterworth LP) so the octave-up copy cannot
+regenerate the band where the combs resonate hardest. Both changes are what the
+effect wants musically anyway: a soft octave halo, not a full-bandwidth
+re-injection.
+
+`EpPreamp` now rebuilds its waveshaper curve only when the drive coefficient
+actually changes (and tolerates engines that refuse to re-assign a curve) — no
+stability role, but it stops a knob drag rebuilding a 2048-point table every
+frame.
+
+### 61. Defensive NaN/Infinity guard — in addition, not instead
+A new `jm-safety` AudioWorklet replaces non-finite samples with silence, clamps
+at ±4.0 (+12 dBFS — far above any musical peak, far below harm) and posts a
+report at most once a second so the condition is visible rather than masked. It
+is installed as the **last node inside `FxRack`**, between the final unit and
+`rack.output`. That placement is the point: the rack output is the single node
+every processed sample must pass through, downstream of all twelve units and
+every feedback loop, upstream of the output bus and the user's speakers. Putting
+it per-unit would cost twelve nodes and would hide which unit misbehaved;
+putting it in `services.ts` would touch a file another workstream owns. It
+degrades to a straight wire when the worklet is not registered (offline renders,
+tests), so it can never be load-bearing.
+
+Related latent bug fixed while wiring it: `registerJmWorklets` memoised its
+`addModule` promise in a module-level variable, so **only the first**
+`AudioContext` ever got the processors — every later context silently lost the
+pitch shifter and would have lost the safety guard. It is now a
+`WeakMap<BaseAudioContext, Promise<void>>`.
+
+### 62. Proving stability across the range, not just at defaults
+`node-web-audio-api` (test-only devDependency) is a full Web Audio
+implementation that reproduces Chrome's biquad semantics exactly — verified
+side by side: identical magnitude responses for `Q` = 1 / 0 / −3.0103, and
+identical pre-fix growth rates. `test/fxHarness.ts` renders the real
+`units.ts` / `rack.ts` graphs offline in Node; `test/fxStability.test.ts` adds
+**45 tests**:
+
+- the Q-in-dB fact itself, pinned as an executable statement of the root cause;
+- `feedbackGain` under the whole documented range plus out-of-contract and
+  non-finite input;
+- all 12 units at defaults — impulse then silence, no NaN/Infinity, finite
+  peak, tail strictly falling;
+- 18 extreme configurations (feedback 90 at the shortest and longest delay
+  times, both flanger polarities, ping-pong, tempo-synced 1/32, plate decay 8 at
+  both size extremes, hall decay 20 with mod 100 and shimmer 100);
+- every feedback unit swept in 9 steps across its whole feedback (or decay)
+  range with mix at 100;
+- all four worlds' default racks end to end: notes peak sensibly, and 18 s
+  after they stop the output is at least 60 dB below the note peak and still
+  falling;
+- musical behaviour: reverb tail length still tracks `decay`, and the tape delay
+  still regenerates (more feedback means many more repeats).
+
+### 63. After, same measurement
+Same harness, same inputs:
+
+| | s1 | s3 | s5 | s7 |
+|---|---|---|---|---|
+| `plateReverb` defaults | −56.3 | −114.9 | −166.2 | −218.6 |
+| `hallShimmer` defaults | −55.2 | −82.4 | −115.8 | −146.0 |
+
+`rhodes-ep` default rack, four notes then silence: **+5.2 -> +6.9 -> −16.7 ->
+... -> −457.4 dBFS at t=20 s.** `mks`, `fm` and `strings` likewise
+monotonically decaying, zero non-finite samples, guard never engaged.
+
+Decay times still track the knobs — plate 0.5 s to about 0.7 s to −60 dB,
+2.2 to about 2.5, 8 to about 8; hall 1 to about 1, 4 to about 4, 20 to about 20;
+tape delay at feedback 35 dies in about 2.5 s and at 90 regenerates for about
+11 s (roughly 30 audible repeats). Nothing lost its character.
+
+Guard verified directly in Chrome: a buffer of alternating `NaN`, `+Infinity`
+and `1e6` fed through an empty rack comes out with **0 non-finite samples and a
+maximum absolute value of 4.0**.
+
+### 64. Verified in the running app
+Live `AudioContext` in the Vite dev server, real Chrome, four note bursts
+through each default rack, sampled off `rack.output` (the same signal the
+Settings output meter reads), peak per second in dBFS:
+
+- `rhodes-ep`: −10.4 -> −18.1 -> −40.9 -> −64.0 -> ... -> −326.1
+- `mks`: −18.8 -> ... -> −178.8
+- `fm`: −8.5 -> ... -> −177.8
+- `strings`: −18.1 -> ... -> −180.9
+
+Peaks sensibly on the notes, returns to the floor when they stop, `unsafeReport`
+null throughout, page console clean.
+
+### 65. JM Signature's C++ rack — not affected by this defect
+Investigated only far enough to answer, and deliberately not touched.
+`apps/signature/src/engine/FxDsp.h` uses **one-pole** filters
+(`OnePoleLP`: `z += a*(x−z)`) inside every feedback path, which are
+unconditionally |H| <= 1 and cannot add resonance to a loop; its reverbs are
+`juce::Reverb` (Freeverb) with `roomSize` clamped to 0.99 and a one-pole
+damper. The dB-vs-linear `Q` trap is a Web Audio API quirk with no C++
+counterpart. Two lesser things a scheduled pass should look at, neither of them
+this bug:
+
+1. Feedback maps as `p(n)/100.0f`, so the documented maximum of 90 yields a loop
+   coefficient of exactly **0.90 with no margin**; the wow/flutter modulation
+   shortens the delay line inside that same loop, which transiently raises the
+   effective per-pass gain. Capture now realises 0.81 and hard-clamps at 0.9.
+2. There is no NaN/Infinity guard anywhere on Signature's output path.
+
+Parameter names, ranges and defaults in `packages/jmi-format/src/fx-params.ts`
+are untouched, so presets stay portable between the two apps.
+
+### 66. Verification
+- `npm run typecheck -w jm-capture` — clean (renderer + electron).
+- `npm run test -w jm-capture` — **136/136 passed, 10/10 files**: the 91
+  pre-existing tests are green and untouched, plus 45 new in
+  `test/fxStability.test.ts`.
+- `npm run build -w jm-capture` — renderer + electron main/preload, exit 0.
+
+### 67. Not touched
+`src/engine/guided.ts`, `src/engine/autoMode.ts`, `src/engine/dsp/*`, the
+guided-mode UI, `src/state/services.ts`, `src/ui/theme/tokens.ts`,
+`src/ui/common.tsx`, `src/ui/fx/FxRackView.tsx` and Signature's `FxDsp.h` were
+all left alone. The fix is confined to `src/engine/fx/*`; no UI, no preset
+format, no parameter contract changed.

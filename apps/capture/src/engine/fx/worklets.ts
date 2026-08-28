@@ -80,16 +80,68 @@ class JmCapture extends AudioWorkletProcessor {
   }
 }
 registerProcessor('jm-capture', JmCapture);
+
+/**
+ * Last line of defence between the FX rack and the user's speakers. It is NOT
+ * the stability fix — every unit is stable by construction (see units.ts) —
+ * it exists so that a future regression in a feedback path can never put NaN,
+ * Infinity or an ear-damaging level onto the output device. It sits at the
+ * rack output because that is the single node every sample of processed audio
+ * must pass through, downstream of all twelve units and of every feedback
+ * loop, and upstream of the output bus. Non-finite samples become silence;
+ * anything past the ceiling is clamped. Both are reported once per second so
+ * the condition is visible rather than silently masked.
+ */
+class JmSafety extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.ceiling = 4; // +12 dBFS: far above any musical peak, far below harm
+    this.nonFinite = 0;
+    this.clamped = 0;
+    this.lastReport = 0;
+  }
+  process(inputs, outputs) {
+    const input = inputs[0];
+    const output = outputs[0];
+    if (!input || input.length === 0) return true;
+    for (let ch = 0; ch < output.length; ch++) {
+      const src = input[Math.min(ch, input.length - 1)];
+      const dst = output[ch];
+      if (!src) { dst.fill(0); continue; }
+      for (let i = 0; i < dst.length; i++) {
+        const v = src[i];
+        if (!Number.isFinite(v)) { dst[i] = 0; this.nonFinite++; }
+        else if (v > this.ceiling) { dst[i] = this.ceiling; this.clamped++; }
+        else if (v < -this.ceiling) { dst[i] = -this.ceiling; this.clamped++; }
+        else dst[i] = v;
+      }
+    }
+    if ((this.nonFinite || this.clamped) && currentTime - this.lastReport > 1) {
+      this.lastReport = currentTime;
+      this.port.postMessage({ type: 'fx-unsafe', nonFinite: this.nonFinite, clamped: this.clamped });
+      this.nonFinite = 0;
+      this.clamped = 0;
+    }
+    return true;
+  }
+}
+registerProcessor('jm-safety', JmSafety);
 `;
 
-let registered: Promise<void> | null = null;
+/** Keyed by context: a module registered on one AudioContext is not available
+ * on any other, so memoising globally silently left every later context (an
+ * offline render, a rebuilt context after a device change) without the pitch
+ * shifter and — more seriously — without the output safety guard. */
+const registered = new WeakMap<BaseAudioContext, Promise<void>>();
 
-/** Register the JM worklet processors on a context (idempotent). */
-export function registerJmWorklets(ctx: AudioContext): Promise<void> {
-  if (!registered) {
+/** Register the JM worklet processors on a context (idempotent per context). */
+export function registerJmWorklets(ctx: BaseAudioContext): Promise<void> {
+  let p = registered.get(ctx);
+  if (!p) {
     const blob = new Blob([WORKLET_SOURCE], { type: 'application/javascript' });
     const url = URL.createObjectURL(blob);
-    registered = ctx.audioWorklet.addModule(url).finally(() => URL.revokeObjectURL(url));
+    p = ctx.audioWorklet.addModule(url).finally(() => URL.revokeObjectURL(url));
+    registered.set(ctx, p);
   }
-  return registered;
+  return p;
 }

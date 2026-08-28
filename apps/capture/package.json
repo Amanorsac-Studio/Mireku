@@ -31,6 +31,7 @@
     "electron": "^33.3.1",
     "electron-builder": "^25.1.8",
     "esbuild": "^0.24.2",
+    "node-web-audio-api": "^2.2.0",
     "typescript": "^5.7.2",
     "vite": "^6.0.7",
     "vitest": "^2.1.8"

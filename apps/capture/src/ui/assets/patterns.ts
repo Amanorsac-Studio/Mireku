@@ -13,3 +13,7 @@ export const WORLD_PATTERN_SVG: Record<World, string> = {
   fm,
   strings,
 };
+
+/** The V2 pack's pure-vector micro-weave (kente-micro-weave.svg), used as the
+ * chassis / panel surface texture. */
+export { default as MICRO_WEAVE_SVG } from './marks/kente-micro-weave.svg?raw';

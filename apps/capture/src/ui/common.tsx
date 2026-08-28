@@ -1,21 +1,25 @@
 import React, { useEffect, useState } from 'react';
 import type { World } from '@jm/jmi-format/web';
-import { IconDown } from './assets/icons';
 import { clothBackground, worldPatternDataUrl } from './theme/weave';
 import { worldTint } from './theme/tokens';
+import { Listbox, PlateButton, Screws, type ListOption } from './hardware';
 
 export function Panel({
   children,
   style,
   variant,
+  screws,
 }: {
   children: React.ReactNode;
   style?: React.CSSProperties;
-  /** 'recessed' = dark plate with subtle warp weave (meter / session map) */
+  /** 'recessed' = the V2 recessed control surface (meter / session map) */
   variant?: 'recessed';
+  /** kit corner screws, as Signature puts them on the recessed surface */
+  screws?: boolean;
 }) {
   return (
     <div className={`jm-panel${variant ? ` ${variant}` : ''}`} style={style}>
+      {screws && <Screws />}
       {children}
     </div>
   );
@@ -25,40 +29,82 @@ export function Label({ children }: { children: React.ReactNode }) {
   return <div className="jm-label">{children}</div>;
 }
 
+/** Section title in the chrome register (tracked uppercase + hairline rule). */
+export function SectionHeader({ children }: { children: React.ReactNode }) {
+  return <div className="jm-chrome-header">{children}</div>;
+}
+
+/**
+ * Every button in Capture is the kit's photoreal plaque (Signature's Plate
+ * register): up = idle, down = pressed, filled-gold = engaged.
+ */
 export function Button({
   children,
   onClick,
   primary,
   disabled,
+  compact,
   style,
+  title,
 }: {
   children: React.ReactNode;
   onClick?: () => void;
   primary?: boolean;
   disabled?: boolean;
+  compact?: boolean;
   style?: React.CSSProperties;
+  title?: string;
 }) {
   return (
-    <button className={`jm-btn${primary ? ' primary' : ''}`} onClick={onClick} disabled={disabled} style={style}>
+    <PlateButton on={primary} onClick={onClick} disabled={disabled} compact={compact} style={style} title={title}>
       {children}
-    </button>
+    </PlateButton>
   );
 }
 
-/** Native select dressed with the client chevron (icon-down). */
-export function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
-  const { style, ...rest } = props;
+/**
+ * Select replacement. Native <select> cannot be styled past its OS chrome, so
+ * every dropdown in Capture is the custom CHROME listbox (dark plaque, gold
+ * highlight row, gold tick and chevron) — the exact complaint the client
+ * raised against Signature's menus in round 3.
+ */
+export function Select({
+  value,
+  onChange,
+  options,
+  placeholder,
+  disabled,
+  style,
+  title,
+}: {
+  value: string;
+  onChange(next: string): void;
+  options: ListOption[];
+  placeholder?: string;
+  disabled?: boolean;
+  style?: React.CSSProperties;
+  title?: string;
+}) {
   return (
-    <div className="jm-select-wrap" style={style}>
-      <select className="jm-select" {...rest} />
-      <span className="jm-select-chev">
-        <IconDown size={14} />
-      </span>
-    </div>
+    <Listbox
+      value={value}
+      onChange={onChange}
+      options={options}
+      placeholder={placeholder}
+      disabled={disabled}
+      style={style}
+      title={title}
+    />
   );
 }
 
-/** Client pill toggle (toggle.svg): black well, gold border, sliding thumb. */
+/** Recessed text well with a gold focus ring (CHROME register). */
+export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
+  const { className, ...rest } = props;
+  return <input className={`jm-well${className ? ` ${className}` : ''}`} {...rest} />;
+}
+
+/** Pill toggle (client toggle.svg), in the family palette. */
 export function Toggle({
   checked,
   onChange,
@@ -84,8 +130,9 @@ export function Toggle({
   );
 }
 
-/** Async world-pattern cloth background (client pattern SVGs, darkened).
- * Falls back to the procedural tinted weave until the raster is ready. */
+/** Async world-pattern cloth background (client pattern SVGs, graded through
+ * the V2 kente pipeline). Falls back to the procedural tinted weave until the
+ * raster is ready. */
 export function useWorldCloth(world: World): React.CSSProperties {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
@@ -102,7 +149,7 @@ export function useWorldCloth(world: World): React.CSSProperties {
 
 export function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="jm-col" style={{ gap: 'calc(var(--jm-size-gap-unit) * 0.75)' }}>
+    <div className="jm-col" style={{ gap: 'calc(var(--jm-size-gap-unit) * 0.75)', flex: 1 }}>
       <Label>{label}</Label>
       {children}
     </div>

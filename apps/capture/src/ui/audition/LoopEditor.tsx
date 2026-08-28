@@ -4,6 +4,7 @@ import { acceptTake, serializeSession, type TakeRecord } from '../../engine/sess
 import { useApp } from '../../state/appStore';
 import { bridge, services } from '../../state/services';
 import { Button, Label, Panel, Select } from '../common';
+import { GoldDivider } from '../hardware';
 
 /** Loop audition + manual nudge (§3.5) for sustaining takes. */
 export function LoopEditor() {
@@ -28,15 +29,17 @@ export function LoopEditor() {
   return (
     <Panel>
       <div className="jm-col">
-        <Label>Loop Editor — audition plays attack then loop ×4</Label>
+        <div className="jm-title">Loop Editor</div>
+        <GoldDivider />
+        <Label>Audition plays attack then loop ×4</Label>
         <div className="jm-row">
-          <Select style={{ maxWidth: '320px' }} value={take?.file ?? ''} onChange={(e) => setSelected(e.target.value)}>
-            {looped.map((t) => (
-              <option key={t.file} value={t.file}>
-                {t.file}
-              </option>
-            ))}
-          </Select>
+          <Select
+            style={{ maxWidth: '320px' }}
+            value={take?.file ?? ''}
+            onChange={setSelected}
+            placeholder="No looped takes"
+            options={looped.map((t) => ({ value: t.file, label: t.file, section: 'Looped Takes' }))}
+          />
           {take && (
             <Button primary onClick={() => void services.auditionLoop(session, take.file)}>
               Audition Loop
@@ -44,8 +47,8 @@ export function LoopEditor() {
           )}
         </div>
         {take?.loop && (
-          <div className="jm-row" style={{ flexWrap: 'wrap' }}>
-            <div className="jm-value">
+          <div className="jm-row wrap">
+            <div className="jm-plaque jm-value">
               Start {take.loop.startSample} · End {take.loop.endSample} · XF {take.loop.crossfadeSamples}
             </div>
             <Button onClick={() => void nudge(-step, 0)}>Start −5ms</Button>

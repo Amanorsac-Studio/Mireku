@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { sessionStats } from '../../engine/session';
 import { useApp } from '../../state/appStore';
 import { bridge, services } from '../../state/services';
-import { Button, Label, Panel } from '../common';
+import { Button, Panel } from '../common';
+import { GoldDivider } from '../hardware';
 
 export function ExportScreen() {
   const session = useApp((s) => s.session);
@@ -32,10 +33,11 @@ export function ExportScreen() {
 
   return (
     <div className="jm-col" style={{ maxWidth: '760px', margin: '0 auto' }}>
-      <Panel>
+      <Panel screws>
         <div className="jm-col">
-          <Label>Export Instrument</Label>
-          <div className="jm-value">
+          <div className="jm-title">Export Instrument</div>
+          <GoldDivider />
+          <div className="jm-plaque jm-value">
             {session.config.instrumentName} · {stats.done} of {stats.total} takes captured ({stats.percent}%)
           </div>
           {stats.done < stats.total && (
@@ -52,7 +54,10 @@ export function ExportScreen() {
       {result && (
         <Panel>
           <div className="jm-col">
-            <Label>{result.valid ? 'Export complete — bundle valid' : 'Export finished with validation errors'}</Label>
+            <div className="jm-title">
+              {result.valid ? 'Export complete — bundle valid' : 'Export finished with validation errors'}
+            </div>
+            <GoldDivider />
             <div className="jm-value">{result.bundlePath}</div>
             <div className="jm-value">{result.zipPath}</div>
             <div className="jm-value">

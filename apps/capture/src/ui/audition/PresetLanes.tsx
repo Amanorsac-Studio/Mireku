@@ -1,12 +1,15 @@
 
+import { useState } from 'react';
 import { useApp } from '../../state/appStore';
 import { services } from '../../state/services';
-import { Button, Label, Panel } from '../common';
+import { Button, Input, Label, Panel } from '../common';
+import { ChromeDialog, GoldDivider, Segmented } from '../hardware';
 import { IconFilter, IconHeart, IconMore, IconStar } from '../assets/icons';
 
 /** Preset lanes (§3.6): create / rename / duplicate / delete presets
  * (params + FX only) on the current bundle. */
 export function PresetLanes() {
+  const [renaming, setRenaming] = useState<string | null>(null);
   const presets = useApp((s) => s.presets);
   const active = useApp((s) => s.activePresetIndex);
   const setPresets = useApp((s) => s.setPresets);
@@ -42,11 +45,12 @@ export function PresetLanes() {
     setPresets([...presets, { fileName: `${name}.json`, preset: { ...src.preset, name } }]);
   };
 
-  const rename = () => {
+  // window.prompt() is OS chrome; the rename runs through the CHROME dialog
+  // register instead, so no default browser chrome survives anywhere.
+  const commitRename = (name: string) => {
     const src = presets[active];
-    if (!src) return;
-    const name = window.prompt('Preset name', src.preset.name);
-    if (!name) return;
+    setRenaming(null);
+    if (!src || !name.trim()) return;
     const next = [...presets];
     next[active] = { fileName: `${name}.json`, preset: { ...src.preset, name } };
     setPresets(next);
@@ -61,22 +65,25 @@ export function PresetLanes() {
   return (
     <Panel>
       <div className="jm-col">
-        <Label>Preset Lanes — parameters + FX only, shared samples</Label>
-        <div className="jm-row" style={{ flexWrap: 'wrap' }}>
-          {presets.map((p, i) => (
-            <Button key={i} primary={i === active} onClick={() => select(i)}>
-              {p.preset.name}
-            </Button>
-          ))}
-        </div>
-        <div className="jm-row">
+        <div className="jm-title">Preset Lanes</div>
+        <GoldDivider />
+        <Label>Parameters + FX only, shared samples</Label>
+        {presets.length > 0 && (
+          <Segmented
+            grow
+            value={active}
+            onChange={select}
+            options={presets.map((p, i) => ({ value: i, label: p.preset.name }))}
+          />
+        )}
+        <div className="jm-row wrap">
           <Button onClick={create}>
             <IconStar size={14} /> New
           </Button>
           <Button onClick={saveCurrent}>
             <IconHeart size={14} /> Save Rack Into Preset
           </Button>
-          <Button onClick={rename}>
+          <Button onClick={() => setRenaming(presets[active]?.preset.name ?? '')}>
             <IconMore size={14} /> Rename
           </Button>
           <Button onClick={duplicate}>
@@ -87,6 +94,22 @@ export function PresetLanes() {
           </Button>
         </div>
       </div>
+      {renaming !== null && (
+        <ChromeDialog title="Rename Preset" onClose={() => setRenaming(null)}>
+          <Input
+            value={renaming}
+            autoFocus
+            onChange={(e) => setRenaming(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && commitRename(renaming)}
+          />
+          <div className="jm-row" style={{ justifyContent: 'flex-end' }}>
+            <Button onClick={() => setRenaming(null)}>Cancel</Button>
+            <Button primary onClick={() => commitRename(renaming)}>
+              Rename
+            </Button>
+          </div>
+        </ChromeDialog>
+      )}
     </Panel>
   );
 }

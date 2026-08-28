@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+<title>JM micro weave</title><desc>Pure-vector low-contrast weave overlay; tile at 64px.</desc>
+<rect width="64" height="64" fill="none"/>
+<g stroke="#D9A648" stroke-opacity=".08" stroke-width="1">
+<path d="M0 8H64M0 24H64M0 40H64M0 56H64"/><path d="M8 0V64M24 0V64M40 0V64M56 0V64"/>
+</g><g stroke="#000" stroke-opacity=".25" stroke-width="2"><path d="M0 16H64M0 48H64"/><path d="M16 0V64M48 0V64"/></g>
+</svg>

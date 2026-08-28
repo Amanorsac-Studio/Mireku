@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useApp } from '../../state/appStore';
 import { services } from '../../state/services';
-import { Button, Label, Panel } from '../common';
+import { Label, Panel } from '../common';
+import { GoldDivider, PlateButton, Screws } from '../hardware';
 import { IconKeyboard } from '../assets/icons';
 import { FxRackView } from '../fx/FxRackView';
 import { Keyboard } from './Keyboard';
@@ -17,15 +18,18 @@ export function AuditionScreen() {
   useEffect(() => {
     if (!session) return;
     let live = true;
-    services.initAudition(session).catch((e) => (console.error('audition init failed', e), undefined)).then(() => {
-      if (!live) return;
-      if (presets.length === 0) {
-        const defaults = services.defaultPresetsFor(session);
-        useApp.getState().setPresets(defaults);
-        services.loadPresetIntoRack(defaults[0].preset);
-      }
-      setReady(true);
-    });
+    services
+      .initAudition(session)
+      .catch((e) => (console.error('audition init failed', e), undefined))
+      .then(() => {
+        if (!live) return;
+        if (presets.length === 0) {
+          const defaults = services.defaultPresetsFor(session);
+          useApp.getState().setPresets(defaults);
+          services.loadPresetIntoRack(defaults[0].preset);
+        }
+        setReady(true);
+      });
     return () => {
       live = false;
       services.stopAudition();
@@ -36,17 +40,20 @@ export function AuditionScreen() {
   if (!session) return null;
 
   return (
-    <div className="jm-col" style={{ maxWidth: '1200px', margin: '0 auto' }}>
-      <Panel>
-        <div className="jm-col">
+    <div className="jm-col" style={{ maxWidth: '1280px', margin: '0 auto' }}>
+      <Panel variant="recessed">
+        <Screws />
+        <div className="jm-col" style={{ gap: 'calc(var(--jm-size-gap-unit) * 1.5)' }}>
           <div className="jm-row" style={{ justifyContent: 'space-between' }}>
-            <Label>
-              Audition — MIDI in plays the sampled instrument{ready ? '' : ' (loading samples…)'} · CC64 sustain supported
-            </Label>
-            <Button primary={showKeyboard} onClick={() => setShowKeyboard(!showKeyboard)}>
-              <IconKeyboard size={16} /> Keyboard
-            </Button>
+            <div className="jm-title">Audition</div>
+            <PlateButton on={showKeyboard} onClick={() => setShowKeyboard(!showKeyboard)}>
+              <IconKeyboard size={15} /> Keyboard
+            </PlateButton>
           </div>
+          <GoldDivider />
+          <Label>
+            MIDI in plays the sampled instrument{ready ? '' : ' (loading samples…)'} · CC64 sustain supported
+          </Label>
           {showKeyboard && (
             <Keyboard
               onNoteOn={(n, v) => services.voices?.noteOn(n, v)}

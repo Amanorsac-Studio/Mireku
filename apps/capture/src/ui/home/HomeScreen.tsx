@@ -1,8 +1,9 @@
-
 import { useApp } from '../../state/appStore';
 import { bridge } from '../../state/services';
 import { deserializeSession, sessionStats } from '../../engine/session';
 import { Button, Label, Panel } from '../common';
+import { Flourish, GoldDivider } from '../hardware';
+import { KIT } from '../assets/kit';
 import { IconMore, IconRight, IconStar } from '../assets/icons';
 
 export function HomeScreen() {
@@ -23,18 +24,27 @@ export function HomeScreen() {
   };
 
   return (
-    <div className="jm-col" style={{ maxWidth: '720px', margin: '0 auto' }}>
-      <Panel>
-        <div className="jm-col">
-          <Label>New Session</Label>
+    <div className="jm-col" style={{ maxWidth: '860px', margin: '0 auto' }}>
+      {/* Brand panel — the shield and ONE gold flourish, exactly as Signature
+          uses it: a single accent, never repeated as wallpaper. */}
+      <Panel screws style={{ textAlign: 'center' }}>
+        <div className="jm-col" style={{ alignItems: 'center', gap: 'calc(var(--jm-size-gap-unit) * 1.5)' }}>
+          <img src={KIT.shield} alt="JM" style={{ height: 92 }} />
+          <div className="jm-title" style={{ fontSize: 'var(--jm-type-h1)' }}>
+            JM Capture
+          </div>
+          <Label>Luxury studio workstation — focus, momentum, confidence for one musician</Label>
+          <Flourish width={150} style={{ marginTop: 'calc(var(--jm-size-gap-unit) * 0.5)' }} />
           <Button primary onClick={() => setScreen('wizard')}>
             <IconStar size={14} /> Start a New Session
           </Button>
         </div>
       </Panel>
+
       <Panel>
         <div className="jm-col">
-          <Label>Resume Session</Label>
+          <div className="jm-title">Resume Session</div>
+          <GoldDivider />
           {saved.length === 0 && <div className="jm-value">No saved sessions yet.</div>}
           {saved.map(({ id, json }) => {
             let name = id;
@@ -48,7 +58,7 @@ export function HomeScreen() {
               progress = 'corrupt snapshot';
             }
             return (
-              <div key={id} className="jm-row" style={{ justifyContent: 'space-between' }}>
+              <div key={id} className="jm-plaque jm-row" style={{ justifyContent: 'space-between' }}>
                 <div>
                   <div className="jm-value">{name}</div>
                   <div className="jm-label">{progress}</div>

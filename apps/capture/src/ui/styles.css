@@ -1,5 +1,10 @@
 /* JM Capture global styles — colors/fonts/sizes ONLY via CSS variables
-   generated from src/ui/theme/tokens.ts. No literals here. */
+   generated from src/ui/theme/tokens.ts. No literals here.
+
+   FAMILY RESTYLE: this sheet is the web transcription of JM Signature's
+   ux::Hardware registers (Segment / Plate / SolidGold / CHROME) plus the
+   photoreal hardware-kit furniture. Every tabbed, segmented, button, menu,
+   dropdown, input and dialog surface in the app resolves to one of them. */
 
 * {
   box-sizing: border-box;
@@ -24,38 +29,77 @@ body {
   user-select: none;
 }
 
+button {
+  font: inherit;
+  color: inherit;
+}
+
 .jm-app {
   display: flex;
   flex-direction: column;
   height: 100%;
 }
 
+/* ================================================================== */
+/* Header chassis                                                      */
+/* ================================================================== */
+
 .jm-nav {
   height: var(--jm-size-nav-height);
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0 calc(var(--jm-size-gap-unit) * 4);
-  border-bottom: 1px solid var(--jm-color-panel-border-soft);
+  gap: calc(var(--jm-size-gap-unit) * 2);
+  padding: 0 calc(var(--jm-size-gap-unit) * 2);
+  background: linear-gradient(180deg, var(--jm-color-panel-raised), var(--jm-color-chassis));
+  border-bottom: 1px solid var(--jm-color-gold-dark);
+  box-shadow: 0 4px 14px var(--jm-color-shadow-soft);
   flex-shrink: 0;
+  position: relative;
+  z-index: 5;
+}
+
+.jm-brand {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--jm-size-gap-unit) * 1.25);
+  min-width: 220px;
 }
 
 .jm-logo {
   font-family: var(--jm-font-display);
-  font-weight: 500;
-  letter-spacing: var(--jm-tracking-display);
-  color: var(--jm-color-gold);
+  font-weight: 600;
+  letter-spacing: var(--jm-tracking-label);
+  color: var(--jm-color-cream);
   font-size: var(--jm-type-h1);
+  line-height: 1.05;
+  text-transform: uppercase;
+}
+
+.jm-logo-sub {
+  font-family: var(--jm-font-display);
+  font-size: var(--jm-type-label);
+  letter-spacing: var(--jm-tracking-display);
+  color: var(--jm-color-muted);
   text-transform: uppercase;
 }
 
 .jm-nav-center {
   font-family: var(--jm-font-display);
-  font-weight: 300;
-  letter-spacing: var(--jm-tracking-display);
+  letter-spacing: var(--jm-tracking-label);
   color: var(--jm-color-muted);
   font-size: var(--jm-type-label);
   text-transform: uppercase;
+}
+
+.jm-nav-master {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--jm-size-gap-unit) * 1.5);
+  padding: calc(var(--jm-size-gap-unit) * 0.75) calc(var(--jm-size-gap-unit) * 1.5);
+  border-radius: var(--jm-size-radius-control);
+  background: linear-gradient(180deg, var(--jm-color-plaque-top), var(--jm-color-plaque-bottom));
+  border: 1px solid var(--jm-color-plaque-hairline);
+  box-shadow: 0 3px 10px var(--jm-color-shadow-soft);
 }
 
 .jm-screen {
@@ -64,31 +108,55 @@ body {
   padding: calc(var(--jm-size-gap-unit) * 3) calc(var(--jm-size-gap-unit) * 4);
 }
 
-.jm-panel {
-  background: var(--jm-color-deep-panel);
-  border: 1px solid var(--jm-color-panel-border-soft);
-  border-radius: var(--jm-size-radius-panel);
-  padding: calc(var(--jm-size-gap-unit) * 3);
-}
+/* ================================================================== */
+/* Panels / surfaces                                                   */
+/* ================================================================== */
 
-/* recessed plate (guided meter, session map): subtle warp texture + inset */
-.jm-panel.recessed {
-  background-color: var(--jm-color-black);
+.jm-panel {
+  position: relative;
+  background-color: var(--jm-color-deep-panel);
   background-image: var(--jm-weave-panel);
   background-repeat: repeat;
-  border-color: var(--jm-color-panel-border);
+  border: 1px solid var(--jm-color-panel-border);
+  border-radius: var(--jm-size-radius-panel);
+  padding: calc(var(--jm-size-gap-unit) * 3);
   box-shadow:
-    inset 0 2px 10px var(--jm-color-black),
-    inset 0 0 40px var(--jm-color-gold-glow-soft);
+    0 6px 20px var(--jm-color-shadow-soft),
+    inset 0 1px 0 var(--jm-color-panel-border-soft);
 }
 
-/* cloth-tinted module card (FX units, wizard world cards): the tinted weave
-   image is supplied inline from the tokens tint maps via theme/weave.ts */
+/* recessed plate (guided meter, session map): the V2 recessed control surface —
+   near-black at .93, 2px warm gold stroke, inner gold hairline, inner shadow */
+.jm-panel.recessed {
+  background-color: var(--jm-color-panel-deep);
+  background-image: var(--jm-weave-panel);
+  border: 2px solid var(--jm-color-gold-dark);
+  box-shadow:
+    inset 0 8px 24px var(--jm-color-shadow-soft),
+    inset 0 0 0 1px var(--jm-color-panel-border-soft),
+    0 6px 20px var(--jm-color-shadow-soft);
+}
+
+/* a title plaque so text never sits on undimmed cloth (Signature's legibility
+   call: title/patch text never on raw pattern) */
+.jm-plaque {
+  display: inline-block;
+  background: linear-gradient(180deg, var(--jm-color-plaque-top), var(--jm-color-plaque-bottom));
+  border: 1px solid var(--jm-color-plaque-hairline);
+  border-radius: var(--jm-size-radius-control);
+  padding: calc(var(--jm-size-gap-unit) * 0.75) calc(var(--jm-size-gap-unit) * 2);
+  box-shadow: 0 3px 10px var(--jm-color-shadow-soft);
+}
+
 .jm-cloth {
   background-color: var(--jm-color-deep-panel);
   background-repeat: repeat;
   border: 1px solid var(--jm-color-panel-border);
 }
+
+/* ================================================================== */
+/* Type registers                                                      */
+/* ================================================================== */
 
 .jm-label {
   font-family: var(--jm-font-display);
@@ -106,141 +174,684 @@ body {
   color: var(--jm-color-cream);
 }
 
-.jm-btn {
+.jm-title {
   font-family: var(--jm-font-display);
-  font-weight: 400;
-  font-size: var(--jm-type-label);
+  font-size: var(--jm-type-h2);
   letter-spacing: var(--jm-tracking-label);
   text-transform: uppercase;
-  color: var(--jm-color-gold);
-  background: transparent;
-  border: 1px solid var(--jm-color-panel-border);
+  color: var(--jm-color-gold-bright);
+}
+
+/* ================================================================== */
+/* SEGMENT register — the "matured" tab strip                          */
+/* ================================================================== */
+
+.jm-seg {
+  display: inline-flex;
+  align-items: stretch;
+  padding: 2px;
   border-radius: var(--jm-size-radius-control);
-  padding: calc(var(--jm-size-gap-unit) * 1.25) calc(var(--jm-size-gap-unit) * 2.5);
+  background: linear-gradient(180deg, var(--jm-color-plaque-top), var(--jm-color-plaque-bottom));
+  border: 1px solid var(--jm-color-plaque-hairline);
+  box-shadow:
+    0 3px 10px var(--jm-color-shadow-soft),
+    inset 0 1px 0 var(--jm-color-shadow-inset);
+}
+
+.jm-seg.grow {
+  display: flex;
+  width: 100%;
+}
+
+.jm-seg.grow .jm-seg-cell {
+  flex: 1;
+}
+
+.jm-seg-cell {
+  position: relative;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
   cursor: pointer;
-  transition: border-color 0.15s, color 0.15s, box-shadow 0.15s;
+  padding: calc(var(--jm-size-gap-unit) * 1.25) calc(var(--jm-size-gap-unit) * 2.25);
+  font-family: var(--jm-font-display);
+  font-weight: 600;
+  font-size: var(--jm-type-label);
+  letter-spacing: var(--jm-tracking-hardware);
+  text-transform: uppercase;
+  color: var(--jm-color-label-idle);
+  white-space: nowrap;
+  transition: color 0.15s, background 0.15s;
 }
 
-.jm-btn:hover {
-  border-color: var(--jm-color-gold);
-  color: var(--jm-color-gold-highlight);
+.jm-seg.compact .jm-seg-cell {
+  padding: calc(var(--jm-size-gap-unit) * 0.6) calc(var(--jm-size-gap-unit) * 1.25);
 }
 
-.jm-btn.primary {
-  background: var(--jm-color-gold);
-  color: var(--jm-color-black);
-  border-color: var(--jm-color-gold);
+/* hairline divider between inactive cells */
+.jm-seg-cell:not(.first)::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 5px;
+  bottom: 5px;
+  width: 1px;
+  background: var(--jm-color-plaque-divider);
 }
 
-.jm-btn.primary:hover {
-  background: var(--jm-color-gold-highlight);
-  box-shadow: 0 0 24px var(--jm-color-gold-glow);
+.jm-seg-cell.active::before,
+.jm-seg-cell.active + .jm-seg-cell::before {
+  opacity: 0;
 }
 
-.jm-btn:disabled {
-  opacity: 0.35;
+.jm-seg-cell:hover:not(.active):not(:disabled) {
+  background: var(--jm-color-gold-glow-soft);
+}
+
+/* ACTIVE cell: lifted, warm gold top edge, soft underline, inner glow */
+.jm-seg-cell.active {
+  background:
+    radial-gradient(120% 100% at 50% 0%, var(--jm-color-gold-hot-glow), transparent 65%),
+    linear-gradient(180deg, var(--jm-color-cell-top), var(--jm-color-cell-bottom));
+  color: var(--jm-color-gold-bright);
+  box-shadow: inset 0 0 0 1px var(--jm-color-gold-dark);
+}
+
+.jm-seg-cell.active::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  top: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--jm-color-cell-edge);
+  box-shadow: 0 6px 12px var(--jm-color-gold-hot-bloom);
+}
+
+.jm-seg-cell:disabled {
+  opacity: 0.38;
   cursor: default;
 }
 
-.jm-input,
-.jm-select {
-  background: var(--jm-color-black);
-  color: var(--jm-color-cream);
-  border: 1px solid var(--jm-color-panel-border-soft);
-  border-radius: var(--jm-size-radius-control);
-  padding: calc(var(--jm-size-gap-unit) * 1.25);
-  font-family: var(--jm-font-body);
-  font-size: var(--jm-type-body);
-  width: 100%;
+.jm-seg-cell:focus-visible {
+  outline: 2px solid var(--jm-color-gold-bright);
+  outline-offset: -2px;
 }
 
-.jm-input:focus,
-.jm-select:focus {
-  outline: none;
-  border-color: var(--jm-color-gold-dark);
-}
+/* ================================================================== */
+/* PLATE register — the kit's photoreal button plaque                  */
+/* ================================================================== */
 
-/* select dressed with the client chevron */
-.jm-select-wrap {
+.jm-plate {
   position: relative;
-  width: 100%;
-}
-
-.jm-select-wrap .jm-select {
-  appearance: none;
-  padding-right: calc(var(--jm-size-gap-unit) * 4);
-}
-
-.jm-select-chev {
-  position: absolute;
-  right: calc(var(--jm-size-gap-unit) * 1.25);
-  top: 50%;
-  transform: translateY(-50%);
-  pointer-events: none;
-  color: var(--jm-color-gold);
-}
-
-/* buttons compose text + icon */
-.jm-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: calc(var(--jm-size-gap-unit) * 0.75);
+  min-height: 34px;
+  min-width: 92px;
+  padding: 0 calc(var(--jm-size-gap-unit) * 2.75);
+  cursor: pointer;
+  background: transparent;
+  border-style: solid;
+  border-width: var(--jm-kit-button-border);
+  border-image-source: var(--jm-plate-art);
+  border-image-slice: var(--jm-kit-button-slice) fill;
+  border-image-width: var(--jm-kit-button-border);
+  font-family: var(--jm-font-display);
+  font-weight: 600;
+  font-size: var(--jm-type-label);
+  letter-spacing: var(--jm-tracking-hardware);
+  text-transform: uppercase;
+  color: var(--jm-color-cream);
+  transition: color 0.12s, filter 0.12s;
 }
 
-/* client pill toggle */
-.jm-toggle {
-  width: calc(var(--jm-size-gap-unit) * 6);
-  height: calc(var(--jm-size-gap-unit) * 3);
-  border-radius: calc(var(--jm-size-gap-unit) * 1.5);
-  background: var(--jm-color-chassis);
-  border: 2px solid var(--jm-color-gold);
+.jm-plate.wide {
+  min-width: 180px;
+}
+
+.jm-plate:hover:not(:disabled) {
+  filter: brightness(1.16);
+  color: var(--jm-color-gold-bright);
+}
+
+.jm-plate.held .jm-plate-label {
+  transform: translateY(1px);
+}
+
+/* engaged / toggled → the filled-gold register */
+.jm-plate.on {
+  color: var(--jm-color-bg);
+  text-shadow: none;
+}
+
+/* the engaged pill reaches past the padding box so the label never touches its
+   rounded ends, while still sitting inside the plaque's ornate frame */
+.jm-plate.on::before {
+  content: '';
+  position: absolute;
+  inset: 3px calc(var(--jm-size-gap-unit) * -1);
+  border-radius: 6px;
+  background: linear-gradient(180deg, var(--jm-color-plate-on-top), var(--jm-color-plate-on-bottom));
+  box-shadow: inset 0 0 0 1px var(--jm-color-gold-bright);
+}
+
+.jm-plate-label {
   position: relative;
-  transition: border-color 0.15s;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--jm-size-gap-unit) * 0.75);
+}
+
+.jm-plate:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.jm-plate:focus-visible {
+  outline: 2px solid var(--jm-color-gold-bright);
+  outline-offset: 1px;
+}
+
+/* below ~26px the kit bevel reads as a lozenge → flat member, same family */
+.jm-plate.compact {
+  min-height: 24px;
+  min-width: 0;
+  padding: 0 calc(var(--jm-size-gap-unit) * 1.5);
+  border: 1px solid var(--jm-color-plaque-hairline);
+  border-image: none;
+  border-radius: 4px;
+  background: linear-gradient(180deg, var(--jm-color-plaque-top), var(--jm-color-plaque-bottom));
+  font-size: calc(var(--jm-type-label) * 0.94);
+}
+
+.jm-plate.compact.on::before {
+  inset: 1px calc(var(--jm-size-gap-unit) * -0.5);
+  border-radius: 4px;
+}
+
+/* ================================================================== */
+/* CHROME register — menus, listboxes, wells, dialogs                  */
+/* ================================================================== */
+
+.jm-well {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--jm-size-gap-unit));
+  width: 100%;
+  background: linear-gradient(180deg, var(--jm-color-chrome-well-top), var(--jm-color-chrome-well-bottom));
+  color: var(--jm-color-cream);
+  border: 1px solid var(--jm-color-plaque-hairline);
+  border-radius: var(--jm-size-radius-control);
+  padding: calc(var(--jm-size-gap-unit) * 1.1) calc(var(--jm-size-gap-unit) * 1.5);
+  font-family: var(--jm-font-body);
+  font-size: var(--jm-type-body);
+  box-shadow: inset 0 2px 4px var(--jm-color-shadow-inset);
+  text-align: left;
+}
+
+.jm-well::placeholder {
+  color: var(--jm-color-muted);
+}
+
+.jm-well:focus,
+.jm-well:focus-visible {
+  outline: none;
+  border-color: var(--jm-color-gold-bright);
+  box-shadow:
+    inset 0 2px 4px var(--jm-color-shadow-inset),
+    0 0 0 1px var(--jm-color-gold-bright);
+}
+
+.jm-well:disabled {
+  opacity: 0.38;
+}
+
+input.jm-well[type='number']::-webkit-inner-spin-button {
+  filter: invert(0.75) sepia(1) saturate(3) hue-rotate(5deg);
+}
+
+.jm-listbox {
+  position: relative;
+  width: 100%;
+}
+
+.jm-listbox-btn {
+  cursor: pointer;
+  justify-content: space-between;
+  color: var(--jm-color-gold);
+}
+
+.jm-listbox-value {
+  color: var(--jm-color-cream);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jm-listbox-placeholder {
+  color: var(--jm-color-muted);
+}
+
+.jm-chrome-plaque {
+  background: linear-gradient(180deg, var(--jm-color-chrome-top), var(--jm-color-chrome-bottom));
+  border: 1px solid var(--jm-color-plaque-hairline);
+  border-radius: var(--jm-size-radius-control);
+  box-shadow:
+    0 10px 30px var(--jm-color-shadow-drop),
+    inset 0 0 0 1px var(--jm-color-shadow-inset);
+}
+
+.jm-listbox-menu {
+  position: absolute;
+  z-index: 40;
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  max-height: 260px;
+  overflow-y: auto;
+  padding: calc(var(--jm-size-gap-unit) * 0.75) 0;
+}
+
+.jm-listbox-menu.up {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
+.jm-chrome-header {
+  font-family: var(--jm-font-display);
+  font-size: var(--jm-type-label);
+  letter-spacing: var(--jm-tracking-chrome);
+  text-transform: uppercase;
+  color: var(--jm-color-chrome-header);
+  padding: calc(var(--jm-size-gap-unit) * 0.75) calc(var(--jm-size-gap-unit) * 1.5);
+  display: flex;
+  align-items: center;
+  gap: calc(var(--jm-size-gap-unit));
+}
+
+.jm-chrome-header::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--jm-color-gold-dark);
+  opacity: 0.5;
+}
+
+.jm-chrome-item {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--jm-size-gap-unit));
+  width: 100%;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+  padding: calc(var(--jm-size-gap-unit) * 0.85) calc(var(--jm-size-gap-unit) * 1.25);
+  color: var(--jm-color-cream);
+  font-size: var(--jm-type-body);
+}
+
+/* THE gold highlight row — never the system blue */
+.jm-chrome-item:hover,
+.jm-chrome-item:focus-visible {
+  outline: none;
+  background: linear-gradient(180deg, var(--jm-color-chrome-row-top), var(--jm-color-chrome-row-bottom));
+  box-shadow:
+    inset 0 1.6px 0 var(--jm-color-cell-edge),
+    inset 0 0 0 1px var(--jm-color-gold-dark);
+  color: var(--jm-color-gold-bright);
+}
+
+.jm-chrome-tick {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  color: var(--jm-color-gold-bright);
+  display: inline-flex;
+}
+
+.jm-chrome-item-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jm-chrome-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: var(--jm-color-scrim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.jm-chrome-dialog {
+  min-width: 380px;
+  max-width: 560px;
+  padding: calc(var(--jm-size-gap-unit) * 2);
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--jm-size-gap-unit) * 1.5);
+}
+
+/* ================================================================== */
+/* Kit furniture                                                       */
+/* ================================================================== */
+
+.jm-power {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  line-height: 0;
+  filter: grayscale(1) brightness(0.5);
+  transition: filter 0.15s;
+}
+
+.jm-power.on {
+  filter: none;
+  border-radius: 50%;
+  box-shadow: 0 0 12px var(--jm-color-gold-glow);
+}
+
+.jm-power img {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* The kit divider is a TALL vertical bar; it is rotated a quarter turn (never
+   squashed, which would smear its length across the width). */
+.jm-gold-divider {
+  container-type: inline-size;
+  position: relative;
+  height: 7px;
+  width: 100%;
+  overflow: hidden;
   flex-shrink: 0;
 }
 
-.jm-toggle-thumb {
+.jm-gold-divider::before {
+  content: '';
   position: absolute;
+  left: 50%;
   top: 50%;
-  left: calc(var(--jm-size-gap-unit) * 0.4);
-  transform: translateY(-50%);
-  width: calc(var(--jm-size-gap-unit) * 2);
-  height: calc(var(--jm-size-gap-unit) * 2);
-  border-radius: 50%;
-  background: var(--jm-color-gold-dark);
-  transition: left 0.15s, background 0.15s;
+  width: 7px;
+  height: 100cqw;
+  transform: translate(-50%, -50%) rotate(90deg);
+  background-image: var(--jm-divider-art);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  opacity: 0.92;
 }
 
-.jm-toggle.on .jm-toggle-thumb {
-  left: calc(100% - var(--jm-size-gap-unit) * 2.4);
-  background: var(--jm-color-gold);
-  box-shadow: 0 0 8px var(--jm-color-gold-glow);
+.jm-rack-corner {
+  position: absolute;
+  top: 0;
+  width: 34px;
+  height: 50px;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  pointer-events: none;
+  opacity: 0.95;
+  z-index: 2;
 }
 
-/* LED level meter (client led-meter.svg zones) — generic level meters only */
-.jm-led-meter {
-  display: flex;
-  flex-direction: column-reverse;
-  gap: 2px;
-  width: calc(var(--jm-size-gap-unit) * 1.75);
-  padding: calc(var(--jm-size-gap-unit) * 0.5);
-  background: var(--jm-color-black);
-  border: 1px solid var(--jm-color-panel-border-soft);
+.jm-rack-corner.left {
+  left: 0;
+}
+
+.jm-rack-corner.right {
+  right: 0;
+  transform: scaleX(-1);
+}
+
+/* The header meter is the same column rotated a quarter turn — source bottom
+   lands on the left, so the green segments lead (Signature's header rule). */
+.jm-kit-meter-wrap {
+  position: relative;
+  flex-shrink: 0;
+  overflow: visible;
+}
+
+.jm-kit-meter-wrap > .jm-kit-meter {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%) rotate(-90deg);
+}
+
+.jm-kit-meter {
+  position: relative;
+  overflow: hidden;
+  background: var(--jm-meter-well);
+  border: 1px solid var(--jm-meter-frame);
   border-radius: var(--jm-size-radius-cell);
+  flex-shrink: 0;
+  box-shadow: inset 0 2px 6px var(--jm-color-shadow-deep);
 }
 
-.jm-led-seg {
+.jm-kit-meter-art {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 100%;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+}
+
+.jm-kit-meter-art.ghost {
+  opacity: 0.14;
+}
+
+.jm-kit-meter-clip {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  overflow: hidden;
+}
+
+/* ================================================================== */
+/* Knob                                                                */
+/* ================================================================== */
+
+.jm-knob {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: calc(var(--jm-size-gap-unit) * 0.35);
+  width: 100%;
+  max-width: calc(var(--jm-size-knob-diameter) + var(--jm-size-gap-unit) * 4);
+  min-width: 0;
+}
+
+.jm-knob-hardware {
+  position: relative;
+  cursor: ns-resize;
+  touch-action: none;
+  flex-shrink: 0;
+}
+
+.jm-knob-arc {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.jm-knob-art {
+  position: absolute;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.jm-knob-motif {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+
+.jm-knob-label {
+  width: 100%;
+  font-family: var(--jm-font-display);
+  font-size: calc(var(--jm-type-label) * 0.92);
+  letter-spacing: var(--jm-tracking-hardware);
+  text-transform: uppercase;
+  color: var(--jm-color-cream);
+  text-align: center;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+  text-shadow: 0 1px 2px var(--jm-color-shadow-deep);
+}
+
+.jm-knob-value {
+  font-family: var(--jm-font-numeric);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--jm-type-label);
+  color: var(--jm-color-cream);
+}
+
+.jm-knob-row {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: calc(var(--jm-size-gap-unit) * 1.25) 0;
+  justify-items: center;
+}
+
+/* ================================================================== */
+/* FX rack (photoreal faceplates)                                      */
+/* ================================================================== */
+
+/* The rack ears live on the frame so they stay put while the strip scrolls. */
+.jm-rack-frame {
+  position: relative;
+  border-radius: var(--jm-size-radius-panel);
+  background: var(--jm-color-bg);
+  box-shadow: inset 0 6px 22px var(--jm-color-shadow-deep);
+}
+
+/* Units stretch to a common height so the row reads as one rack, with BYPASS
+   pinned to each unit's foot (Signature's rack strip). */
+.jm-rack {
+  position: relative;
+  display: flex;
+  gap: calc(var(--jm-size-gap-unit) * 1.5);
+  align-items: stretch;
+  overflow-x: auto;
+  padding: calc(var(--jm-size-gap-unit) * 2) calc(var(--jm-size-gap-unit) * 6.5);
+  border-radius: var(--jm-size-radius-panel);
+}
+
+.jm-fx-unit {
+  position: relative;
+  flex-shrink: 0;
+  width: var(--jm-size-fx-unit-width);
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--jm-size-gap-unit));
+  padding: calc(var(--jm-size-gap-unit) * 1.5) calc(var(--jm-size-gap-unit) * 0.5);
+  border-style: solid;
+  border-width: var(--jm-kit-panel-border);
+  border-image-source: var(--jm-fx-plate);
+  border-image-slice: var(--jm-kit-panel-slice) fill;
+  border-image-width: var(--jm-kit-panel-border);
+  filter: drop-shadow(0 6px 14px var(--jm-color-shadow-drop));
+  cursor: grab;
+}
+
+/* widener is the one unit carrying a gold wash over its plate */
+.jm-fx-unit.gold-wash::before {
+  content: '';
+  position: absolute;
+  inset: 6px;
+  border-radius: 6px;
+  background: var(--jm-color-gold);
+  opacity: var(--jm-fx-gold, 0);
+  mix-blend-mode: overlay;
+  pointer-events: none;
+}
+
+.jm-fx-unit.bypassed {
+  filter: grayscale(0.55) brightness(0.62);
+}
+
+/* the unit label sits on an opaque plaque, never on raw plate art */
+.jm-fx-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(var(--jm-size-gap-unit));
+  background: linear-gradient(180deg, var(--jm-color-plaque-top), var(--jm-color-plaque-bottom));
+  border: 1px solid var(--jm-color-plaque-hairline);
+  border-radius: 5px;
+  padding: calc(var(--jm-size-gap-unit) * 0.5) calc(var(--jm-size-gap-unit) * 0.85);
+  box-shadow: 0 2px 6px var(--jm-color-shadow-inset);
+}
+
+.jm-fx-name {
   flex: 1;
-  border-radius: 1px;
-  opacity: 0.18;
+  min-width: 0;
+  font-family: var(--jm-font-display);
+  font-weight: 600;
+  font-size: calc(var(--jm-type-label) * 0.94);
+  line-height: 1.15;
+  letter-spacing: var(--jm-tracking-hardware);
+  text-transform: uppercase;
+  text-align: center;
+  color: var(--jm-color-gold-bright);
+  overflow-wrap: anywhere;
 }
 
-.jm-led-seg.lit {
-  opacity: 1;
+.jm-fx-x {
+  background: transparent;
+  border: 0;
+  color: var(--jm-color-muted);
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 2px;
 }
 
-/* Guided screen */
+.jm-fx-x:hover {
+  color: var(--jm-color-gold-bright);
+}
+
+.jm-fx-foot {
+  margin-top: auto;
+  display: flex;
+  justify-content: center;
+  padding-top: calc(var(--jm-size-gap-unit) * 0.5);
+}
+
+.jm-fx-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 180px;
+  width: 280px;
+  flex-shrink: 0;
+  border-style: solid;
+  border-width: var(--jm-kit-master-border);
+  border-image-source: var(--jm-master-plate);
+  border-image-slice: var(--jm-kit-master-slice) fill;
+  border-image-width: var(--jm-kit-master-border);
+  text-align: center;
+}
+
+/* ================================================================== */
+/* Guided screen (Capture's own signature screens)                     */
+/* ================================================================== */
 
 .jm-note-hero {
   font-family: var(--jm-font-display);
@@ -249,7 +860,9 @@ body {
   line-height: 1;
   color: var(--jm-color-cream);
   text-align: center;
-  text-shadow: 0 0 60px var(--jm-color-gold-glow-soft);
+  text-shadow:
+    0 0 60px var(--jm-color-gold-glow-soft),
+    0 3px 0 var(--jm-color-shadow-drop);
 }
 
 .jm-layer-strip {
@@ -271,7 +884,7 @@ body {
 }
 
 .jm-layer-strip .layer.active {
-  color: var(--jm-color-gold);
+  color: var(--jm-color-gold-bright);
   opacity: 1;
   text-shadow: 0 0 18px var(--jm-color-gold-glow);
 }
@@ -286,8 +899,9 @@ body {
   min-height: calc(var(--jm-size-gap-unit) * 5);
 }
 
+/* design law: acceptance GLOWS, corrections INSTRUCT — no warning-red here */
 .jm-verdict.accepted {
-  color: var(--jm-color-gold-highlight);
+  color: var(--jm-color-gold-bright);
   text-shadow: 0 0 28px var(--jm-color-gold-glow);
 }
 
@@ -307,16 +921,17 @@ body {
   height: calc(var(--jm-size-gap-unit) * 1.75);
   border-radius: 50%;
   border: 1px solid var(--jm-color-gold-dark);
-  background: transparent;
+  background: var(--jm-color-panel-deep);
+  box-shadow: inset 0 1px 3px var(--jm-color-shadow-deep);
 }
 
 .jm-take-dot.filled {
-  background: var(--jm-color-gold);
-  border-color: var(--jm-color-gold);
+  background: radial-gradient(circle at 35% 30%, var(--jm-color-gold-bright), var(--jm-color-gold));
+  border-color: var(--jm-color-gold-bright);
   box-shadow: 0 0 10px var(--jm-color-gold-glow);
 }
 
-/* progress map */
+/* session map */
 
 .jm-map {
   display: grid;
@@ -330,6 +945,7 @@ body {
   border: 1px solid transparent;
   cursor: pointer;
   transition: background 0.15s;
+  box-shadow: inset 0 1px 2px var(--jm-color-shadow-inset);
 }
 
 .jm-map-cell.partial {
@@ -337,59 +953,31 @@ body {
 }
 
 .jm-map-cell.done {
-  background: var(--jm-color-gold);
+  background: linear-gradient(180deg, var(--jm-color-gold-bright), var(--jm-color-gold));
+  box-shadow: 0 0 6px var(--jm-color-gold-glow-soft);
 }
 
 .jm-map-cell.current {
-  border-color: var(--jm-color-cream);
+  border-color: var(--jm-color-gold-bright);
+  box-shadow: 0 0 8px var(--jm-color-gold-glow);
 }
 
-/* FX rack */
-
-.jm-fx-unit {
-  background-color: var(--jm-color-deep-panel);
-  border: 1px solid var(--jm-color-panel-border);
-  border-radius: var(--jm-size-radius-panel);
-  padding: calc(var(--jm-size-gap-unit) * 2);
-  min-width: calc(var(--jm-size-gap-unit) * 30);
-}
-
-.jm-fx-unit.bypassed {
-  opacity: 0.45;
-}
-
-.jm-knob-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: calc(var(--jm-size-gap-unit) * 2);
-  margin-top: calc(var(--jm-size-gap-unit) * 2);
-}
-
-.jm-knob {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: calc(var(--jm-size-gap-unit) * 0.5);
-  width: calc(var(--jm-size-knob-diameter) + var(--jm-size-gap-unit) * 2);
-}
-
-/* keyboard */
-
-/* wizard world cloth cards */
+/* ================================================================== */
+/* Wizard world cards                                                  */
+/* ================================================================== */
 
 .jm-world-card {
+  position: relative;
   flex: 1;
-  min-height: calc(var(--jm-size-gap-unit) * 12);
+  min-height: calc(var(--jm-size-gap-unit) * 14);
   display: flex;
   align-items: flex-end;
   padding: calc(var(--jm-size-gap-unit) * 1.5);
   border-radius: var(--jm-size-radius-panel);
-  font-family: var(--jm-font-display);
-  font-size: var(--jm-type-h2);
-  letter-spacing: var(--jm-tracking-label);
-  text-transform: uppercase;
-  color: var(--jm-color-cream);
   cursor: pointer;
+  overflow: hidden;
+  border: 1.6px solid var(--jm-color-plaque-hairline);
+  box-shadow: 0 5px 16px var(--jm-color-shadow-soft);
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
@@ -397,37 +985,77 @@ body {
   border-color: var(--jm-color-gold-dark);
 }
 
+/* SELECTED: the world accent edge + the 2px gold inner line (Signature's
+   Perform-slot state rule) */
 .jm-world-card.selected {
-  border-color: var(--jm-color-gold);
-  box-shadow: 0 0 20px var(--jm-color-gold-glow-soft);
-  color: var(--jm-color-gold-highlight);
+  border-color: var(--jm-world-accent);
+  box-shadow:
+    inset 0 0 0 2px var(--jm-color-gold-dark),
+    0 0 22px var(--jm-color-gold-glow-soft);
 }
+
+/* controls / labels never sit on undimmed pattern */
+.jm-world-card .jm-world-name {
+  position: relative;
+  z-index: 1;
+  font-family: var(--jm-font-display);
+  font-size: var(--jm-type-h2);
+  letter-spacing: var(--jm-tracking-label);
+  text-transform: uppercase;
+  color: var(--jm-color-cream);
+  background: linear-gradient(180deg, var(--jm-color-plaque-top), var(--jm-color-plaque-bottom));
+  border: 1px solid var(--jm-color-plaque-hairline);
+  border-radius: 5px;
+  padding: calc(var(--jm-size-gap-unit) * 0.5) calc(var(--jm-size-gap-unit) * 1.25);
+  box-shadow: 0 3px 10px var(--jm-color-shadow-soft);
+}
+
+.jm-world-card.selected .jm-world-name {
+  color: var(--jm-color-gold-bright);
+}
+
+/* the world backdrop's radial vignette (V2 backdropVignette) */
+.jm-world-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 50% 45%, transparent 35%, var(--jm-color-shadow-deep) 100%);
+  pointer-events: none;
+}
+
+/* ================================================================== */
+/* Keyboard                                                            */
+/* ================================================================== */
 
 .jm-kbd {
   position: relative;
-  height: calc(var(--jm-size-gap-unit) * 16);
+  height: calc(var(--jm-size-gap-unit) * 14);
   display: flex;
+  padding: 4px;
+  border-radius: var(--jm-size-radius-control);
+  background: var(--jm-color-bg);
+  box-shadow: inset 0 4px 14px var(--jm-color-shadow-deep);
 }
 
 .jm-kbd .white {
   flex: 1;
-  background: var(--jm-color-cream);
-  border: 1px solid var(--jm-color-black);
+  background: linear-gradient(180deg, var(--jm-color-cream), var(--jm-color-key-white-low));
+  border: 1px solid var(--jm-color-bg);
   border-radius: 0 0 var(--jm-size-radius-cell) var(--jm-size-radius-cell);
   cursor: pointer;
 }
 
 .jm-kbd .white:active,
 .jm-kbd .white.held {
-  background: var(--jm-color-gold-highlight);
+  background: linear-gradient(180deg, var(--jm-color-gold-bright), var(--jm-color-gold));
 }
 
 .jm-kbd .black {
   position: absolute;
-  top: 0;
+  top: 4px;
   width: 1.4%;
   height: 60%;
-  background: var(--jm-color-black);
+  background: linear-gradient(180deg, var(--jm-color-key-black-high), var(--jm-color-bg));
   border: 1px solid var(--jm-color-gold-dark);
   border-radius: 0 0 var(--jm-size-radius-cell) var(--jm-size-radius-cell);
   cursor: pointer;
@@ -436,13 +1064,21 @@ body {
 
 .jm-kbd .black:active,
 .jm-kbd .black.held {
-  background: var(--jm-color-gold-dark);
+  background: linear-gradient(180deg, var(--jm-color-gold), var(--jm-color-gold-dark));
 }
+
+/* ================================================================== */
+/* Layout helpers + status bar                                         */
+/* ================================================================== */
 
 .jm-row {
   display: flex;
   gap: calc(var(--jm-size-gap-unit) * 2);
   align-items: center;
+}
+
+.jm-row.wrap {
+  flex-wrap: wrap;
 }
 
 .jm-col {
@@ -451,16 +1087,66 @@ body {
   gap: calc(var(--jm-size-gap-unit) * 2);
 }
 
+/* coaching / advisory notice — instructs, never alarms (no warning-red) */
 .jm-warning {
   font-family: var(--jm-font-display);
   letter-spacing: var(--jm-tracking-label);
   text-transform: uppercase;
-  color: var(--jm-color-gold-highlight);
+  font-size: var(--jm-type-label);
+  color: var(--jm-color-gold-bright);
+  background: linear-gradient(180deg, var(--jm-color-plaque-top), var(--jm-color-plaque-bottom));
   border: 1px solid var(--jm-color-gold-dark);
+  border-left: 3px solid var(--jm-color-gold-hot);
   border-radius: var(--jm-size-radius-control);
   padding: calc(var(--jm-size-gap-unit) * 1.5);
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--jm-size-gap-unit));
+  flex-wrap: wrap;
+  box-shadow: 0 3px 12px var(--jm-color-shadow-soft);
 }
+
+.jm-status {
+  height: var(--jm-size-status-height);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: calc(var(--jm-size-gap-unit) * 2);
+  padding: 0 calc(var(--jm-size-gap-unit) * 2);
+  background: linear-gradient(180deg, var(--jm-color-chassis), var(--jm-color-bg));
+  border-top: 1px solid var(--jm-color-gold-dark);
+  font-family: var(--jm-font-display);
+  font-size: calc(var(--jm-type-label) * 0.92);
+  letter-spacing: var(--jm-tracking-hardware);
+  text-transform: uppercase;
+  color: var(--jm-color-muted);
+}
+
+.jm-status .lamp {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--jm-color-gold-dark);
+  flex-shrink: 0;
+}
+
+.jm-status .lamp.live {
+  background: var(--jm-meter-safe);
+  box-shadow: 0 0 8px var(--jm-meter-safe);
+}
+
+.jm-status .spacer {
+  flex: 1;
+}
+
+.jm-status .gold {
+  color: var(--jm-color-gold);
+}
+
+/* ================================================================== */
+/* Scrollbars — chrome register, never the OS default                  */
+/* ================================================================== */
 
 ::-webkit-scrollbar {
   width: 10px;
@@ -470,8 +1156,81 @@ body {
 ::-webkit-scrollbar-thumb {
   background: var(--jm-color-gold-dark);
   border-radius: 5px;
+  border: 2px solid var(--jm-color-bg);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--jm-color-gold);
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--jm-color-black);
+  background: var(--jm-color-bg);
+}
+
+::selection {
+  background: var(--jm-color-chrome-row-top);
+  color: var(--jm-color-gold-bright);
+}
+
+/* ================================================================== */
+/* Pill toggle (client toggle.svg) — family palette                    */
+/* ================================================================== */
+
+.jm-toggle {
+  width: calc(var(--jm-size-gap-unit) * 6);
+  height: calc(var(--jm-size-gap-unit) * 3);
+  border-radius: calc(var(--jm-size-gap-unit) * 1.5);
+  background: linear-gradient(180deg, var(--jm-color-bg), var(--jm-color-chrome-well-bottom));
+  border: 2px solid var(--jm-color-gold-dark);
+  position: relative;
+  transition: border-color 0.15s;
+  flex-shrink: 0;
+  box-shadow: inset 0 2px 5px var(--jm-color-shadow-deep);
+}
+
+.jm-toggle.on {
+  border-color: var(--jm-color-gold);
+}
+
+.jm-toggle-thumb {
+  position: absolute;
+  top: 50%;
+  left: calc(var(--jm-size-gap-unit) * 0.4);
+  transform: translateY(-50%);
+  width: calc(var(--jm-size-gap-unit) * 2);
+  height: calc(var(--jm-size-gap-unit) * 2);
+  border-radius: 50%;
+  background: var(--jm-color-gold-dark);
+  transition: left 0.15s, background 0.15s;
+}
+
+.jm-toggle.on .jm-toggle-thumb {
+  left: calc(100% - var(--jm-size-gap-unit) * 2.4);
+  background: radial-gradient(circle at 35% 30%, var(--jm-color-gold-bright), var(--jm-color-gold));
+  box-shadow: 0 0 8px var(--jm-color-gold-glow);
+}
+
+/* ================================================================== */
+/* Brand panel — the shield + ONE gold flourish, never wallpaper       */
+/* ================================================================== */
+
+.jm-brand-mark {
+  display: block;
+  height: 40px;
+  width: auto;
+  filter: drop-shadow(0 2px 6px var(--jm-color-shadow-drop));
+}
+
+.jm-flourish-accent {
+  pointer-events: none;
+  user-select: none;
+}
+
+/* idle placeholder for the hero note display */
+.jm-note-hero-idle {
+  display: inline-block;
+  font-size: 0.28em;
+  color: var(--jm-color-muted);
+  vertical-align: middle;
+  opacity: 0.6;
 }

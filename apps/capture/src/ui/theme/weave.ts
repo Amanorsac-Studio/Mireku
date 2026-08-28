@@ -6,7 +6,7 @@
  */
 
 import type { World } from '@jm/jmi-format/web';
-import { WORLD_PATTERN_SVG } from '../assets/patterns';
+import { MICRO_WEAVE_SVG, WORLD_PATTERN_SVG } from '../assets/patterns';
 import { color, patternDarken, weave } from './tokens';
 
 const cache = new Map<string, string>();
@@ -112,9 +112,11 @@ const patternCache = new Map<string, string>();
 const patternPending = new Map<string, Promise<string>>();
 
 /**
- * Rasterize a client pattern SVG (bright gold-base) through the darkening
- * pipeline: brightness/saturation pull-down + a chassis-colored veil, so the
- * geometry survives at ≤ ~35% perceived contrast against the chassis.
+ * Rasterize a client pattern SVG (bright gold-base) through the V2 kente
+ * grading pipeline — saturation 1.18, contrast 1.16, brightness 0.74 from
+ * `materials.kenteBackdrop` in docs/svg-pack-v2/tokens/design-tokens.json,
+ * the same one-time pixel pass Signature applies — then a chassis-coloured
+ * veil that brings the result under the ~35% perceived-contrast law.
  * Async (SVG → Image decode); result cached as a data URL.
  */
 export function worldPatternDataUrl(world: World): Promise<string> {
@@ -124,7 +126,7 @@ export function worldPatternDataUrl(world: World): Promise<string> {
   if (pending) return pending;
   if (typeof document === 'undefined') return Promise.resolve('');
 
-  const { tile, brightness, saturate, veilAlpha } = patternDarken;
+  const { tile, brightness, saturate, contrast, veilAlpha } = patternDarken;
   const p = new Promise<string>((resolve) => {
     const svg = WORLD_PATTERN_SVG[world];
     const img = new Image();
@@ -134,7 +136,7 @@ export function worldPatternDataUrl(world: World): Promise<string> {
       canvas.height = tile;
       const ctx = canvas.getContext('2d');
       if (!ctx) return resolve('');
-      ctx.filter = `brightness(${brightness}) saturate(${saturate})`;
+      ctx.filter = `saturate(${saturate}) contrast(${contrast}) brightness(${brightness})`;
       ctx.drawImage(img, 0, 0, tile, tile);
       ctx.filter = 'none';
       const n = parseInt(color.chassis.slice(1), 16);
@@ -158,4 +160,27 @@ export function clothBackground(tint?: string, alpha?: number): {
   backgroundRepeat: 'repeat';
 } {
   return { backgroundImage: weaveDataUrl(tint, alpha), backgroundRepeat: 'repeat' };
+}
+
+/* ------------------------------------------------------------------ */
+/* Kente micro-weave overlay (svg-pack-v2 kente-micro-weave.svg)       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The pack's pure-vector 64 px micro-weave, used as the chassis / panel
+ * surface texture at low opacity — the same 10–12 % duty Signature gives it on
+ * its browser, dock and rack chassis. Rendered once per opacity into a tile so
+ * the alpha is baked in (CSS cannot fade one background layer on its own).
+ */
+export function microWeaveBackground(alpha: number): string {
+  const key = `micro@${alpha}`;
+  const hit = cache.get(key);
+  if (hit) return hit;
+  if (typeof document === 'undefined') return 'none';
+  const svg = MICRO_WEAVE_SVG.replace(/stroke-opacity="([\d.]+)"/g, (_m, o) =>
+    `stroke-opacity="${(Number(o) * alpha).toFixed(3)}"`,
+  );
+  const url = `url("data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}")`;
+  cache.set(key, url);
+  return url;
 }

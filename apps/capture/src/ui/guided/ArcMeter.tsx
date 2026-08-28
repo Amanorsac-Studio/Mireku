@@ -31,32 +31,42 @@ export function ArcMeter({ layer }: { layer: VelocityLayer }) {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
 
-      // arc geometry: shallow arc across the width
+      // arc geometry: a wide, shallow hardware arc that fills the plate — the
+      // sweep is deep enough for the target zone to read at a glance and the
+      // legend to sit clear of the verdict line beneath it
       const cx = w / 2;
-      const r = w * 0.9;
-      const cy = h * 0.6 + r;
-      const a0 = -Math.PI / 2 - 0.32;
-      const a1 = -Math.PI / 2 + 0.32;
+      const spread = 0.22; // half-sweep in radians; sagitta stays inside `h`
+      const r = (w * 0.44) / Math.sin(spread);
+      const apexY = h * 0.36; // ticks + legend live above the apex
+      const cy = apexY + r;
+      const a0 = -Math.PI / 2 - spread;
+      const a1 = -Math.PI / 2 + spread;
       const at = (t: number) => a0 + (a1 - a0) * t;
 
-      // track
-      ctx.lineWidth = 10;
+      // recessed track (the family's inset-well register)
+      ctx.lineWidth = 12;
       ctx.lineCap = 'round';
-      ctx.strokeStyle = css('--jm-color-cell-empty') || 'rgba(255,255,255,0.07)';
+      ctx.strokeStyle = css('--jm-color-bg');
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, a0, a1);
+      ctx.stroke();
+      ctx.lineWidth = 10;
+      ctx.strokeStyle = css('--jm-color-cell-empty');
       ctx.beginPath();
       ctx.arc(cx, cy, r, a0, a1);
       ctx.stroke();
 
-      // gold target zone for the layer window (velocity 1..127 → t 0..1)
+      // gold target zone for the layer window (velocity 1..127 → t 0..1).
+      // Design law: acceptance GLOWS — there is no warning-red anywhere here.
       const tLo = (layer.lo - 1) / 126;
       const tHi = (layer.hi - 1) / 126;
       const grad = ctx.createLinearGradient(0, 0, w, 0);
       grad.addColorStop(Math.max(0, tLo), css('--jm-color-gold-dark'));
-      grad.addColorStop((tLo + tHi) / 2, css('--jm-color-gold'));
+      grad.addColorStop((tLo + tHi) / 2, css('--jm-color-gold-hot'));
       grad.addColorStop(Math.min(1, tHi), css('--jm-color-gold-dark'));
       ctx.strokeStyle = grad;
       ctx.shadowColor = css('--jm-color-gold-glow');
-      ctx.shadowBlur = 16;
+      ctx.shadowBlur = 18;
       ctx.beginPath();
       ctx.arc(cx, cy, r, at(tLo), at(tHi));
       ctx.stroke();
@@ -69,20 +79,23 @@ export function ArcMeter({ layer }: { layer: VelocityLayer }) {
       needle += (target - needle) * 0.25;
 
       const na = at(needle);
-      const nx1 = cx + Math.cos(na) * (r - 18);
-      const ny1 = cy + Math.sin(na) * (r - 18);
-      const nx2 = cx + Math.cos(na) * (r + 18);
-      const ny2 = cy + Math.sin(na) * (r + 18);
+      const nx1 = cx + Math.cos(na) * (r - 16);
+      const ny1 = cy + Math.sin(na) * (r - 16);
+      const nx2 = cx + Math.cos(na) * (r + 16);
+      const ny2 = cy + Math.sin(na) * (r + 16);
       ctx.strokeStyle = css('--jm-color-cream');
       ctx.lineWidth = 3;
+      ctx.shadowColor = css('--jm-color-gold-glow');
+      ctx.shadowBlur = 10;
       ctx.beginPath();
       ctx.moveTo(nx1, ny1);
       ctx.lineTo(nx2, ny2);
       ctx.stroke();
+      ctx.shadowBlur = 0;
 
       // dynamics legend
       ctx.fillStyle = css('--jm-color-muted');
-      ctx.font = `10px ${css('--jm-font-display') || 'sans-serif'}`;
+      ctx.font = `600 11px ${css('--jm-font-display') || 'sans-serif'}`;
       ctx.textAlign = 'center';
       const marks: [string, number][] = [
         ['PP', 0.05],
@@ -91,10 +104,18 @@ export function ArcMeter({ layer }: { layer: VelocityLayer }) {
         ['F', 0.72],
         ['FF', 0.95],
       ];
+      // gold engraved ticks + legend, on the OUTSIDE of the arc so nothing
+      // crowds the coaching line beneath the meter
       for (const [txt, t] of marks) {
         const a = at(t);
-        const mx = cx + Math.cos(a) * (r - 38);
-        const my = cy + Math.sin(a) * (r - 38);
+        ctx.strokeStyle = css('--jm-color-gold-dark');
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(a) * (r + 9), cy + Math.sin(a) * (r + 9));
+        ctx.lineTo(cx + Math.cos(a) * (r + 15), cy + Math.sin(a) * (r + 15));
+        ctx.stroke();
+        const mx = cx + Math.cos(a) * (r + 26);
+        const my = cy + Math.sin(a) * (r + 26) + 4;
         ctx.fillText(txt, mx, my);
       }
 

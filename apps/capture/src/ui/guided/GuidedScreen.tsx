@@ -64,7 +64,9 @@ export function GuidedScreen() {
 
   return (
     <div className="jm-col" style={{ maxWidth: '1080px', margin: '0 auto', gap: 'calc(var(--jm-size-gap-unit) * 3)' }}>
-      <div style={{ textAlign: 'center', marginTop: 'calc(var(--jm-size-gap-unit) * 3)' }}>
+      {/* Capture's own signature screen: the huge current-note display stays.
+          It simply wears the family's materials now. */}
+      <div style={{ textAlign: 'center', marginTop: 'calc(var(--jm-size-gap-unit) * 2)' }}>
         <div className="jm-note-hero">{done ? '✓' : midiToNoteName(position.note)}</div>
         <div className="jm-layer-strip">
           {layers.map((l) => (
@@ -75,7 +77,7 @@ export function GuidedScreen() {
         </div>
       </div>
 
-      <Panel variant="recessed">
+      <Panel variant="recessed" screws>
         <div className="jm-row" style={{ alignItems: 'stretch' }}>
           <div style={{ flex: 1 }}>
             <ArcMeter layer={layer} />
@@ -127,7 +129,7 @@ export function GuidedScreen() {
         </div>
       </Panel>
 
-      <Panel variant="recessed">
+      <Panel variant="recessed" screws>
         <ProgressMap
           session={session}
           current={position ? { note: position.note, layer: position.layer } : null}

@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { audioIo } from '../../engine/audioIo';
 import { linToDb } from '../../engine/dsp/level';
 import { useApp } from '../../state/appStore';
-import { Button, Label, Panel } from '../common';
+import { Button, Panel } from '../common';
+import { GoldDivider } from '../hardware';
 
 /**
  * Auto Mode loopback setup helper (§3.4): per-OS routing instructions for
@@ -40,9 +41,10 @@ export function LoopbackHelper() {
 
   return (
     <div className="jm-col" style={{ maxWidth: '720px', margin: '0 auto' }}>
-      <Panel>
+      <Panel screws>
         <div className="jm-col">
-          <Label>Auto Mode Setup — Audio Loopback</Label>
+          <div className="jm-title">Auto Mode Setup — Audio Loopback</div>
+          <GoldDivider />
           <div className="jm-value">
             Hardware synth: connect its MIDI in to the selected MIDI output, and its audio outputs to your interface inputs. Then run
             the test below.
@@ -62,9 +64,10 @@ export function LoopbackHelper() {
           )}
         </div>
       </Panel>
-      <Panel>
+      <Panel screws>
         <div className="jm-col">
-          <Label>Verify the Loop</Label>
+          <div className="jm-title">Verify the Loop</div>
+          <GoldDivider />
           <div className="jm-value">
             Plays a 1 kHz test tone through the system output and checks that it returns on the selected input. (For a VST loop, route
             the tone through the same cable device or simply hit a note in your host while the test runs.)

@@ -137,3 +137,184 @@ to log anything the spec left open.
     hues were aligned to it (flanger→steel blue, EP preamp→burnt sienna,
     EQ→olive, digital delay→deep indigo, plate→slate) while keeping Capture's
     lighter luminance range, since its weave renderer applies tints at low alpha.
+
+---
+
+## Family restyle — matching JM Signature (2026-08-28)
+
+UI/styling only. **No capture behaviour, DSP, session logic, sampler, export pipeline or
+`.jmi` format was touched**; every change is in `apps/capture/src/ui/**` plus the two
+background-texture lines in `src/main.tsx`. The client's brief: *"the FXs and the overall
+look should match JM Signature. Not ditto ditto, but it should feel like the same family."*
+The Capture UX vision line held throughout: *"Luxury studio workstation. Same DNA,
+different job."* Authority = `DECISIONS-signature.md` (UX pack V2 + client review rounds 2
+and 3), `apps/signature/src/Theme.h`, `src/ui/Hardware.h`, `src/ui/Kit.h`, and
+`docs/svg-pack-v2/tokens/design-tokens.json`.
+
+### 21. One palette for both apps
+`theme/tokens.ts` now carries the V2 `design-tokens.json` colours verbatim — the same block
+Signature adopted into `Theme.h`: bg `#050505`, chassis `#090908`, panel `#100E0B`,
+panelDeep `#080706`, gold `#D9A648`, goldBright `#FFD77A`, goldHot `#FFB11B`, goldDark
+`#6B4612`, cream `#F4EAD5`, muted `#A59A87`, and the four V2 world accents (rhodes
+`#E66F17`, mks `#A9D62E`, fm `#39B8FF`, strings `#D85CE8`). Everything still flows to CSS
+variables; **`styles.css` and every component contain zero colour or size literals** (the
+plaque/chrome/segment greys, the black shadow alphas and the keybed tones were all pulled
+into `tokens.ts` as named tokens). Display typeface is the kit's stack (Bahnschrift
+Condensed SemiBold to Oswald to Barlow Condensed) at the kit's 0.04em tracking.
+
+### 22. Signature's four hardware registers ported to the web (`src/ui/hardware.tsx`)
+`Hardware.h` is transcribed as CSS + React rather than reinvented:
+- **Segment** (`Segmented`): recessed plaque (vertical `#141210` to `#0B0A09`, `#6E5320`
+  hairline, soft outer shadow, inner recess line), cells divided by `#2C2823` hairlines,
+  ACTIVE cell lifted (`#402D0F` to `#1A1208`) with a 2 px `#FFC24A` top-edge line, a radial
+  gold inner glow and a `#FFD77A` label; inactive cells muted cream `#C9C2B4`; condensed
+  uppercase 0.04em. Applied to: header nav, wizard step chips, sound-type / channels /
+  capture-mode choosers, preset lanes.
+- **Plate** (`PlateButton`, and `Button` is now just a Plate): the kit's
+  `button-empty-up.png` / `button-empty-down.png` as a CSS `border-image` nine-slice, with
+  `-down` swapped in while the pointer is held — **a real pressed state**, plus a 1 px label
+  offset. Under ~26 px tall it drops to the flat member of the family (no bevel), exactly as
+  Signature does. Applied to every button in the app.
+- **SolidGold**: the engaged pill (`#F4C95A` to `#B9822A`, dark label) inside the plaque.
+- **CHROME**: `Listbox`, `Input` / `.jm-well`, `ChromeDialog` — near-black plaque, hairline
+  gold-dark border, soft drop shadow, cream items, tracked 0.16em uppercase section headers
+  with a hairline rule, **a gold highlight row (never the system blue)**, gold tick and gold
+  chevron, recessed wells with a gold focus ring.
+
+### 23. No default browser chrome anywhere
+This was the client's round-3 complaint about Signature, so it was pre-empted here.
+- Every native `select` is gone — replaced by the custom `Listbox` (a native select cannot be
+  styled past its OS popup). The same component serves the wizard's device pickers, the FX
+  enum params and the loop-take picker.
+- `window.prompt()` in `PresetLanes` (preset rename) is replaced by a `ChromeDialog`.
+- Scrollbars, `::selection` and number-input spinners are restyled to the register.
+- The OS directory picker (`bridge.chooseDir`) remains the OS dialog by design, as Signature
+  keeps its `FileChooser`.
+
+### 24. Photoreal knob with the optical-centre fix (`fx/Knob.tsx`)
+The drawn SVG knob is replaced by the kit's `knob-large-00.png` / `knob-small-00.png`
+rotated −135° to +135° via CSS `transform`. **The crop centre is not the rotation axis** —
+this was re-measured here from the alpha silhouette (alpha > 128, which excludes the soft
+drop shadow) with the same method `kit::optical()` uses, and it reproduces Signature's
+published numbers exactly:
+
+| asset | crop | pixel centre | optical centre | span |
+|---|---|---|---|---|
+| knob-large-00 | 278x283 | (139.0, 141.5) | **(145.1, 168.0)** | 270 |
+| knob-small-00 (recropped) | 217x220 | (108.5, 110.0) | **(108.6, 115.4)** | 208 |
+
+Rotating the large knob about its crop centre puts it 26 px off axis and visibly orbits.
+The numbers live in `tokens.ts`; the component sets `transform-origin` to the optical centre
+and scales so the silhouette span equals the display diameter. Kept per the design law: the
+value arc (at r = 0.545 x d, goldDark track + goldHot fill) and the tabular numeric readout
+always carry the position. The **JM engraved motif** (`engraved-mark-*.svg`, assigned in
+Signature's control order flow, petal, knot, orbit, weave) is composited into the face
+centre and **does not rotate**. The component box is 1.28 x d so the arc is never clipped.
+
+**Asset defects handled as Signature logged them:** `knob-small-00.png` ships 215x185 and
+clipped (bezel top cut, a stray gold arc bleeding in from the neighbouring knob). Ours is
+recropped from the kit's own `controls-sheet.png` at `67,685,217x220`; the shipped crop is
+not vendored. `panel-master-empty.png` is 3.11:1 (not the README's 4:1) and the button
+plaques are 3.07:1, so **every plate is nine-sliced, never scaled**.
+
+### 25. FX rack rebuilt on the photoreal faceplates (`fx/FxRackView.tsx`)
+The client called this out specifically. Each unit card is now a `panel-*.png` faceplate
+nine-sliced through `border-image` (fixed ornament caps carrying the corner screws and
+bevel, stretched field), using **the exact unit-to-colour mapping Signature logged**, so a
+user recognises the same machine in both apps:
+
+| plate | units |
+|---|---|
+| teal | JM Chorus, Vintage EQ |
+| orange | Tape Delay, Tremolo/Auto-Pan, EP Preamp/Drive |
+| purple | Phaser, Flanger |
+| blue | Hall/Shimmer, Digital Delay |
+| red | Compressor |
+| green | Plate Reverb, Widener/Ensemble (+ a 25 % gold overlay) |
+
+Rack furniture: `rack-corner.png` ears on a non-scrolling frame, `divider-gold.png` as the
+section rule (rotated a quarter turn — the asset is a 33x550 vertical bar and squashing it
+smears its length across the width), `icon-power.png` as the live per-unit enable,
+`screw-00.png` on the recessed surfaces, and `panel-master-empty.png` nine-sliced for the
+empty-rack plate. The unit name sits on an opaque plaque (never on raw plate art); BYPASS is
+a compact Plate button. Units stretch to a common height so the row reads as one rack, with
+BYPASS pinned to each foot. Behaviour is untouched — still generated from `FX_REGISTRY`,
+still 6 slots, drag-to-reorder, per-unit bypass, internal tempo.
+
+### 26. Surfaces and branding
+- Chassis and panels wear the pack's pure-vector `kente-micro-weave.svg` at low opacity over
+  the existing procedural cloth (Signature gives it 10–12 % on its browser/dock/rack
+  chassis).
+- Wizard world cards keep Capture's own client pattern SVGs but the darkening pipeline was
+  retuned to the **V2 `materials.kenteBackdrop` grading** (saturate 1.18, contrast 1.16,
+  brightness 0.74) plus a chassis veil, and each card now carries the V2 backdrop vignette
+  and its world accent on the selected edge with the 2 px gold inner line — Signature's
+  Perform-slot state rule. The card's name sits on an opaque plaque, so **no label or control
+  ever sits on undimmed pattern**.
+- `jm-shield-reference.svg` is the header mark. `flourish-gold.png` is used **once**, on the
+  home brand panel — never repeated as wallpaper.
+- A status bar in the family style (version, lamp, session, world / mode, take count, live
+  lamp, 48 kHz / 24-bit).
+- Header: brand block, segmented nav, an input LED cluster on the right. Signature puts
+  MASTER there; Capture's equivalent job is the live input it is recording, so the plaque
+  carries two `meter-led-*.png` columns rotated a quarter turn (source bottom lands on the
+  left, so green leads, as in Signature's header).
+- The generic LED meter is now the kit column **masked by level** (clipped, not tinted) over
+  a recessed bed with a 0.14 unlit ghost.
+
+### 27. What was deliberately kept Capture-specific
+Capture is not the plugin, and these screens are its job, not Signature's:
+- the **huge current-note hero** and the velocity-layer strip;
+- the **horizontal arc meter with its gold target zone** (geometry rebuilt so the sweep fills
+  the plate and the engraved PP/MP/MF/F/FF ticks sit above the arc, clear of the coaching
+  line);
+- the **30x4 session map** with click-to-redo, and the **take dots**;
+- the wizard, the loopback helper and the export screen.
+
+They now wear the family's materials and hardware, nothing more.
+**The design law held: no warning-red in coaching UI.** Acceptance glows gold; corrections
+instruct on a gold-edged advisory plaque. Red exists only inside the kit meter art's peak
+segment, on the generic level meters.
+
+### 28. Contrast measurements (in-browser, CIE L* against the chassis)
+Chassis L* = 2.45. "Contrast" below = |L*(surface) − L*(chassis)| as a percentage of the
+full black-to-white perceptual range; the design law caps pattern contrast at ~35 %.
+
+| surface | max | mean |
+|---|---|---|
+| rhodes cloth (world card) | **21.5 %** | 5.1 % |
+| mks cloth | **26.0 %** | 11.4 % |
+| fm cloth | **21.5 %** | 14.3 % |
+| strings cloth | **21.7 %** | 8.3 % |
+| chassis procedural weave | 1.2 % | 0.4 % |
+| panel procedural weave | 2.0 % | 0.8 % |
+| kente micro-weave (chassis, composited) | 0.5 % | 0.1 % |
+| kente micro-weave (panel, composited) | 1.2 % | 0.2 % |
+
+All well inside the law; the worst case is MKS at 26 %. The micro-weave was measured
+composited over the chassis (an uncomposited read of a transparent tile reports the raw
+stroke colour and is meaningless); its first tuning was far too visible on screen and was
+cut before these numbers were taken.
+
+### 29. Verification
+- `npm run typecheck -w jm-capture` — clean.
+- `npm run test -w jm-capture` — **50/50 passed, 7/7 files**.
+- `npm run build -w jm-capture` — renderer + electron main/preload built, exit 0.
+- Screens walked in a real browser against the Vite dev server (Electron deliberately **not**
+  launched, per instruction). The Browser-pane MCP tools could not composite frames in this
+  environment, so a headless-Chrome CDP harness drove the same live dev server instead: it
+  navigates the real screens, seeds a demo session through the app's own modules, and
+  captures the shots. Console was **clean** on the final pass.
+- 17 screenshots for client review in `apps/capture/screenshots/` (home, wizard steps 1–8,
+  the chrome listbox, guided, audition, FX rack, preset lanes, the chrome dialog, export,
+  auto, loopback).
+
+### 30. Left undone / notes for the next pass
+- The guided and auto screens are shot with a **seeded** session (no MIDI or audio device is
+  present in a headless browser), so the meters and take dots in those screenshots show
+  synthetic values. The live paths themselves are unchanged.
+- Signature's **macro drag-and-drop**, the licence panel and the gear/settings menu have no
+  counterpart in Capture and were not invented here.
+- The kit's 12 extra knob state PNGs, the three sheet PNGs (except as the recrop source),
+  `button-master-empty.png` and `font-style-preview.png` are unused by design — rotation is
+  the kit's own recommended lightweight approach and live text is required.

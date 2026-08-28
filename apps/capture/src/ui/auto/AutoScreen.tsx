@@ -1,9 +1,10 @@
-
 import { midiToNoteName } from '@jm/jmi-format/web';
 import { describePosition, isComplete } from '../../engine/session';
 import { useApp } from '../../state/appStore';
 import { services } from '../../state/services';
 import { Button, Label, Panel } from '../common';
+import { GoldDivider, Screws } from '../hardware';
+import { LedMeter } from '../guided/LedMeter';
 import { ProgressMap } from '../guided/ProgressMap';
 
 export function AutoScreen() {
@@ -17,16 +18,36 @@ export function AutoScreen() {
 
   return (
     <div className="jm-col" style={{ maxWidth: '1080px', margin: '0 auto' }}>
-      <Panel>
+      <Panel variant="recessed">
+        <Screws />
         <div className="jm-col" style={{ alignItems: 'center' }}>
-          <Label>Auto Mode — velocities 23 · 63 · 95 · 119</Label>
-          <div className="jm-note-hero" style={{ fontSize: 'var(--jm-type-hero)' }}>
-            {auto.position ? midiToNoteName(auto.position.note) : complete ? '✓' : '—'}
+          <div className="jm-title">Auto Mode</div>
+          <Label>Velocities 23 · 63 · 95 · 119</Label>
+          <div className="jm-row" style={{ alignItems: 'center', gap: 'calc(var(--jm-size-gap-unit) * 5)' }}>
+            <div className="jm-note-hero" style={{ minWidth: '300px' }}>
+              {auto.position ? (
+                midiToNoteName(auto.position.note)
+              ) : complete ? (
+                '✓'
+              ) : (
+                // a full-size em-dash at hero scale reads as a solid bar; the
+                // idle placeholder is a small muted rule instead
+                <span className="jm-note-hero-idle">—</span>
+              )}
+            </div>
+            <LedMeter height={132} />
           </div>
-          <div className="jm-value">
-            {auto.position ? describePosition(auto.position, session.config.plan.velocityMap) : complete ? 'Session complete' : 'Ready'}
+          <div className="jm-plaque">
+            <div className="jm-title">
+              {auto.position
+                ? describePosition(auto.position, session.config.plan.velocityMap)
+                : complete
+                  ? 'Session complete'
+                  : 'Ready'}
+            </div>
           </div>
-          {auto.message && <div className="jm-label">{auto.message}</div>}
+          {auto.message && <Label>{auto.message}</Label>}
+          <GoldDivider />
           <div className="jm-row">
             {!auto.running && !complete && (
               <Button primary onClick={() => services.startAuto(session).catch((e) => console.error('auto start failed', e))}>
@@ -43,8 +64,9 @@ export function AutoScreen() {
           </div>
           {monoFold && (
             <div className="jm-warning">
-              Stereo channels null below −60 dB — this source is effectively mono. Fold to mono?{' '}
+              Stereo channels null below −60 dB — this source is effectively mono. Fold to mono?
               <Button
+                compact
                 onClick={() => {
                   const s = useApp.getState().session!;
                   useApp.getState().setSession({ ...s, config: { ...s.config, channels: 'mono', foldToMono: true } });
@@ -52,13 +74,15 @@ export function AutoScreen() {
                 }}
               >
                 Fold
-              </Button>{' '}
-              <Button onClick={() => useApp.getState().setMonoFoldOffer(false)}>Keep Stereo</Button>
+              </Button>
+              <Button compact onClick={() => useApp.getState().setMonoFoldOffer(false)}>
+                Keep Stereo
+              </Button>
             </div>
           )}
         </div>
       </Panel>
-      <Panel variant="recessed">
+      <Panel variant="recessed" screws>
         <ProgressMap
           session={session}
           current={auto.position ? { note: auto.position.note, layer: auto.position.layer } : null}

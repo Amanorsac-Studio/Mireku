@@ -28,3 +28,7 @@ win:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
+
+# Electron is hoisted to the monorepo root by npm workspaces, so
+# electron-builder cannot infer the version from apps/capture. Pin it.
+electronVersion: 33.4.11

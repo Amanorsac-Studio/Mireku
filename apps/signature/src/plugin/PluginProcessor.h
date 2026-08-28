@@ -5,6 +5,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "../engine/Sampler.h"
 #include "../engine/AppState.h"
+#include "../engine/Limiter.h"
 
 namespace jm {
 
@@ -46,6 +47,7 @@ public:
     std::array<SamplerEngine, 4> engines;
     std::array<FxRackDsp, 4> slotRacks;
     FxRackDsp masterRack;
+    MasterLimiter masterLimiter;      // client review round 3 (D): master-bus safety limiter
 
     juce::MidiKeyboardState keyboardState;   // on-screen keyboard (standalone/testing)
 
@@ -65,6 +67,9 @@ public:
     void savePerformancePreset (const juce::String& name);
     bool loadPerformancePreset (const juce::File& f);
     static juce::File performancePresetDir() { return Library::userPresetDir().getChildFile ("Performance"); }
+    /// Client review round 3 (G): the PERFORM page's browser was empty because
+    /// no factory performance folder ever shipped. Written once on first run.
+    void ensureFactoryPerformancePresets();
     juce::File worldPresetDir (int world) const
     {
         return Library::userPresetDir().getChildFile (juce::String (worldJsonId (world)));
@@ -104,6 +109,8 @@ private:
     std::array<float, 4> lastMacroValue { -1, -1, -1, -1 };
     std::array<std::atomic<float>*, 4> macroParams {};
     std::atomic<float>* masterVolParam = nullptr;
+    std::atomic<float>* limiterParam = nullptr;
+    juce::SmoothedValue<float> masterGain { 1.0f };   // R3(D): no zipper on master moves
     std::atomic<float>* transposeParam = nullptr;
     std::atomic<float>* octaveParam = nullptr;
     std::atomic<float>* soloParam = nullptr;

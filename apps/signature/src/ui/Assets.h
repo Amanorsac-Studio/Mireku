@@ -8,7 +8,7 @@
 
 namespace jm::assets {
 
-enum class Icon { search, filter, star, heart, left, right, down, more, keyboard, cart };
+enum class Icon { search, filter, star, heart, left, right, down, more, keyboard, cart, key };
 
 inline const char* iconSvg (Icon ic)
 {
@@ -23,6 +23,8 @@ inline const char* iconSvg (Icon ic)
         case Icon::right: return R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#D9A648" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>)svg";
         case Icon::down: return R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#D9A648" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>)svg";
         case Icon::more: return R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="#D9A648" stroke="none"><circle cx="12" cy="5" r="2"></circle><circle cx="12" cy="12" r="2"></circle><circle cx="12" cy="19" r="2"></circle></svg>)svg";
+        // CLIENT REVIEW ROUND 3 (C): the store/cart icon becomes a KEY.
+        case Icon::key: return R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#D9A648" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="4.5"></circle><line x1="10.8" y1="12.2" x2="20.5" y2="2.5"></line><line x1="17.5" y1="5.5" x2="20" y2="8"></line><line x1="14.8" y1="8.2" x2="17" y2="10.4"></line></svg>)svg";
         case Icon::keyboard: return R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#D9A648" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6" y2="14"></line><line x1="10" y1="6" x2="10" y2="14"></line><line x1="14" y1="6" x2="14" y2="14"></line><line x1="18" y1="6" x2="18" y2="14"></line><line x1="2" y1="14" x2="22" y2="14"></line></svg>)svg";
         default: return R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#D9A648" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"></circle><circle cx="20" cy="21" r="1"></circle><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"></path></svg>)svg";
     }

@@ -43,8 +43,10 @@ public:
         title_.setColour (juce::Label::textColourId, Theme::gold);
         addAndMakeVisible (title_);
 
-        search_.setTextToShowWhenEmpty ("Search presets...", Theme::muted);
+        search_.setTextToShowWhenEmpty ("Search presets...", Theme::muted.withAlpha (0.65f));
         search_.setFont (Theme::ui (14.0f));
+        search_.setIndents (30, 5);                 // room for the inline search glyph
+        search_.setColour (juce::TextEditor::focusedOutlineColourId, Theme::goldHi);
         search_.onTextChange = [this] { rebuild(); };
         addAndMakeVisible (search_);
 
@@ -55,7 +57,7 @@ public:
             const char* names[] = { "User", "Factory", "Favorites" };
             for (int i = 0; i < 3; ++i)
                 m.addItem (i + 1, names[i], true, tabs_[(size_t) i].getToggleState());
-            m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (filterBtn_.get()), [this] (int r)
+            m.showMenuAsync (styledMenu (m, *filterBtn_), [this] (int r)
             {
                 if (r >= 1 && r <= 3)
                 {
@@ -144,8 +146,10 @@ public:
         auto searchRow = juce::Rectangle<int> (12, L::brSearchY, w - 24, L::brSearchH);
         filterBtn_->setBounds (searchRow.removeFromRight (34).reduced (3));
         searchRow.removeFromRight (6);
-        searchIconArea_ = searchRow.removeFromLeft (26).reduced (5);
+        // R3(A): the icon now lives INSIDE the recessed well (drawn over the
+        // field in paintOverChildren) instead of sitting beside a bare JUCE box.
         search_.setBounds (searchRow);
+        searchIconArea_ = searchRow.withWidth (28).reduced (7);
         tabStrip_.setBounds (12, L::brTabsY, w - 24, L::brTabsH);
         {
             auto tr = tabStrip_.getBounds().reduced (3, 3);
@@ -173,20 +177,19 @@ public:
         ux::drawMicroWeave (g, r.reduced (2.0f), 0.10f, 8.0f);
         g.setColour (Theme::goldDark.withAlpha (0.55f));
         g.drawRoundedRectangle (r.reduced (0.5f), 8.0f, 1.0f);
-        // search field bed
-        auto sf = juce::Rectangle<float> (12.0f, (float) Theme::L::brSearchY,
-                                          (float) getWidth() - 24.0f - 40.0f, (float) Theme::L::brSearchH);
-        g.setColour (juce::Colour (0xff1A1815));
-        g.fillRoundedRectangle (sf, 7.0f);
-        g.setColour (juce::Colour (0xff33302B));
-        g.drawRoundedRectangle (sf, 7.0f, 1.0f);
-        if (searchIcon_ != nullptr && ! searchIconArea_.isEmpty())
-            searchIcon_->drawWithin (g, searchIconArea_.toFloat(), juce::RectanglePlacement::centred, 0.9f);
+        // (the search well itself is drawn by the LookAndFeel — R3 item A)
         // list bed
         g.setColour (juce::Colour (0xff0A0908));
         g.fillRoundedRectangle (list_.getBounds().toFloat().expanded (2.0f), 6.0f);
 
         if (! compact_ && ! artArea_.isEmpty()) drawBrandArt (g, artArea_.toFloat());
+    }
+
+    /// The search glyph sits inside the well, over the TextEditor.
+    void paintOverChildren (juce::Graphics& g) override
+    {
+        if (searchIcon_ != nullptr && ! searchIconArea_.isEmpty())
+            searchIcon_->drawWithin (g, searchIconArea_.toFloat(), juce::RectanglePlacement::centred, 0.85f);
     }
 
     /// JM box / USB brand art panel at the foot of the column (approved ref).
@@ -254,7 +257,9 @@ private:
             juce::PopupMenu m;
             m.addItem (1, "Toggle Favorite");
             if (r.kind == Row::UserPreset || r.kind == Row::Performance) m.addItem (2, "Delete preset");
-            m.showMenuAsync ({}, [this, r] (int res)
+            // R3(A): targeted so it inherits the JM chrome LookAndFeel (an
+            // untargeted menu falls back to the host's default JUCE look)
+            m.showMenuAsync (styledMenu (m, list_), [this, r] (int res)
             {
                 if (res == 1) proc_.state.library.toggleFavorite (r.favKey());
                 else if (res == 2) { r.file.moveToTrash(); }
@@ -487,7 +492,7 @@ private:
         m.addItem (1, "Move left", idx_ > 0);
         m.addItem (2, "Move right", rackState_ != nullptr && idx_ + 1 < (int) rackState_->size());
         m.addItem (3, "Remove");
-        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (menuBtn_.get()), [this] (int r)
+        m.showMenuAsync (styledMenu (m, *menuBtn_), [this] (int r)
         {
             if (rackState_ == nullptr || idx_ >= (int) rackState_->size() || r == 0) return;
             auto& rack = *rackState_;
@@ -627,7 +632,7 @@ private:
             m.addSubMenu ("Replace first unit", repl);
             m.addItem (2, "Remove first unit");
         }
-        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (menuBtn_.get()), [this] (int r)
+        m.showMenuAsync (styledMenu (m, *menuBtn_), [this] (int r)
         {
             auto& rack = proc_.state.masterRack;
             if (r >= 300) { FxUnitState u; u.type = (FxType) (r - 300); u.params = defaultParams (u.type);
@@ -769,7 +774,7 @@ private:
     {
         juce::PopupMenu m;
         for (auto& s : fxRegistry()) m.addItem (100 + (int) s.type, s.name);
-        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&addBtn_), [this] (int r)
+        m.showMenuAsync (styledMenu (m, addBtn_), [this] (int r)
         {
             if (r < 100 || rackState_ == nullptr) return;
             if ((int) rackState_->size() >= FxRackDsp::kMaxSlots) return;
@@ -1189,18 +1194,24 @@ public:
             auto& img = ux::kenteGraded (world);
             if (img.isValid()) ux::drawCover (g, img, r, Theme::V2::backdropOpacity);
             else KenteTexture::fill (g, r, KenteTexture::Style::Weave, Theme::worldAccent (world), 0.8f, 10.0f, world);
-            // the approved reference's surround is deep and smoky, not a bright
-            // graphic band: a flat scrim plus the V2 radial vignette
-            g.setColour (juce::Colours::black.withAlpha (0.34f));
+            // CLIENT REVIEW ROUND 3 (G): round 2's surround read dark and thin
+            // at the left/right edges — the flat 0.34 scrim plus a vignette that
+            // reached 0.80 black by the frame killed exactly the band that is
+            // still on show. The reference's frame is a RICH RUST. The scrim is
+            // halved, the vignette is softened and pushed outwards, and a warm
+            // rust wash lifts the cloth back into the reference's register.
+            g.setColour (juce::Colours::black.withAlpha (0.12f));
+            g.fillRect (r);
+            g.setColour (Theme::masterCloth.withAlpha (0.24f));       // warm rust wash
             g.fillRect (r);
             juce::ColourGradient vig (juce::Colours::transparentBlack, r.getCentreX(), r.getCentreY(),
-                                      juce::Colours::black.withAlpha (0.80f), r.getX(), r.getY(), true);
-            vig.addColour (0.30, juce::Colours::transparentBlack);
+                                      juce::Colours::black.withAlpha (0.30f), r.getX(), r.getY(), true);
+            vig.addColour (0.70, juce::Colours::transparentBlack);
             g.setGradientFill (vig);
             g.fillRect (r);
         }
-        g.setColour (Theme::gold.withAlpha (0.55f));
-        g.drawRoundedRectangle (r.reduced (0.5f), 10.0f, 1.5f);
+        g.setColour (Theme::gold.withAlpha (0.62f));
+        g.drawRoundedRectangle (r.reduced (0.5f), 10.0f, 1.8f);
 
         auto surf = juce::Rectangle<float> (r.getX() + L::mpSurfX, r.getY() + L::mpSurfY,
                                             (float) L::mpSurfW, (float) L::mpSurfH);

@@ -201,4 +201,97 @@ public:
     void paint (juce::Graphics& g) override { drawTabPlaque (g, getLocalBounds().toFloat(), corner); }
 };
 
+//========================================================== CLIENT REVIEW R3 (A)
+// The fourth register of the same family: CHROME — the pop-up menus, text wells
+// and dialog plaques. Client note: "the search bar and the menus look out of
+// place". These are the drawing primitives; JmLookAndFeel routes every JUCE
+// PopupMenu / ComboBox / TextEditor / AlertWindow through them, so no default
+// JUCE chrome (and never the system blue highlight) survives anywhere.
+
+/// Near-black recessed plaque with a hairline gold-dark border and a soft drop
+/// shadow — the bed every menu and dialog sits on.
+inline void drawChromePlaque (juce::Graphics& g, juce::Rectangle<float> r, float corner = 7.0f)
+{
+    for (int i = 4; i >= 1; --i)                                  // soft drop shadow
+    {
+        g.setColour (juce::Colours::black.withAlpha (0.13f));
+        g.fillRoundedRectangle (r.expanded ((float) i * 0.9f).translated (0.0f, (float) i * 0.8f),
+                                corner + (float) i);
+    }
+    juce::ColourGradient body (juce::Colour (0xff121110), r.getX(), r.getY(),
+                               juce::Colour (0xff080807), r.getX(), r.getBottom(), false);
+    g.setGradientFill (body);
+    g.fillRoundedRectangle (r, corner);
+    g.setColour (juce::Colour (0xff6E5320).withAlpha (0.85f));    // gold hairline
+    g.drawRoundedRectangle (r.reduced (0.5f), corner, 1.0f);
+    g.setColour (juce::Colours::black.withAlpha (0.40f));         // inner recess line
+    g.drawRoundedRectangle (r.reduced (1.6f), corner - 1.0f, 1.0f);
+}
+
+/// A recessed inset well (search field, key entry, any TextEditor).
+inline void drawChromeWell (juce::Graphics& g, juce::Rectangle<float> r, bool focused,
+                            bool enabled = true, float corner = 6.0f)
+{
+    const float a = enabled ? 1.0f : HwState::disabledAlpha;
+    juce::ColourGradient bed (juce::Colour (0xff090908), r.getX(), r.getY(),
+                              juce::Colour (0xff141210), r.getX(), r.getBottom(), false);
+    g.setGradientFill (bed);
+    g.setOpacity (a);
+    g.fillRoundedRectangle (r, corner);
+    g.setColour (juce::Colours::black.withAlpha (0.55f * a));     // inset top shadow
+    g.drawLine (r.getX() + corner, r.getY() + 1.0f, r.getRight() - corner, r.getY() + 1.0f, 1.2f);
+    g.setColour ((focused ? HwState::focus : juce::Colour (0xff6E5320)).withAlpha ((focused ? 0.95f : 0.72f) * a));
+    g.drawRoundedRectangle (r.reduced (0.5f), corner, focused ? 2.0f : 1.0f);
+}
+
+/// The gold highlight row used for menu selection — never the system blue.
+inline void drawChromeHighlight (juce::Graphics& g, juce::Rectangle<float> r, float corner = 4.0f)
+{
+    juce::ColourGradient warm (juce::Colour (0xff4E370F), r.getX(), r.getY(),
+                               juce::Colour (0xff2A1D09), r.getX(), r.getBottom(), false);
+    g.setGradientFill (warm);
+    g.fillRoundedRectangle (r, corner);
+    g.setColour (juce::Colour (0xffFFC24A).withAlpha (0.9f));
+    g.fillRoundedRectangle (r.getX() + 2.0f, r.getY(), r.getWidth() - 4.0f, 1.6f, 0.8f);
+    g.setColour (Theme::goldDark.withAlpha (0.9f));
+    g.drawRoundedRectangle (r.reduced (0.5f), corner, 1.0f);
+}
+
+/// Condensed uppercase section header with tracking + a hairline rule.
+inline void drawChromeSectionHeader (juce::Graphics& g, juce::Rectangle<float> r, const juce::String& text)
+{
+    auto f = Theme::display (11.0f);
+    f.setExtraKerningFactor (0.16f);
+    g.setFont (f);
+    g.setColour (juce::Colour (0xffB79A5C));
+    auto t = r.withTrimmedLeft (12.0f).withTrimmedRight (12.0f);
+    g.drawText (text.toUpperCase(), t, juce::Justification::centredLeft, false);
+    const float tw = juce::jmin (t.getWidth(), (float) juce::GlyphArrangement::getStringWidthInt (f, text.toUpperCase()) + 8.0f);
+    g.setColour (Theme::goldDark.withAlpha (0.5f));
+    g.fillRect (t.getX() + tw, t.getCentreY(), juce::jmax (0.0f, t.getWidth() - tw), 1.0f);
+}
+
+/// Gold tick mark (ticked menu items) and the submenu chevron.
+inline void drawChromeTick (juce::Graphics& g, juce::Rectangle<float> r, juce::Colour c)
+{
+    juce::Path p;
+    auto b = r.reduced (r.getWidth() * 0.28f, r.getHeight() * 0.30f);
+    p.startNewSubPath (b.getX(), b.getCentreY());
+    p.lineTo (b.getX() + b.getWidth() * 0.38f, b.getBottom());
+    p.lineTo (b.getRight(), b.getY());
+    g.setColour (c);
+    g.strokePath (p, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+}
+
+inline void drawChromeChevron (juce::Graphics& g, juce::Rectangle<float> r, juce::Colour c)
+{
+    juce::Path p;
+    const float s = juce::jmin (r.getWidth(), r.getHeight()) * 0.30f;
+    p.startNewSubPath (r.getCentreX() - s * 0.5f, r.getCentreY() - s);
+    p.lineTo (r.getCentreX() + s * 0.5f, r.getCentreY());
+    p.lineTo (r.getCentreX() - s * 0.5f, r.getCentreY() + s);
+    g.setColour (c);
+    g.strokePath (p, juce::PathStrokeType (1.7f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+}
+
 } // namespace jm::ux

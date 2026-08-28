@@ -121,6 +121,185 @@ Implemented from `docs/svg-pack-v2` (CLAUDE-IMPLEMENTATION-V2.md + tokens/design
 - One more legibility call: at (500,137) the live patch subtitle sat directly on an undimmed gold band of the rhodes cloth (above the recessed surface). Added the polished-reference's dark title plaque (352,92,296x54) behind the title block — it doubles as the click affordance for the preset browser. Title/patch text never sits on raw pattern.
 - Standalone note: the in-progress Release relink failed once with LNK1104 because the user's running (pre-V2) standalone locked the exe; that stale instance was terminated to complete the link (coordinator relaunches). The new standalone was NOT launched.
 
+## Client review round 3 — chrome, standalone ownership, limiter, macro drag-drop (2026-08-28)
+
+Seven client items (A-G). Behaviour outside these items is unchanged.
+
+### A. One chrome language for menus, search field and dialogs
+- **Root cause of "the menus look out of place":** a `juce::PopupMenu`'s window takes its
+  LookAndFeel from `PopupMenu::setLookAndFeel()` and, failing that, from the **default**
+  LookAndFeel — `Options::withTargetComponent()` does *not* hand it the target's look
+  (`juce_PopupMenu.cpp :: findLookAndFeel`). Inside a plugin the default LookAndFeel is
+  JUCE's own, so every menu we opened was stock chrome no matter how the editor was
+  styled. Every PopupMenu in the plugin now goes through `jm::styledMenu()`
+  (`ui/Widgets.h`), which sets the menu's LookAndFeel from the opening component.
+- A fourth register — **CHROME** — was added to the `ux::Hardware` family
+  (`drawChromePlaque`, `drawChromeWell`, `drawChromeHighlight`, `drawChromeSectionHeader`,
+  `drawChromeTick`, `drawChromeChevron`): near-black recessed plaque, hairline gold-dark
+  border, soft drop shadow, condensed uppercase section headers with 0.16em tracking,
+  cream item text, a **gold highlight row (never the system blue)** and gold ticks.
+- `JmLookAndFeel` now overrides `drawPopupMenuBackground`, `drawPopupMenuItem`,
+  `drawPopupMenuSectionHeader`, `getIdealPopupMenuItemSize`, `getPopupMenuBorderSize`,
+  `drawPopupMenuUpDownArrow`, `fillTextEditorBackground`/`drawTextEditorOutline`,
+  `drawLinearSlider` and `drawAlertBox` + the alert-window fonts. The WithOptions
+  variants inherit through `LookAndFeel_V2`, so one override covers both.
+- Search field: the hand-drawn bed is gone; the recessed well, gold hairline and gold
+  focus ring are the LookAndFeel's, the glyph is drawn *inside* the well
+  (`paintOverChildren` + `setIndents(30,5)`), and the placeholder is muted.
+- Audit: every `PopupMenu` / `ComboBox` / `TextEditor` / `AlertWindow` in `src/` is routed.
+  `ComboBox` and `TextEditor` already set their own popup LookAndFeel in JUCE, so they
+  inherit ours from the editor. The one untargeted menu (preset-list right-click) is
+  targeted now. `FileChooser` remains the OS dialog by design.
+
+### B. "Options" removed, gear icon made live — we own the standalone
+- **Judgment call:** we **subclass** `StandaloneFilterWindow` rather than reimplement it
+  (`src/plugin/StandaloneApp.cpp`, `JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP=1`, source added
+  only to the `JMSignature_Standalone` target). JUCE's window carries the plugin holder,
+  device manager, state save/restore and the no-device fallback UI; reimplementing all of
+  that to delete one button would be a robustness regression. `optionsButton` is private
+  but is an ordinary child, so it is found by text in the constructor, hidden and disabled,
+  and our `resized()` calls `DocumentWindow::resized()` directly (JUCE's override exists
+  only to reposition that button).
+- The standalone app sets `JmLookAndFeel` as the **default** LookAndFeel, so JUCE's own
+  audio-settings dialog is drawn in the JM language too.
+- The header **gear** is now a live `DrawableButton` opening a styled menu: Audio / MIDI
+  Devices (standalone only), Preferences..., Rescan Library, Activate licence...
+  The standalone installs `SettingsPanel::audioSettingsHook()`, so plugin builds have no
+  compile-time dependency on the standalone client; there the gear opens our own
+  `SettingsPanel` (library folder + browse + rescan) instead.
+
+### C. Cart -> key, licence dialog — UI SHELL ONLY (scope boundary)
+- `assets::Icon::cart` replaced by a new `Icon::key`; the header icon is a live button
+  opening `LicensePanel` (key field, ACTIVATE / CANCEL plates, status line). The status
+  bar's licence lamp reads the stored key ("LICENSE ACTIVE" / "UNLICENSED"); the
+  testdata-fallback notice moved to the right of the bar so both are visible.
+- **Scope boundary held:** `JM-BUILD-SPEC.md` section 8 puts copy protection/licensing
+  explicitly out of scope and the client said "we'll work more on the license later". This
+  build therefore stores the typed key in the existing `settings.json`
+  (`Library::setLicenseKey`) and reflects it in the UI — and does **nothing else**. No
+  validation, no checksum, no cryptography, no server activation, no obfuscation, no
+  anti-tamper, and **nothing in the plugin is gated on the key**. The panel itself says so
+  on screen.
+
+### D. Master volume + limiter
+- **Limiter — was genuinely dead.** `ui/Perform.h` bound the plate to
+  `apvts.getParameter("limiter")`, but `createParameterLayout` never declared it, so the
+  button was `setEnabled(false)` forever and no DSP existed. Added an
+  `AudioParameterBool "limiter"` (default on) **and** a real master-bus safety limiter
+  (`src/engine/Limiter.h`), applied after master volume: soft-knee (3 dB) brick wall at a
+  **-0.3 dBFS** ceiling, 2 ms lookahead with a **sliding minimum** of the target gain over
+  the lookahead window (monotonic deque, O(1) amortised), a fast attack (tau =
+  lookahead/3) and a **program-dependent release** (fast 60 ms / slow 550 ms limbs, minimum
+  taken), plus a final ceiling clamp so the output is a true brick wall. The delay line
+  runs even when the limiter is switched off, so toggling is click-free and the reported
+  latency (`setLatencySamples`) never changes. The build spec does not list a limiter; the
+  approved reference UI does — logged here as an addition, scoped as a safety limiter.
+- **Master knob — the diagnostic disproved the interception theory.** `getComponentAt()`
+  at the rotary's centre returned the slider itself, the slider drove `masterVol`, the knob
+  followed host-side changes and `masterPeakL/R` were fed from the real master bus. The
+  actual defect was **layout**: `ParamKnob::resized()`'s default branch always removed the
+  top 15 px for its caption *even when the caption is empty*, so the header's 56x56 cell
+  produced a **41 px rotary whose centre sat 7 px below `Theme::L::masterKnobCy`**, with
+  only ~35 px of drawn hardware — a small, mis-centred target sitting low inside the
+  MASTER plaque, which reads (and grabs) as dead. Fixes: the empty-caption case no longer
+  reserves that strip (this also enlarges the slot VOL/PAN knobs), and the master knob is
+  placed with explicit `setV2()` geometry so component centre == knob centre == layout
+  centre. Verified: rotary 51x51 centred on (1262,43), exactly the layout centre.
+- Master volume was also applied as a **per-block constant**, stepping the gain at every
+  block boundary; it is now a `SmoothedValue` (20 ms), so knob moves and automation are
+  zipper-free.
+
+### E. Maximise
+- With the window ours, we request `minimiseButton | maximiseButton | closeButton`.
+- The editor's **fixed-aspect constrainer was removed** — it would have prevented a
+  maximised window from filling the screen. The law that replaces it is the root scaling
+  law that was already there: min(w/1536, h/1024), uniform, centred, remainder painted in
+  chassis colour. Resize limits widened to 7680x4320 so large displays are reachable.
+  The self-check now asserts uniform scale, symmetric letterbox and containment at three
+  window shapes (native, ultrawide, tall) instead of asserting a locked ratio.
+
+### F. Drag-and-drop macro assignment
+- **References consulted before designing:** Serum, Vital and Arturia Pigments all drag a
+  *modulation source* onto a parameter; Bitwig drags into a modulator's target field. All
+  of them show a name-carrying ghost under the cursor and highlight every legal drop target
+  while a drag is live, and all of them put depth editing on the source. The client asked
+  for the **opposite direction** (parameter -> macro), so we keep that feedback vocabulary
+  and reverse only the direction.
+- The editor root is the `DragAndDropContainer`; `MacroKnobUnit` is the `DragAndDropTarget`.
+- **Affordance:** a small gold **link tab** on the knob's north-west shoulder, revealed on
+  hover and left lit in the owning macro's accent colour while the parameter is linked
+  (the Pigments "handle appears on hover" idiom). It is a separate child component, so it
+  can never fight the knob's own value drag; **alt-drag** anywhere on the knob is the
+  power-user shortcut, and a click on the tab opens the assignment menu.
+- Drag ghost = a chrome plaque carrying the parameter's friendly name. Macro knobs light
+  up (soft gold wash + ring) while any parameter drag is live, and brighten with a "LINK"
+  caption when hovered.
+- Dropping creates a link at **min 0, max 1, depth +1, linear curve** — the parameter's
+  full range at full positive depth. Dropping the same parameter twice is a no-op.
+- Three routes preserved: **drag**, the original **LEARN** flow, and **right-click ->
+  "Assign to Macro 1-4"** (the old nested "Macro target" submenu was flattened).
+- **Macro editor popup** (`MacroEditorPanel`): opened from the macro's EDIT chip or by
+  right-clicking the macro knob (a left click still turns it — logged as the reading of
+  "clicking a macro opens a popup editor" that does not break the control). Lists every
+  target with its friendly name (`paramDisplayName` now renders "A RHODES/EP - Bark"
+  instead of a router path), a **bipolar DEPTH** slider (-100..+100 %), an INV toggle,
+  MIN/MAX range sliders, a CURVE box (LINEAR / SOFT / HARD / STEEP) and REMOVE, plus macro
+  rename and CLEAR ALL. Every edit calls `applyMacro()` immediately, so targets update live.
+- `MacroTarget` gained `depth` (bipolar) and `invert`. Semantics: |depth| is how much of
+  [min,max] the macro covers, the sign chooses whether the macro sweeps **up from the low
+  end or down from the high end**, and `invert` mirrors the macro's own travel. Round-2
+  state expressed inversion as max < min; that is migrated on load to depth = -1 with the
+  endpoints swapped, so old sessions keep behaving the same.
+- Serialization: `depth` and `invert` are written by `macrosToVar()`, so links survive
+  plugin state **and** performance presets exactly as before. Macros remain APVTS
+  parameters, so host automation and MIDI learn are untouched (section 5.3 unaffected).
+- Structural edits (REMOVE, CLOSE) are deferred through `MessageManager::callAsync`,
+  because they delete the button that is mid-callback.
+
+### G. Polish against the approved reference
+- **Nav tabs:** round 2 weighted the cells by label length and gave the remainder to
+  PERFORM, so FM/STRINGS crowded while RHODES/EP and PERFORM sprawled. The five cells are
+  now **evenly distributed** with cumulative rounding (widths 121-122 px, max spread 1 px).
+  `Theme::L::navCellW` is left in place but no longer used by the header.
+- **Kente surround:** the round-2 treatment stacked a flat 0.34 black scrim on a vignette
+  reaching 0.80 black at the frame, which killed exactly the band that is still on show.
+  The scrim is down to 0.12, the vignette to 0.30 starting at 70 % radius, and a warm
+  `masterCloth` rust wash at 0.24 lifts the cloth back to the reference's rich rust frame.
+  The gold frame line went 0.55 -> 0.62 alpha and 1.5 -> 1.8 px.
+- **PERFORM browser was empty** because the spec's factory performance-preset folder was
+  never created. `ensureFactoryPerformancePresets()` writes four on first run (Stage Stack,
+  Solo Rhodes, EP And Strings, Wide Keys) into
+  `~/Documents/JM Signature/Presets/Performance/Factory`. They carry only the parameters
+  they mean to set, and `loadPerformancePreset()` now skips absent sections instead of
+  clearing the master rack and MIDI map.
+
+### Testing
+- The leftover master-knob diagnostic block was converted into permanent assertions in
+  `tests/SnapshotCheck.cpp` (rotary centred on the layout centre, at least the token
+  diameter, receives the mouse at its centre, drives and follows `masterVol`, meter fed
+  from real audio, limiter parameter present, LIMITER plate enabled). The printf
+  exploration (`getComponentAt` chain dumps, component enumeration) was dropped.
+- New coverage: **limiter** (no overshoot above the ceiling on a +12 dBFS sine, a lone
+  6.0 spike caught by the lookahead, no NaN/denormal residue after a long decay, click-free
+  across a 20 dB level step taken at a zero crossing, bypassed-but-still-delayed) and
+  **macro serialization round-trip** (path + min/max + curve + depth + invert survive
+  save -> load, restored links produce identical output, legacy max < min still reads as a
+  decreasing link).
+- `JMSignatureSnapshot` is now registered with CTest as `UiSelfCheck` — it is a real test,
+  not a manual tool.
+
+## Verification after client review round 3 (2026-08-28)
+- Release rebuild (VST3 + Standalone + both console targets): exit 0.
+- `ctest -C Release`: **100% passed, 2/2** — EngineTests (0.70 s), UiSelfCheck (9.10 s).
+- `JMSignatureSnapshot`: **SELF-CHECK PASSED (0 failures)**, worst measured hero offset (0,0) px.
+- pluginval 1.3.5 strictness 8 `--skip-gui-tests` on the VST3: **SUCCESS**.
+- Snapshots regenerated in `apps/signature/build/snapshots/`: `round3-full-rhodes.png`,
+  `round3-full-perform.png`, `round3-menu-open.png` (gear menu over the live window),
+  `round3-chrome-menu.png` (menu + search-field register sheet), `round3-macro-editor.png`,
+  `round3-licence.png`, `round3-settings.png`, plus the round-2 set.
+- Standalone deliberately **not launched** (per instruction); the window/maximise changes
+  are compile- and code-verified only.
+
 ## Client review round 2 — arrangement restore + hardware kit (2026-08-27)
 UI-only pass. No DSP, engine, parameter or feature change; JM-BUILD-SPEC.md remains the sole
 behaviour authority. **Authority resolution**: where the client's review conflicts with

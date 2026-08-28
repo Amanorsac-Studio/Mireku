@@ -210,6 +210,7 @@ public:
                 }
                 if (auto* favs = o->getProperty ("favorites").getArray())
                     for (auto& fv : *favs) favorites_.addIfNotAlreadyThere (fv.toString());
+                licenseKey_ = o->getProperty ("licenseKey").toString();
             }
         }
     }
@@ -220,9 +221,20 @@ public:
         juce::Array<juce::var> favs;
         for (auto& f : favorites_) favs.add (f);
         o->setProperty ("favorites", favs);
+        o->setProperty ("licenseKey", licenseKey_);
         appDataDir().createDirectory();
         settingsFile().replaceWithText (juce::JSON::toString (juce::var (o)));
     }
+
+    // ---------------------------------------------------------- licence (UI shell)
+    // JM-BUILD-SPEC.md §8 puts copy protection/licensing explicitly OUT OF SCOPE
+    // and the client said "we'll work more on the license later". This stores and
+    // reports the entered key and NOTHING else: no validation, no checksum, no
+    // cryptography, no server activation, no obfuscation, no enforcement. Nothing
+    // in the plugin is gated on it. See DECISIONS-signature.md, round 3 item C.
+    const juce::String& licenseKey() const { return licenseKey_; }
+    bool hasLicenseKey() const { return licenseKey_.trim().isNotEmpty(); }
+    void setLicenseKey (const juce::String& k) { licenseKey_ = k.trim(); saveSettings(); }
 
     bool isFavorite (const juce::String& key) const { return favorites_.contains (key); }
     void toggleFavorite (const juce::String& key)
@@ -331,6 +343,7 @@ private:
     juce::File libraryDir_;
     std::vector<BundleInfo> bundles_;
     juce::StringArray favorites_;
+    juce::String licenseKey_;
     bool usedFallback_ = false;
 };
 

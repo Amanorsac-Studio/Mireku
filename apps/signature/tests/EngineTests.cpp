@@ -7,6 +7,7 @@
 #include <cmath>
 #include "engine/Sampler.h"
 #include "engine/AppState.h"
+#include "engine/Limiter.h"
 
 using namespace jm;
 
@@ -352,10 +353,221 @@ static void testPresetJsonRoundTrip()
 }
 
 //==============================================================================
+// CLIENT REVIEW ROUND 3 (D) — master-bus safety limiter.
+static void testMasterLimiter()
+{
+    std::printf ("\n== Master limiter (R3 item D) ==\n");
+    const double sr = 48000.0;
+    const float ceiling = juce::Decibels::decibelsToGain (MasterLimiter::kCeilingDb);
+    MasterLimiter lim;
+    lim.prepare (sr, 512);
+
+    auto runSine = [&] (float amp, float freq, int blocks, float& peakOut, bool& finiteOut)
+    {
+        peakOut = 0.0f;
+        finiteOut = true;
+        juce::AudioBuffer<float> b (2, 512);
+        double phase = 0.0;
+        const double inc = 2.0 * juce::MathConstants<double>::pi * freq / sr;
+        for (int blk = 0; blk < blocks; ++blk)
+        {
+            for (int i = 0; i < 512; ++i)
+            {
+                const float s = amp * (float) std::sin (phase);
+                phase += inc;
+                b.setSample (0, i, s);
+                b.setSample (1, i, s);
+            }
+            lim.process (b);
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 0; i < 512; ++i)
+                {
+                    const float v = b.getSample (ch, i);
+                    if (! std::isfinite (v)) finiteOut = false;
+                    peakOut = juce::jmax (peakOut, std::abs (v));
+                }
+        }
+    };
+
+    float peak = 0;
+    bool finite = true;
+    runSine (0.5f, 440.0f, 20, peak, finite);
+    CHECK (finite, "quiet signal stays finite");
+    CHECK (peak <= ceiling + 1.0e-5f, "quiet signal never exceeds the ceiling");
+    CHECK (peak > 0.45f, "quiet signal passes through essentially untouched");
+
+    lim.prepare (sr, 512);
+    runSine (4.0f, 220.0f, 40, peak, finite);
+    std::printf ("  +12 dBFS sine in -> peak out %.5f (ceiling %.5f)\n", peak, ceiling);
+    CHECK (finite, "hot signal stays finite (no NaN)");
+    CHECK (peak <= ceiling + 1.0e-5f, "no overshoot above the -0.3 dBFS ceiling");
+    CHECK (lim.gainReductionDb() > 6.0f, "limiter reports real gain reduction on a hot signal");
+
+    // transient burst: a single huge spike inside a quiet bed must not get through
+    {
+        lim.prepare (sr, 512);
+        juce::AudioBuffer<float> b (2, 512);
+        float worst = 0.0f;
+        bool ok = true;
+        for (int blk = 0; blk < 12; ++blk)
+        {
+            b.clear();
+            for (int i = 0; i < 512; ++i) { b.setSample (0, i, 0.2f); b.setSample (1, i, 0.2f); }
+            if (blk == 4) { b.setSample (0, 100, 6.0f); b.setSample (1, 100, 6.0f); }
+            lim.process (b);
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 0; i < 512; ++i)
+                {
+                    const float v = b.getSample (ch, i);
+                    if (! std::isfinite (v)) ok = false;
+                    worst = juce::jmax (worst, std::abs (v));
+                }
+        }
+        std::printf ("  spike burst peak out %.5f\n", worst);
+        CHECK (ok && worst <= ceiling + 1.0e-5f, "a lone transient spike is caught by the lookahead");
+    }
+
+    // denormals: a decaying tail must not leave denormal residue
+    {
+        lim.prepare (sr, 512);
+        juce::AudioBuffer<float> b (2, 512);
+        for (int blk = 0; blk < 40; ++blk)
+        {
+            const float amp = 2.0f * std::pow (0.4f, (float) blk);
+            for (int i = 0; i < 512; ++i) { b.setSample (0, i, amp); b.setSample (1, i, amp); }
+            lim.process (b);
+        }
+        bool clean = true;
+        for (int i = 0; i < 512; ++i)
+        {
+            const float v = std::abs (b.getSample (0, i));
+            if (! std::isfinite (v) || (v > 0.0f && v < 1.0e-30f)) clean = false;
+        }
+        CHECK (clean, "no NaN or denormal residue after a long decay");
+    }
+
+    // Click-free on gain changes. A 100 Hz sine at 48 kHz has 480 samples per
+    // period, so stepping the amplitude at sample 1440 lands exactly on a zero
+    // crossing: the INPUT is continuous there, and any large jump in the output
+    // can only come from the limiter's own gain. (An unsmoothed gain would
+    // produce a step of order the gain change itself.)
+    {
+        lim.prepare (sr, 512);
+        const int N = 2880, step = 1440;
+        juce::AudioBuffer<float> b (2, N);
+        const double inc = 2.0 * juce::MathConstants<double>::pi * 100.0 / sr;
+        for (int i = 0; i < N; ++i)
+        {
+            const float amp = i < step ? 0.30f : 3.0f;     // 20 dB jump at a zero crossing
+            const float s = amp * (float) std::sin (inc * i);
+            b.setSample (0, i, s);
+            b.setSample (1, i, s);
+        }
+        lim.process (b);
+        float biggestJump = 0.0f;
+        for (int i = 1; i < N; ++i)
+            biggestJump = juce::jmax (biggestJump,
+                                      std::abs (b.getSample (0, i) - b.getSample (0, i - 1)));
+        // the sine itself steps by at most ceiling * 2*pi*100/48000 ~= 0.0127
+        std::printf ("  largest sample-to-sample jump across a 20 dB level step: %.5f\n", biggestJump);
+        CHECK (biggestJump < 0.05f, "no click when the level jumps 20 dB (gain is smoothed)");
+    }
+
+    // toggling the limiter off keeps the delay line, so it is click-free too
+    {
+        lim.prepare (sr, 512);
+        juce::AudioBuffer<float> b (2, 512);
+        for (int i = 0; i < 512; ++i) { b.setSample (0, i, 0.4f); b.setSample (1, i, 0.4f); }
+        lim.process (b);
+        lim.setEnabled (false);
+        juce::AudioBuffer<float> b2 (2, 512);
+        for (int i = 0; i < 512; ++i) { b2.setSample (0, i, 0.4f); b2.setSample (1, i, 0.4f); }
+        lim.process (b2);
+        CHECK (std::abs (b2.getSample (0, 0) - 0.4f) < 1.0e-5f
+               && std::abs (b2.getSample (0, 511) - 0.4f) < 1.0e-5f,
+               "bypassed limiter still delays (continuous), passes signal untouched");
+        CHECK (lim.latencySamples() > 0, "limiter reports its lookahead latency");
+        lim.setEnabled (true);
+    }
+}
+
+//==============================================================================
+// CLIENT REVIEW ROUND 3 (F) — macro link serialization round-trip.
+static void testMacroLinkRoundTrip()
+{
+    std::printf ("\n== Macro link serialization (R3 item F) ==\n");
+    AppState st;
+    st.macros[0].name = "Shimmer";
+    st.macros[0].targets.push_back ({ "slot0.engine.bark", 0.10f, 0.90f, 2.0f, -0.75f, true  });
+    st.macros[0].targets.push_back ({ "slot1.fx2.mix",     0.00f, 1.00f, 1.0f,  1.00f, false });
+    st.macros[3].name = "Warmth";
+    st.macros[3].targets.push_back ({ "master.fx0.width",  0.25f, 0.75f, 0.5f,  0.40f, false });
+
+    auto text = juce::JSON::toString (st.macrosToVar());
+    AppState back;
+    back.macrosFromVar (juce::JSON::parse (text));
+
+    CHECK (back.macros[0].name == "Shimmer" && back.macros[3].name == "Warmth", "macro names survive");
+    CHECK (back.macros[0].targets.size() == 2 && back.macros[3].targets.size() == 1,
+           "target counts survive");
+    bool allFields = true;
+    for (int m = 0; m < 4; ++m)
+    {
+        if (back.macros[(size_t) m].targets.size() != st.macros[(size_t) m].targets.size()) { allFields = false; continue; }
+        for (size_t i = 0; i < st.macros[(size_t) m].targets.size(); ++i)
+        {
+            auto& a = st.macros[(size_t) m].targets[i];
+            auto& b = back.macros[(size_t) m].targets[i];
+            allFields &= a.path == b.path
+                      && std::abs (a.min - b.min) < 1.0e-5f
+                      && std::abs (a.max - b.max) < 1.0e-5f
+                      && std::abs (a.curve - b.curve) < 1.0e-5f
+                      && std::abs (a.depth - b.depth) < 1.0e-5f
+                      && a.invert == b.invert;
+            if (m == 0 && i == 0)
+                std::printf ("  target[0]: path=%s min=%.2f max=%.2f curve=%.2f depth=%.2f invert=%d\n",
+                             b.path.toRawUTF8(), b.min, b.max, b.curve, b.depth, (int) b.invert);
+        }
+    }
+    CHECK (allFields, "path + min/max + curve + depth + invert all survive save->load");
+
+    // the curve of a restored link still maps the same way
+    CHECK (std::abs (st.macros[0].targets[0].apply (0.37f)
+                     - back.macros[0].targets[0].apply (0.37f)) < 1.0e-5f,
+           "restored link produces identical output for the same macro value");
+
+    // backward compatibility: round-2 state expressed invert as max < min
+    {
+        auto* to = new juce::DynamicObject();
+        to->setProperty ("path", "slot0.engine.tine");
+        to->setProperty ("min", 1.0);
+        to->setProperty ("max", 0.0);
+        to->setProperty ("curve", 1.0);
+        juce::Array<juce::var> ts; ts.add (juce::var (to));
+        auto* mo = new juce::DynamicObject();
+        mo->setProperty ("name", "Legacy");
+        mo->setProperty ("targets", juce::var (ts));
+        juce::Array<juce::var> ms; ms.add (juce::var (mo));
+        AppState legacy;
+        legacy.macrosFromVar (juce::var (ms));
+        CHECK (legacy.macros[0].targets.size() == 1, "legacy macro link loads");
+        if (! legacy.macros[0].targets.empty())
+        {
+            auto& t = legacy.macros[0].targets[0];
+            std::printf ("  legacy inverted link -> min=%.2f max=%.2f depth=%.2f  (0 -> %.2f, 1 -> %.2f)\n",
+                         t.min, t.max, t.depth, t.apply (0.0f), t.apply (1.0f));
+            CHECK (t.apply (0.0f) > t.apply (1.0f), "legacy max<min still reads as a decreasing link");
+        }
+    }
+}
+
+//==============================================================================
 int main()
 {
     std::printf ("JM Signature engine tests\n=========================\n");
     testFxRegistry();
+    testMasterLimiter();
+    testMacroLinkRoundTrip();
     testVelocityCrossfade();
     testZoneSelection();
     testLoopContinuity();

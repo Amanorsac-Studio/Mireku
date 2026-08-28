@@ -2,6 +2,37 @@
 
 namespace jm {
 
+//==============================================================================
+// R3 (B/C/F): styled modal overlay inside the root coordinate system, so every
+// dialog is drawn in the hardware language and scales with the UI instead of
+// opening a bare OS window.
+void JMSignatureEditor::RootComponent::showOverlay (std::unique_ptr<juce::Component> content, int w, int h)
+{
+    closeOverlay();
+    scrim_ = std::make_unique<Scrim>();
+    scrim_->onDismiss = [this] { closeOverlay(); };
+    addAndMakeVisible (*scrim_);
+    overlay_ = std::move (content);
+    overlayW_ = w;
+    overlayH_ = h;
+    addAndMakeVisible (*overlay_);
+    resized();
+}
+
+void JMSignatureEditor::RootComponent::closeOverlay()
+{
+    overlay_.reset();
+    scrim_.reset();
+}
+
+void JMSignatureEditor::RootComponent::resized()
+{
+    if (scrim_ != nullptr) scrim_->setBounds (getLocalBounds());
+    if (overlay_ != nullptr)
+        overlay_->setBounds (juce::Rectangle<int> (overlayW_, overlayH_)
+                                 .withCentre (getLocalBounds().getCentre()));
+}
+
 JMSignatureEditor::JMSignatureEditor (JMSignatureProcessor& p)
     : juce::AudioProcessorEditor (p), proc_ (p)
 {
@@ -44,9 +75,14 @@ JMSignatureEditor::JMSignatureEditor (JMSignatureProcessor& p)
 
     proc_.stateChanged.addChangeListener (this);
 
+    // CLIENT REVIEW ROUND 3 (E): the window may now be MAXIMISED. A fixed
+    // aspect-ratio constrainer would have stopped a maximised window from
+    // filling the screen, so the ratio lock is gone; the root still scales
+    // UNIFORMLY (never stretched) and the remainder is chassis letterbox, which
+    // is exactly what maximising should look like. The limits are widened so a
+    // large display can be filled.
     setResizable (true, true);
     setResizeLimits (Theme::M::minW, Theme::M::minH, Theme::M::maxW, Theme::M::maxH);
-    getConstrainer()->setFixedAspectRatio ((double) Theme::M::designW / (double) Theme::M::designH);
     setSize (Theme::M::designW, Theme::M::designH);
     setPage (juce::jlimit (0, 4, proc_.state.currentPage));
     startTimerHz (15);
@@ -92,6 +128,8 @@ void JMSignatureEditor::rebuildCenter()
     }
     header_->toFront (false);
     if (keyboard_ != nullptr) keyboard_->toFront (false);
+    if (root_.scrim_ != nullptr) root_.scrim_->toFront (false);      // modal stays on top
+    if (root_.overlay_ != nullptr) root_.overlay_->toFront (false);
 }
 
 void JMSignatureEditor::changeListenerCallback (juce::ChangeBroadcaster*)
@@ -119,11 +157,17 @@ void JMSignatureEditor::paint (juce::Graphics& g)
     g.fillAll (Theme::chassis);      // letterbox
 }
 
+float JMSignatureEditor::rootScale() const
+{
+    return juce::jmin ((float) getWidth() / (float) Theme::M::designW,
+                       (float) getHeight() / (float) Theme::M::designH);
+}
+
 void JMSignatureEditor::resized()
 {
-    // root scaling law (kept from V2): uniform contain, centred, never stretched
-    const float scale = juce::jmin ((float) getWidth() / (float) Theme::M::designW,
-                                    (float) getHeight() / (float) Theme::M::designH);
+    // root scaling law (kept from V2, and what makes maximise safe in R3/E):
+    // uniform contain, centred, never stretched — the rest is chassis letterbox
+    const float scale = rootScale();
     const float ox = ((float) getWidth() - Theme::M::designW * scale) * 0.5f;
     const float oy = ((float) getHeight() - Theme::M::designH * scale) * 0.5f;
     root_.setTransform (juce::AffineTransform::scale (scale).translated (ox, oy));

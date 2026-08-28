@@ -140,7 +140,10 @@ public:
         // uniform-contain scaled (V2 root discipline retained).
         static constexpr int designW        = 1536;
         static constexpr int designH        = 1024;
-        static constexpr int minW = 1152, minH = 768, maxW = 3072, maxH = 2048;
+        // R3(E): maximise must be able to fill a large display; the root is
+        // uniform-contain scaled inside whatever size it gets, so the extra
+        // headroom only ever adds chassis letterbox, never stretch.
+        static constexpr int minW = 1152, minH = 768, maxW = 7680, maxH = 4320;
         static constexpr int pad            = 8;
         static constexpr int corner         = 6;
         static constexpr float arcThickness = 3.0f;

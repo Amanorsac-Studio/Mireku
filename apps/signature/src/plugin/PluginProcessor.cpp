@@ -18,6 +18,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout JMSignatureProcessor::create
     lay.add (std::make_unique<juce::AudioParameterInt> (juce::ParameterID { "transpose", 1 }, "Transpose", -12, 12, 0));
     lay.add (std::make_unique<juce::AudioParameterInt> (juce::ParameterID { "octave", 1 }, "Octave", -2, 2, 0));
     lay.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "solo", 1 }, "Solo Mode", false));
+    // CLIENT REVIEW ROUND 3 (D): the header LIMITER plate bound to "limiter",
+    // which no layout ever declared — the button was permanently disabled and
+    // there was no DSP behind it. Both now exist (see engine/Limiter.h).
+    lay.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "limiter", 1 }, "Master Limiter", true));
     for (int i = 0; i < 4; ++i)
     {
         auto n = juce::String::charToString ((juce::juce_wchar) ('A' + i));
@@ -42,11 +46,13 @@ JMSignatureProcessor::JMSignatureProcessor()
         engines[(size_t) i].setWorld (i);
     }
     masterVolParam = apvts.getRawParameterValue ("masterVol");
+    limiterParam = apvts.getRawParameterValue ("limiter");
     transposeParam = apvts.getRawParameterValue ("transpose");
     octaveParam = apvts.getRawParameterValue ("octave");
     soloParam = apvts.getRawParameterValue ("solo");
 
     state.library.rescan();
+    ensureFactoryPerformancePresets();
     // Auto-load the first available bundle of each world into its default slot.
     for (int i = 0; i < 4; ++i)
     {
@@ -65,6 +71,10 @@ void JMSignatureProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     loadMeasurer.reset (sampleRate, samplesPerBlock);
     slotBuf.setSize (2, samplesPerBlock);
     expressionGain.reset (sampleRate, 0.05);
+    masterGain.reset (sampleRate, 0.02);
+    masterGain.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (masterVolParam->load(), -60.0f));
+    masterLimiter.prepare (sampleRate, samplesPerBlock);
+    setLatencySamples (masterLimiter.latencySamples());
     for (int i = 0; i < 4; ++i)
     {
         engines[(size_t) i].prepare (sampleRate, samplesPerBlock);
@@ -189,13 +199,20 @@ void JMSignatureProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
 
     masterRack.process (buffer, bpm_);
 
-    const float mv = juce::Decibels::decibelsToGain (masterVolParam->load(), -60.0f);
+    // master volume — smoothed (R3/D: it was a per-block constant, so every
+    // knob move stepped the gain at the block boundary and zipped)
+    masterGain.setTargetValue (juce::Decibels::decibelsToGain (masterVolParam->load(), -60.0f));
     for (int i = 0; i < n; ++i)
     {
-        const float g = mv * expressionGain.getNextValue();
+        const float g = masterGain.getNextValue() * expressionGain.getNextValue();
         buffer.getWritePointer (0)[i] *= g;
         buffer.getWritePointer (1)[i] *= g;
     }
+
+    // master-bus safety limiter, post master volume (R3/D)
+    masterLimiter.setEnabled (limiterParam != nullptr && limiterParam->load() >= 0.5f);
+    masterLimiter.process (buffer);
+
     masterPeakL.store (buffer.getMagnitude (0, 0, n));
     masterPeakR.store (buffer.getMagnitude (1, 0, n));
 }
@@ -430,9 +447,71 @@ float JMSignatureProcessor::getParamNormalized (const juce::String& path) const
     return 0;
 }
 
+// R3(F): the macro editor lists targets by name, so router paths are turned into
+// something a musician recognises: "A · RHODES/EP · Bark", "MASTER FX 1 · Mix".
 juce::String JMSignatureProcessor::paramDisplayName (const juce::String& path) const
 {
-    return path;   // path strings are already human-parseable; UI shows friendly labels
+    auto pretty = [] (const juce::String& id)
+    {
+        juce::String out;
+        for (int i = 0; i < id.length(); ++i)
+        {
+            const auto c = id[i];
+            if (i > 0 && juce::CharacterFunctions::isUpperCase (c)) out << ' ';
+            out << (i == 0 ? juce::CharacterFunctions::toUpperCase (c) : c);
+        }
+        return out;
+    };
+
+    if (path.startsWith ("host."))
+    {
+        if (auto* p = apvts.getParameter (path.fromFirstOccurrenceOf ("host.", false, false)))
+            return p->getName (64);
+        return path;
+    }
+
+    juce::String prefix, rest;
+    const FxRackState* rack = nullptr;
+    int slot = -1;
+    if (path.startsWith ("slot"))
+    {
+        slot = path.substring (4, 5).getIntValue();
+        if (slot < 0 || slot > 3) return path;
+        rest = path.fromFirstOccurrenceOf (".", false, false);
+        prefix = juce::String::charToString ((juce::juce_wchar) ('A' + slot)) + "  "
+                 + juce::String (worldName (state.slots[(size_t) slot].world)).toUpperCase();
+        rack = &state.slots[(size_t) slot].rack;
+    }
+    else if (path.startsWith ("master."))
+    {
+        rest = path.fromFirstOccurrenceOf (".", false, false);
+        prefix = "MASTER";
+        rack = &state.masterRack;
+    }
+    else return path;
+
+    if (rest.startsWith ("engine.") && slot >= 0)
+    {
+        auto id = rest.fromFirstOccurrenceOf ("engine.", false, false).toStdString();
+        for (auto& s : worldEngineControls (state.slots[(size_t) slot].world))
+            if (id == s.id) return prefix + "  -  " + juce::String (s.label);
+        return prefix + "  -  " + pretty (juce::String (id));
+    }
+    if (rest.startsWith ("ampenv."))
+        return prefix + "  -  AMP ENV  -  " + pretty (rest.fromFirstOccurrenceOf ("ampenv.", false, false));
+    if (rest.startsWith ("fx") && rack != nullptr)
+    {
+        const int u = rest.substring (2).getIntValue();
+        auto id = rest.fromFirstOccurrenceOf (".", false, false);
+        juce::String unit = "FX " + juce::String (u + 1);
+        if (u >= 0 && u < (int) rack->size()) unit = juce::String (fxSpec ((*rack)[(size_t) u].type).name);
+        if (id == "bypass") return prefix + "  -  " + unit.toUpperCase() + "  -  Bypass";
+        if (u >= 0 && u < (int) rack->size())
+            if (auto* spec = findParam (fxSpec ((*rack)[(size_t) u].type), id.toStdString()))
+                return prefix + "  -  " + unit.toUpperCase() + "  -  " + juce::String (spec->label);
+        return prefix + "  -  " + unit.toUpperCase() + "  -  " + pretty (id);
+    }
+    return path;
 }
 
 bool JMSignatureProcessor::handleLearnClick (const juce::String& path)
@@ -578,6 +657,48 @@ void JMSignatureProcessor::savePerformancePreset (const juce::String& name)
     stateChanged.sendChangeMessage();
 }
 
+// CLIENT REVIEW ROUND 3 (G): the browser listed nothing on PERFORM because the
+// spec's "factory folder" of performance presets was never created. Four honest
+// factory snapshots are written on first run; they only carry the parameters
+// they actually mean to set, so loading one never disturbs the rest.
+void JMSignatureProcessor::ensureFactoryPerformancePresets()
+{
+    auto dir = performancePresetDir().getChildFile ("Factory");
+    if (dir.isDirectory() && dir.findChildFiles (juce::File::findFiles, false, "*.json").size() > 0)
+        return;
+    dir.createDirectory();
+
+    struct Def { const char* name; bool en[4]; bool solo; const char* macros[4]; };
+    const Def defs[] = {
+        { "Stage Stack",  { true,  true,  true,  true  }, false, { "Shimmer", "Movement", "Space", "Warmth" } },
+        { "Solo Rhodes",  { true,  false, false, false }, true,  { "Bark",    "Tremolo",  "Space", "Tine"   } },
+        { "EP And Strings", { true, false, false, true }, false, { "Blend",   "Swell",    "Space", "Air"    } },
+        { "Wide Keys",    { true,  true,  false, false }, false, { "Width",   "Chorus",   "Space", "Warmth" } },
+    };
+
+    for (auto& d : defs)
+    {
+        auto* o = new juce::DynamicObject();
+        o->setProperty ("name", d.name);
+        juce::Array<juce::var> macros;
+        for (int i = 0; i < 4; ++i)
+        {
+            auto* mo = new juce::DynamicObject();
+            mo->setProperty ("name", d.macros[i]);
+            mo->setProperty ("targets", juce::Array<juce::var>());
+            macros.add (juce::var (mo));
+        }
+        o->setProperty ("macros", juce::var (macros));
+        auto* hp = new juce::DynamicObject();
+        for (int i = 0; i < 4; ++i)
+            hp->setProperty ("slotEnable" + juce::String (i), d.en[i] ? 1.0 : 0.0);
+        hp->setProperty ("solo", d.solo ? 1.0 : 0.0);
+        o->setProperty ("hostParams", juce::var (hp));
+        dir.getChildFile (juce::File::createLegalFileName (d.name) + ".json")
+           .replaceWithText (juce::JSON::toString (juce::var (o)));
+    }
+}
+
 bool JMSignatureProcessor::loadPerformancePreset (const juce::File& f)
 {
     auto v = juce::JSON::parse (f.loadFileAsString());
@@ -585,9 +706,9 @@ bool JMSignatureProcessor::loadPerformancePreset (const juce::File& f)
     if (auto* slots = v.getProperty ("slots", juce::var()).getArray())
         for (int i = 0; i < juce::jmin (4, slots->size()); ++i)
             state.slotFromVar (i, slots->getReference (i));
-    state.masterRack = rackFromVar (v.getProperty ("masterRack", juce::var()));
+    if (v.hasProperty ("masterRack")) state.masterRack = rackFromVar (v.getProperty ("masterRack", juce::var()));
     state.macrosFromVar (v.getProperty ("macros", juce::var()));
-    state.midiMap.fromVar (v.getProperty ("midiMap", juce::var()));
+    if (v.hasProperty ("midiMap")) state.midiMap.fromVar (v.getProperty ("midiMap", juce::var()));
     if (auto* hp = v.getProperty ("hostParams", juce::var()).getDynamicObject())
         for (auto& prop : hp->getProperties())
             if (auto* p = apvts.getParameter (prop.name.toString()))

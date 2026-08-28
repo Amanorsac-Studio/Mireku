@@ -157,12 +157,31 @@ struct SlotState
 };
 
 //==============================================================================
+// CLIENT REVIEW ROUND 3 (F): macro links gained a BIPOLAR depth — the client's
+// explicit ask, "a target can increase OR decrease as the macro turns" — plus an
+// explicit invert toggle, on top of the existing min/max range and curve.
+//   depth > 0 : the macro sweeps the target UP from the low end of [min,max]
+//   depth < 0 : the macro sweeps the target DOWN from the high end
+//   |depth|   : how much of the range is covered (1 = the whole range)
+//   invert    : mirrors the macro's own travel (macro up -> target moves as if
+//               the macro were going down), independent of depth's sign
 struct MacroTarget
 {
     juce::String path;              // e.g. "slot0.engine.bark", "slot1.fx2.mix"
-    float min = 0.0f, max = 1.0f;   // normalized range of the target
+    float min = 0.0f, max = 1.0f;   // normalized range endpoints of the target
     float curve = 1.0f;             // exponent; 1 = linear
-    float apply (float norm) const { return min + (max - min) * std::pow (juce::jlimit (0.0f, 1.0f, norm), curve); }
+    float depth = 1.0f;             // bipolar -1..+1
+    bool invert = false;
+
+    float apply (float norm) const
+    {
+        float t = std::pow (juce::jlimit (0.0f, 1.0f, norm), juce::jmax (0.01f, curve));
+        if (invert) t = 1.0f - t;
+        const float d = juce::jlimit (-1.0f, 1.0f, depth);
+        const float lo = juce::jmin (min, max), hi = juce::jmax (min, max);
+        const float base = d >= 0.0f ? lo : hi;
+        return juce::jlimit (0.0f, 1.0f, base + (hi - lo) * d * t);
+    }
 };
 struct Macro
 {
@@ -267,6 +286,8 @@ struct AppState
                 to->setProperty ("min", t.min);
                 to->setProperty ("max", t.max);
                 to->setProperty ("curve", t.curve);
+                to->setProperty ("depth", t.depth);
+                to->setProperty ("invert", t.invert);
                 ts.add (juce::var (to));
             }
             o->setProperty ("targets", juce::var (ts));
@@ -290,6 +311,17 @@ struct AppState
                         t.min = (float) (double) tv.getProperty ("min", 0.0);
                         t.max = (float) (double) tv.getProperty ("max", 1.0);
                         t.curve = (float) (double) tv.getProperty ("curve", 1.0);
+                        if (tv.hasProperty ("depth"))
+                        {
+                            t.depth = (float) (double) tv.getProperty ("depth", 1.0);
+                            t.invert = (bool) tv.getProperty ("invert", false);
+                        }
+                        else if (t.max < t.min)
+                        {
+                            // round-2 state expressed "inverted" as max < min
+                            t.depth = -1.0f;
+                            std::swap (t.min, t.max);
+                        }
                         if (t.path.isNotEmpty()) macros[(size_t) i].targets.push_back (t);
                     }
             }

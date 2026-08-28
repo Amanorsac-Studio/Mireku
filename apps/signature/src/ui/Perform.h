@@ -6,6 +6,7 @@
 // All geometry lives in Theme::L, in the 1536x1024 root coordinate system.
 #pragma once
 #include "Panels.h"
+#include "Macro.h"
 
 namespace jm {
 
@@ -164,7 +165,7 @@ private:
         m.addItem (1, "Reset volume && pan");
         m.addItem (2, proc_.getParamNormalized ("host.slotEnable" + juce::String (slot_)) >= 0.5f
                           ? "Disable slot" : "Enable slot");
-        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (moreBtn_.get()), [this] (int r)
+        m.showMenuAsync (styledMenu (m, *moreBtn_), [this] (int r)
         {
             if (r >= 10 && r <= 13)
             {
@@ -339,7 +340,8 @@ private:
 //==============================================================================
 // Macro: hero knob with the world-coloured value ring, plus its target chip and
 // LEARN in the mature plate language.
-class MacroKnobUnit : public juce::Component
+class MacroKnobUnit : public juce::Component,
+                      public juce::DragAndDropTarget
 {
 public:
     MacroKnobUnit (JMSignatureProcessor& p, int index, int diameter) : proc_ (p), idx_ (index)
@@ -359,19 +361,27 @@ public:
             proc_.state.learn.macroLearnArmed.store (learn_.getToggleState() ? idx_ : -1);
         };
         addAndMakeVisible (learn_);
-        targets_.setButtonText ("0 TGT");
+        targets_.setButtonText ("EDIT");
         targets_.setFontHeight (10.0f);
-        targets_.onClick = [this] { showTargets(); };
+        targets_.onClick = [this] { openEditor(); };
         addAndMakeVisible (targets_);
+        knob_->addMouseListener (this, true);        // right-click the knob -> editor
     }
+
+    ~MacroKnobUnit() override { knob_->removeMouseListener (this); }
 
     void refresh()
     {
         knob_->refresh();
         learn_.setToggleState (proc_.state.learn.macroLearnArmed.load() == idx_, juce::dontSendNotification);
         auto& m = proc_.state.macros[(size_t) idx_];
-        targets_.setButtonText (m.targets.empty() ? m.name.toUpperCase()
-                                                  : juce::String ((int) m.targets.size()) + " TGT");
+        targets_.setButtonText (m.targets.empty() ? "EDIT"
+                                                  : "EDIT " + juce::String ((int) m.targets.size()));
+        // R3(F): every macro lights up as a legal drop target while a parameter
+        // drag is live (the Serum/Vital/Pigments feedback idiom).
+        const bool live = juce::DragAndDropContainer::findParentDragContainerFor (this) != nullptr
+                          && juce::DragAndDropContainer::findParentDragContainerFor (this)->isDragAndDropActive();
+        if (live != dragLive_) { dragLive_ = live; repaint(); }
     }
 
     void resized() override
@@ -383,35 +393,63 @@ public:
         knob_->setBounds (r);
     }
 
-private:
-    void showTargets()
+    void paintOverChildren (juce::Graphics& g) override
     {
-        auto& m = proc_.state.macros[(size_t) idx_];
-        juce::PopupMenu menu;
-        if (m.targets.empty()) menu.addItem (999, "(no targets - use LEARN then click a knob)", false);
-        for (size_t t = 0; t < m.targets.size(); ++t)
+        if (! dragLive_ && ! dragOver_) return;
+        auto r = knob_->getBounds().toFloat().reduced (2.0f);
+        g.setColour (Theme::goldHi.withAlpha (dragOver_ ? 0.22f : 0.08f));
+        g.fillRoundedRectangle (r, 8.0f);
+        g.setColour (dragOver_ ? Theme::goldHi : Theme::gold.withAlpha (0.6f));
+        g.drawRoundedRectangle (r, 8.0f, dragOver_ ? 2.4f : 1.4f);
+        if (dragOver_)
         {
-            juce::PopupMenu sub;
-            sub.addItem (1000 + (int) t, "Remove");
-            sub.addItem (2000 + (int) t, juce::String ("Curve: ") + (m.targets[t].curve > 1.5f ? "exp -> linear" : "linear -> exp"));
-            sub.addItem (3000 + (int) t, m.targets[t].max < m.targets[t].min ? "Invert (on)" : "Invert (off)");
-            menu.addSubMenu (m.targets[t].path, sub);
+            g.setFont (Theme::display (11.0f));
+            g.drawText ("LINK", r.withTrimmedTop (r.getHeight() - 16.0f), juce::Justification::centred, false);
         }
-        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&targets_), [this] (int r)
-        {
-            auto& mm = proc_.state.macros[(size_t) idx_];
-            if (r >= 1000 && r < 1000 + (int) mm.targets.size())
-                mm.targets.erase (mm.targets.begin() + (r - 1000));
-            else if (r >= 2000 && r < 2000 + (int) mm.targets.size())
-                mm.targets[(size_t) (r - 2000)].curve = mm.targets[(size_t) (r - 2000)].curve > 1.5f ? 1.0f : 2.5f;
-            else if (r >= 3000 && r < 3000 + (int) mm.targets.size())
-                std::swap (mm.targets[(size_t) (r - 3000)].min, mm.targets[(size_t) (r - 3000)].max);
-            if (r > 0) proc_.stateChanged.sendChangeMessage();
-        });
+    }
+
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        if (e.mods.isPopupMenu() && ! e.mouseWasDraggedSinceMouseDown()) openEditor();
+    }
+
+    // ---------------------------------------------------- DragAndDropTarget
+    bool isInterestedInDragSource (const SourceDetails& d) override
+    {
+        return macrodrag::isPayload (d.description);
+    }
+    void itemDragEnter (const SourceDetails&) override { dragOver_ = true; repaint(); }
+    void itemDragExit (const SourceDetails&) override  { dragOver_ = false; repaint(); }
+    void itemDropped (const SourceDetails& d) override
+    {
+        dragOver_ = false;
+        repaint();
+        if (! macrodrag::isPayload (d.description)) return;
+        const auto path = macrodrag::pathOf (d.description);
+        auto& targets = proc_.state.macros[(size_t) idx_].targets;
+        for (auto& t : targets) if (t.path == path) return;       // already linked
+        MacroTarget t;                                            // full range, +full depth, linear
+        t.path = path;
+        t.min = 0.0f;
+        t.max = 1.0f;
+        t.depth = 1.0f;
+        t.curve = 1.0f;
+        targets.push_back (t);
+        proc_.applyMacro (idx_);
+        proc_.stateChanged.sendChangeMessage();
+    }
+
+private:
+    void openEditor()
+    {
+        if (auto* host = OverlayHost::find (this))
+            host->showOverlay (std::make_unique<MacroEditorPanel> (proc_, idx_),
+                               MacroEditorPanel::kWidth, MacroEditorPanel::heightFor (proc_, idx_));
     }
 
     JMSignatureProcessor& proc_;
     int idx_;
+    bool dragLive_ = false, dragOver_ = false;
     std::unique_ptr<ParamKnob> knob_;
     ux::PlateButton learn_, targets_;
 };
@@ -588,11 +626,30 @@ public:
         }
         navs_[0].setToggleState (true, juce::dontSendNotification);
 
+        // CLIENT REVIEW ROUND 3 (D) — root cause of the "dead" master knob:
+        // ParamKnob's default layout always reserved the top 15 px for its
+        // caption, even when (as here) the caption is empty, so this 56x56 cell
+        // produced a 41 px rotary whose centre sat 7 px BELOW masterKnobCy with
+        // only ~35 px of drawn hardware. It is now placed with the exact V2
+        // geometry: component centre == knob centre == the layout's centre.
         master_ = std::make_unique<ParamKnob> (proc_, "host.masterVol", "");
         master_->setShowValue (false);
-        master_->setBounds (juce::Rectangle<int> (L::masterKnobD + 12, L::masterKnobD + 12)
+        master_->setV2 (L::masterKnobD, -(L::masterKnobD / 2 + 12), L::masterKnobD / 2 + 10, 10.0f, 10.0f);
+        master_->setBounds (juce::Rectangle<int> (juce::roundToInt (L::masterKnobD / 0.86f) + 4,
+                                                  juce::roundToInt (L::masterKnobD / 0.86f) + 4)
                                 .withCentre ({ L::masterKnobCx, L::masterKnobCy }));
         addAndMakeVisible (*master_);
+
+        // header icons: KEY (was the store/cart, item C) and the now-live GEAR
+        keyBtn_ = assets::makeIconButton ("licence", assets::Icon::key, Theme::muted);
+        keyBtn_->setBounds (L::cartX, L::iconY, L::iconD, L::iconD);
+        keyBtn_->onClick = [this] { showLicence(); };
+        addAndMakeVisible (*keyBtn_);
+
+        gearBtn_ = ux::makePackIconButton ("settings", ux::PackIcon::gear, Theme::muted);
+        gearBtn_->setBounds (L::gearX, L::iconY, L::iconD, L::iconD);
+        gearBtn_->onClick = [this] { showGearMenu(); };
+        addAndMakeVisible (*gearBtn_);
 
         limiter_.setButtonText ("LIMITER");
         limiter_.setFontHeight (12.0f);
@@ -627,19 +684,17 @@ public:
         using L = Theme::L;
         navStrip_.setBounds (L::navX, L::navY, L::navW, L::navH);
         auto tr = navStrip_.getBounds().reduced (4, 4);
+        // CLIENT REVIEW ROUND 3 (G): the round-2 strip weighted the cells by
+        // label length and gave the remainder to PERFORM, so FM and STRINGS
+        // crowded while RHODES/EP and PERFORM sprawled. The approved reference
+        // distributes them EVENLY — five equal cells, cumulative rounding so the
+        // strip is filled exactly with no drift.
+        const int total = tr.getWidth(), x0 = tr.getX();
         for (int i = 0; i < 5; ++i)
         {
-            const int w = i == 4 ? tr.getWidth() : (L::navCellW[i] * tr.getWidth() / L::navW);
-            navs_[(size_t) i].setBounds (tr.removeFromLeft (juce::jmin (w, tr.getWidth())));
+            const int a = x0 + total * i / 5, b = x0 + total * (i + 1) / 5;
+            navs_[(size_t) i].setBounds (a, tr.getY(), b - a, tr.getHeight());
         }
-    }
-
-    void mouseUp (const juce::MouseEvent& e) override
-    {
-        using L = Theme::L;
-        if (e.mouseWasDraggedSinceMouseDown()) return;
-        if (juce::Rectangle<int> (L::gearX, L::iconY, L::iconD, L::iconD).contains (e.getPosition()))
-            onPage_ (juce::jmin (3, proc_.state.currentPage) >= 0 ? proc_.state.currentPage : 0);
     }
 
     void paint (juce::Graphics& g) override
@@ -664,14 +719,7 @@ public:
         g.setFont (Theme::display (13.0f));
         g.drawText ("SOUND LIBRARY", 94, 48, 300, 16, juce::Justification::centredLeft, false);
 
-        if (cart_ != nullptr)
-            cart_->drawWithin (g, juce::Rectangle<float> ((float) L::cartX, (float) L::iconY,
-                                                          (float) L::iconD, (float) L::iconD),
-                               juce::RectanglePlacement::centred, 0.65f);
-        if (gear_ != nullptr)
-            gear_->drawWithin (g, juce::Rectangle<float> ((float) L::gearX, (float) L::iconY,
-                                                          (float) L::iconD, (float) L::iconD),
-                               juce::RectanglePlacement::centred, 0.65f);
+        // (the KEY and GEAR are live DrawableButtons now — item B/C)
 
         // master cluster plaque
         auto cluster = juce::Rectangle<float> ((float) L::masterLblX - 12.0f, 14.0f,
@@ -683,6 +731,42 @@ public:
     }
 
 private:
+    /// Item C: the key icon opens the (UI-shell-only) activation panel.
+    void showLicence()
+    {
+        if (auto* host = OverlayHost::find (this))
+            host->showOverlay (std::make_unique<LicensePanel> (proc_),
+                               LicensePanel::kWidth, LicensePanel::kHeight);
+    }
+
+    /// Item B: the gear was inert. It now owns what the removed "Options"
+    /// button used to do — device settings in standalone (via the hook the
+    /// standalone app installs) plus our own library/preferences panel.
+    void showGearMenu()
+    {
+        juce::PopupMenu m;
+        m.addSectionHeader ("Settings");
+        if (SettingsPanel::audioSettingsHook())
+            m.addItem (1, "Audio / MIDI Devices...");
+        m.addItem (2, "Preferences...");
+        m.addItem (3, "Rescan Library");
+        m.addSeparator();
+        m.addSectionHeader ("Licence");
+        m.addItem (4, proc_.state.library.hasLicenseKey() ? "Licence (active)..." : "Activate licence...");
+        m.showMenuAsync (styledMenu (m, *gearBtn_), [this] (int r)
+        {
+            if (r == 1) { if (auto& h = SettingsPanel::audioSettingsHook()) h(); }
+            else if (r == 2)
+            {
+                if (auto* host = OverlayHost::find (this))
+                    host->showOverlay (std::make_unique<SettingsPanel> (proc_),
+                                       SettingsPanel::kWidth, SettingsPanel::kHeight);
+            }
+            else if (r == 3) { proc_.state.library.rescan(); proc_.stateChanged.sendChangeMessage(); }
+            else if (r == 4) showLicence();
+        });
+    }
+
     JMSignatureProcessor& proc_;
     std::function<void (int)> onPage_;
     ux::SegmentStrip navStrip_;
@@ -691,8 +775,7 @@ private:
     ux::PlateButton limiter_;
     LevelMeter meter_;
     std::unique_ptr<juce::Drawable> shield_ { ux::makeShield() };
-    std::unique_ptr<juce::Drawable> cart_ { assets::makeIcon (assets::Icon::cart, Theme::muted) };
-    std::unique_ptr<juce::Drawable> gear_ { ux::makePackIcon (ux::PackIcon::gear, Theme::muted) };
+    std::unique_ptr<juce::DrawableButton> keyBtn_, gearBtn_;
 };
 
 //==============================================================================
@@ -733,11 +816,22 @@ public:
         g.setColour (Theme::muted);
         g.setFont (Theme::value (13.0f));
         g.drawText ("v1.0.0", 14, 0, 70, getHeight(), juce::Justification::centredLeft, false);
-        g.setColour (proc_.state.library.usedFallback() ? Theme::warnRed : Theme::okGreen);
+        // R3(C): the licence lamp now reflects the key stored by the activation
+        // panel; the library-fallback notice moved beside it so both are visible.
+        const bool lic = proc_.state.library.hasLicenseKey();
+        g.setColour (lic ? Theme::okGreen : Theme::warnRed);
         g.fillEllipse (86.0f, r.getCentreY() - 4.0f, 8.0f, 8.0f);
-        g.setColour (Theme::muted);
-        g.drawText (proc_.state.library.usedFallback() ? "TESTDATA PLACEHOLDERS" : "LICENSE ACTIVE",
-                    100, 0, 190, getHeight(), juce::Justification::centredLeft, false);
+        g.setColour (lic ? Theme::goldHi : Theme::muted);
+        g.drawText (lic ? "LICENSE ACTIVE" : "UNLICENSED",
+                    100, 0, 130, getHeight(), juce::Justification::centredLeft, false);
+        if (proc_.state.library.usedFallback())
+        {
+            g.setColour (Theme::warnRed.withAlpha (0.9f));
+            g.setFont (Theme::value (11.0f));
+            g.drawText ("TESTDATA PLACEHOLDERS", getWidth() - 500, 0, 220, getHeight(),
+                        juce::Justification::centredRight, false);
+            g.setFont (Theme::value (13.0f));
+        }
 
         const float cpu = proc_.cpuLoad.load();
         g.setColour (Theme::muted);

@@ -92,7 +92,19 @@ target_compile_definitions(JMSignature PUBLIC
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
-    JUCE_DISPLAY_SPLASH_SCREEN=0)
+    JUCE_DISPLAY_SPLASH_SCREEN=0
+    # Client review round 3 (B/E): we own the standalone app + window, so the
+    # JUCE "Options" title-bar button is gone and all three window controls
+    # (minimise / maximise / close) are available. See src/plugin/StandaloneApp.cpp.
+    JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP=1)
+
+# The custom standalone app lives ONLY in the Standalone target.
+if(TARGET JMSignature_Standalone)
+    target_sources(JMSignature_Standalone PRIVATE src/plugin/StandaloneApp.cpp)
+    target_include_directories(JMSignature_Standalone PRIVATE
+        src "${JMI_FORMAT_INCLUDE}"
+        "${CMAKE_CURRENT_BINARY_DIR}/juce_binarydata_JMAssets/JuceLibraryCode")
+endif()
 
 target_link_libraries(JMSignature PRIVATE
     juce::juce_audio_utils
@@ -141,3 +153,6 @@ target_link_libraries(JMSignatureSnapshot PRIVATE
 
 enable_testing()
 add_test(NAME EngineTests COMMAND JMSignatureTests)
+# Client review round 3: the UI/arrangement self-check is a real test now, not a
+# manual tool - it carries the master-section, chrome, macro and letterbox assertions.
+add_test(NAME UiSelfCheck COMMAND JMSignatureSnapshot)

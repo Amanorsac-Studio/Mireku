@@ -53,6 +53,21 @@ static void findAll (juce::Component& c, std::vector<T*>& out)
     for (auto* ch : c.getChildren()) findAll<T> (*ch, out);
 }
 
+static void saveImage (const juce::Image& img, const juce::String& name)
+{
+    juce::File out = juce::File (JM_SNAPSHOT_DIR).getChildFile (name);
+    out.getParentDirectory().createDirectory();
+    out.deleteFile();
+    juce::FileOutputStream os (out);
+    if (os.openedOk())
+    {
+        juce::PNGImageFormat png;
+        png.writeImageToStream (img, os);
+        std::printf ("  snapshot: %s (%dx%d)\n", out.getFullPathName().toRawUTF8(),
+                     img.getWidth(), img.getHeight());
+    }
+}
+
 static void savePng (juce::Component& c, const juce::String& name)
 {
     auto img = c.createComponentSnapshot (c.getLocalBounds(), false, 1.0f);
@@ -200,7 +215,40 @@ int main()
         if (ed != nullptr)
         {
             ed->setSize (Theme::M::designW, Theme::M::designH);
-            CHECK (ed->getConstrainer()->getFixedAspectRatio() == 1536.0 / 1024.0, "fixed 3:2 aspect");
+            // ROUND 3 (E): the fixed-aspect constrainer is gone so a MAXIMISED
+            // window can fill the screen. The law that replaces it is that the
+            // root is always scaled UNIFORMLY and centred, with chassis-coloured
+            // letterbox around it — verified here at three window shapes.
+            CHECK (ed->getConstrainer()->getFixedAspectRatio() == 0.0, "no fixed-aspect lock (maximise allowed)");
+            {
+                auto* root = ed->getChildComponent (0);
+                struct Shape { int w, h; const char* what; };
+                const Shape shapes[] = { { 1536, 1024, "native" },
+                                         { 2560, 1080, "ultrawide (maximised)" },
+                                         { 1200, 1400, "tall" } };
+                bool uniform = true, centred = true, inside = true;
+                for (auto& s : shapes)
+                {
+                    ed->setSize (s.w, s.h);
+                    auto t = root->getTransform();
+                    const float sx = t.mat00, sy = t.mat11;
+                    const float expect = juce::jmin ((float) s.w / 1536.0f, (float) s.h / 1024.0f);
+                    auto tl = juce::Point<float> (0.0f, 0.0f).transformedBy (t);
+                    auto br = juce::Point<float> (1536.0f, 1024.0f).transformedBy (t);
+                    std::printf ("  %-24s window %dx%d -> scale (%.4f,%.4f) box (%.1f,%.1f)-(%.1f,%.1f)\n",
+                                 s.what, s.w, s.h, sx, sy, tl.x, tl.y, br.x, br.y);
+                    uniform &= std::abs (sx - sy) < 1.0e-4f && std::abs (sx - expect) < 1.0e-4f;
+                    centred &= std::abs (tl.x - ((float) s.w - br.x)) < 1.0f
+                            && std::abs (tl.y - ((float) s.h - br.y)) < 1.0f;
+                    inside  &= br.x <= (float) s.w + 0.5f && br.y <= (float) s.h + 0.5f;
+                }
+                CHECK (uniform, "root scaled uniformly at every window shape (never stretched)");
+                CHECK (centred, "root centred -> symmetric chassis letterbox");
+                CHECK (inside,  "root always fits inside the window (contain, not cover)");
+                ed->setSize (Theme::M::designW, Theme::M::designH);
+            }
+            CHECK (Theme::M::maxW >= 3840 && Theme::M::maxH >= 2160,
+                   "resize limits allow a maximised size on a large display");
 
             // every approved region present AT THE SAME TIME on a model page
             CHECK (findOne<PresetBrowserPanel> (*ed) != nullptr, "left preset browser column visible");
@@ -281,6 +329,290 @@ int main()
             savePng (*ed, "round2-full-perform.png");
             delete ed;
         }
+    }
+
+    // ================================================== CLIENT REVIEW ROUND 3
+    // These replace the throwaway master-knob diagnostic: the same checks, kept
+    // as assertions, plus the new round-3 surfaces.
+    std::printf ("\n== R3 (D) master section ==\n");
+    {
+        proc.state.currentPage = 0;
+        auto* ed = dynamic_cast<JMSignatureEditor*> (proc.createEditor());
+        ed->setSize (Theme::M::designW, Theme::M::designH);
+        ed->setVisible (true);
+        auto* hdr = findOne<HeaderBar> (*ed);
+        std::vector<ParamKnob*> knobs;
+        findAll<ParamKnob> (*hdr, knobs);
+        CHECK ((int) knobs.size() == 1 && knobs[0]->path() == "host.masterVol",
+               "exactly one header knob, bound to host.masterVol");
+        for (auto* k : knobs)
+        {
+            std::vector<juce::Slider*> sl;
+            collectSliders (*k, sl);
+            CHECK ((int) sl.size() == 1, "master knob owns one rotary");
+            for (auto* s : sl)
+            {
+                // ROOT CAUSE of round 2's "dead" master knob: ParamKnob's default
+                // layout reserved the top 15 px for a caption it did not have, so
+                // the rotary was 41 px in a 56 px cell and its centre sat 7 px
+                // BELOW Theme::L::masterKnobCy. Nothing intercepted the mouse -
+                // the target was simply small and off its mark.
+                auto c = ed->getLocalPoint (s, s->getLocalBounds().getCentre());
+                std::printf ("  rotary %dx%d, centre in editor (%d,%d), layout centre (%d,%d)\n",
+                             s->getWidth(), s->getHeight(), c.x, c.y, L::masterKnobCx, L::masterKnobCy);
+                CHECK (std::abs (c.x - L::masterKnobCx) <= 1 && std::abs (c.y - L::masterKnobCy) <= 1,
+                       "master rotary centred on its layout centre");
+                CHECK (s->getWidth() >= L::masterKnobD, "master rotary at least the token diameter");
+                CHECK (ed->getComponentAt (c) == s, "master rotary receives the mouse at its centre");
+
+                auto* prm = proc.apvts.getParameter ("masterVol");
+                s->setValue (0.25, juce::sendNotificationSync);
+                CHECK (std::abs (prm->getValue() - 0.25f) < 0.01f, "master rotary drives masterVol");
+                prm->setValueNotifyingHost (0.75f);
+                k->refresh();
+                CHECK (std::abs ((float) s->getValue() - 0.75f) < 0.01f, "master rotary follows the host");
+            }
+        }
+        CHECK (proc.apvts.getParameter ("limiter") != nullptr, "limiter parameter exists");
+        std::vector<ux::PlateButton*> plates;
+        findAll<ux::PlateButton> (*hdr, plates);
+        bool limiterLive = false;
+        for (auto* b : plates) if (b->getButtonText() == "LIMITER") limiterLive = b->isEnabled();
+        CHECK (limiterLive, "LIMITER plate is enabled (no longer permanently dead)");
+
+        proc.prepareToPlay (48000.0, 512);
+        juce::AudioBuffer<float> buf (2, 512);
+        juce::MidiBuffer midi;
+        midi.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+        for (int i = 0; i < 40; ++i) { proc.processBlock (buf, midi); midi.clear(); }
+        std::printf ("  masterPeak after 40 blocks with a held note: L=%.5f R=%.5f\n",
+                     proc.masterPeakL.load(), proc.masterPeakR.load());
+        CHECK (proc.masterPeakL.load() > 1.0e-4f, "master meter fed from the real master-bus level");
+        delete ed;
+    }
+
+    // ------------------------------------------------- R3 (A) styled chrome
+    std::printf ("\n== R3 (A) hardware chrome ==\n");
+    {
+        struct MenuSheet : juce::Component
+        {
+            void paint (juce::Graphics& g) override
+            {
+                g.fillAll (juce::Colour (0xff0C0B0A));
+                ux::drawMicroWeave (g, getLocalBounds().toFloat(), 0.10f, 0.0f);
+                auto& lf = getLookAndFeel();
+                auto* pm = dynamic_cast<juce::PopupMenu::LookAndFeelMethods*> (&lf);
+                if (pm == nullptr) return;
+                // the menu plaque, drawn exactly as a live PopupMenu would
+                juce::Rectangle<int> menu (26, 26, 318, 300);
+                {
+                    juce::Graphics::ScopedSaveState ss (g);
+                    g.setOrigin (menu.getPosition());
+                    g.reduceClipRegion (juce::Rectangle<int> (menu.getWidth(), menu.getHeight()));
+                    pm->drawPopupMenuBackground (g, menu.getWidth(), menu.getHeight());
+                    int y = 8;
+                    auto row = [&] (int h) { auto r = juce::Rectangle<int> (8, y, menu.getWidth() - 16, h); y += h; return r; };
+                    pm->drawPopupMenuSectionHeader (g, row (26), "Settings");
+                    pm->drawPopupMenuItem (g, row (30), false, true, false, false, false,
+                                           "Audio / MIDI Devices...", {}, nullptr, nullptr);
+                    pm->drawPopupMenuItem (g, row (30), false, true, true, false, false,
+                                           "Preferences...", {}, nullptr, nullptr);
+                    pm->drawPopupMenuItem (g, row (30), false, true, false, true, false,
+                                           "Rescan Library", {}, nullptr, nullptr);
+                    pm->drawPopupMenuItem (g, row (9), true, true, false, false, false, {}, {}, nullptr, nullptr);
+                    pm->drawPopupMenuSectionHeader (g, row (26), "Macro");
+                    for (int i = 1; i <= 4; ++i)
+                        pm->drawPopupMenuItem (g, row (30), false, true, false, i == 2, false,
+                                               "Assign to Macro " + juce::String (i), {}, nullptr, nullptr);
+                    pm->drawPopupMenuItem (g, row (30), false, true, false, false, true,
+                                           "Replace with", {}, nullptr, nullptr);
+                    pm->drawPopupMenuItem (g, row (30), false, false, false, false, false,
+                                           "Clear MIDI mapping (disabled)", {}, nullptr, nullptr);
+                }
+                // and the search well / text editor register beside it
+                g.setColour (Theme::gold);
+                g.setFont (Theme::display (13.0f));
+                g.drawText ("SEARCH FIELD", 380, 26, 240, 18, juce::Justification::centredLeft, false);
+                ux::drawChromeWell (g, { 380.0f, 50.0f, 240.0f, 30.0f }, false);
+                ux::drawChromeWell (g, { 380.0f, 92.0f, 240.0f, 30.0f }, true);
+                g.setColour (Theme::muted.withAlpha (0.7f));
+                g.setFont (Theme::ui (13.0f));
+                g.drawText ("Search presets...", 410, 50, 210, 30, juce::Justification::centredLeft, false);
+                g.setColour (Theme::cream);
+                g.drawText ("focused", 410, 92, 210, 30, juce::Justification::centredLeft, false);
+                if (icon_ != nullptr)
+                {
+                    icon_->drawWithin (g, { 387.0f, 57.0f, 16.0f, 16.0f }, juce::RectanglePlacement::centred, 0.85f);
+                    icon_->drawWithin (g, { 387.0f, 99.0f, 16.0f, 16.0f }, juce::RectanglePlacement::centred, 0.85f);
+                }
+                g.setColour (Theme::gold);
+                g.setFont (Theme::display (13.0f));
+                g.drawText ("HIGHLIGHT ROW IS GOLD, NEVER SYSTEM BLUE", 380, 150, 250, 40,
+                            juce::Justification::topLeft, false);
+            }
+            std::unique_ptr<juce::Drawable> icon_ { assets::makeIcon (assets::Icon::search, Theme::muted) };
+        } sheet;
+        sheet.setLookAndFeel (&lnf);
+        sheet.setSize (660, 360);
+        savePng (sheet, "round3-chrome-menu.png");
+        sheet.setLookAndFeel (nullptr);
+        CHECK (true, "styled popup-menu / search-field sheet rendered");
+    }
+
+    // ------------------------------ R3 (F) macro editor over the live window
+    std::printf ("\n== R3 (F) macro drag-drop + editor ==\n");
+    {
+        proc.state.currentPage = 4;
+        proc.state.macros[0].name = "Shimmer";
+        proc.state.macros[0].targets.clear();
+        proc.state.macros[0].targets.push_back ({ "slot0.engine.bark",   0.0f, 1.0f, 1.0f,  1.0f, false });
+        proc.state.macros[0].targets.push_back ({ "slot0.fx0.drive",     0.1f, 0.8f, 2.0f, -0.7f, false });
+        proc.state.macros[0].targets.push_back ({ "slot0.fx3.mix",       0.0f, 1.0f, 1.0f,  0.5f, true  });
+
+        auto* ed = dynamic_cast<JMSignatureEditor*> (proc.createEditor());
+        ed->setSize (Theme::M::designW, Theme::M::designH);
+        ed->setVisible (true);
+
+        // the PERFORM centre stage owns the visible macros (the hidden dock keeps
+        // its own set, so search the centre panel specifically)
+        std::vector<MacroKnobUnit*> macros;
+        findAll<MacroKnobUnit> (*findOne<PerformCenterPanel> (*ed), macros);
+        CHECK ((int) macros.size() == 4, "four macro drop targets on the PERFORM page");
+
+        // a parameter knob offers a drag payload, and a macro accepts it
+        std::vector<ParamKnob*> allKnobs;
+        findAll<ParamKnob> (*ed, allKnobs);
+        ParamKnob* fxKnob = nullptr;
+        for (auto* k : allKnobs) if (k->path().startsWith ("slot0.fx")) { fxKnob = k; break; }
+        CHECK (fxKnob != nullptr, "a droppable FX parameter knob exists");
+        if (fxKnob != nullptr && ! macros.empty())
+        {
+            auto payload = macrodrag::makePayload (fxKnob->path(), fxKnob->caption());
+            CHECK (macrodrag::isPayload (payload) && macrodrag::pathOf (payload) == fxKnob->path(),
+                   "drag payload round-trips the parameter path");
+            juce::DragAndDropTarget::SourceDetails d (payload, fxKnob, {});
+            CHECK (macros[1]->isInterestedInDragSource (d), "macro knob accepts a parameter drag");
+            juce::DragAndDropTarget::SourceDetails junk (juce::var ("something else"), fxKnob, {});
+            CHECK (! macros[1]->isInterestedInDragSource (junk), "macro knob rejects unrelated drags");
+            const auto before = proc.state.macros[1].targets.size();
+            macros[1]->itemDropped (d);
+            CHECK (proc.state.macros[1].targets.size() == before + 1, "dropping creates a macro link");
+            if (! proc.state.macros[1].targets.empty())
+            {
+                auto& t = proc.state.macros[1].targets.back();
+                CHECK (t.min == 0.0f && t.max == 1.0f && t.depth == 1.0f && t.curve == 1.0f,
+                       "default link is full range, full positive depth, linear");
+            }
+            macros[1]->itemDropped (d);
+            CHECK (proc.state.macros[1].targets.size() == before + 1, "dropping the same parameter twice is a no-op");
+        }
+
+        // bipolar depth actually inverts the direction of travel
+        {
+            MacroTarget up   { "x", 0.0f, 1.0f, 1.0f,  1.0f, false };
+            MacroTarget down { "x", 0.0f, 1.0f, 1.0f, -1.0f, false };
+            MacroTarget half { "x", 0.0f, 1.0f, 1.0f,  0.5f, false };
+            std::printf ("  depth +1: %.2f -> %.2f   depth -1: %.2f -> %.2f   depth +0.5 top: %.2f\n",
+                         up.apply (0.0f), up.apply (1.0f), down.apply (0.0f), down.apply (1.0f), half.apply (1.0f));
+            CHECK (up.apply (0.0f) < up.apply (1.0f), "positive depth increases with the macro");
+            CHECK (down.apply (0.0f) > down.apply (1.0f), "negative depth DECREASES with the macro");
+            CHECK (std::abs (half.apply (1.0f) - 0.5f) < 1.0e-4f, "|depth| scales the covered range");
+            MacroTarget inv { "x", 0.0f, 1.0f, 1.0f, 1.0f, true };
+            CHECK (std::abs (inv.apply (0.0f) - 1.0f) < 1.0e-4f, "invert mirrors the macro's travel");
+        }
+
+        // the editor popup, rendered over the live window for the client
+        if (auto* host = OverlayHost::find (findOne<MacroKnobUnit> (*ed)))
+        {
+            host->showOverlay (std::make_unique<MacroEditorPanel> (proc, 0),
+                               MacroEditorPanel::kWidth, MacroEditorPanel::heightFor (proc, 0));
+            savePng (*ed, "round3-macro-editor.png");
+            CHECK (findOne<MacroEditorPanel> (*ed) != nullptr, "macro editor popup opens over the window");
+            host->closeOverlay();
+        }
+        savePng (*ed, "round3-full-perform.png");
+        delete ed;
+    }
+
+    // ------------------------------------------- R3 (B/C/G) header + browser
+    std::printf ("\n== R3 (B/C/G) header, licence, browser ==\n");
+    {
+        proc.state.currentPage = 0;
+        auto* ed = dynamic_cast<JMSignatureEditor*> (proc.createEditor());
+        ed->setSize (Theme::M::designW, Theme::M::designH);
+        ed->setVisible (true);
+        auto* hdr = findOne<HeaderBar> (*ed);
+
+        std::vector<juce::DrawableButton*> icons;
+        findAll<juce::DrawableButton> (*hdr, icons);
+        bool key = false, gear = false;
+        for (auto* b : icons)
+        {
+            if (b->getName() == "licence")  key = true;
+            if (b->getName() == "settings") gear = true;
+        }
+        CHECK (key,  "cart replaced by a live KEY button (item C)");
+        CHECK (gear, "gear is a live button (item B)");
+
+        // nav cells evenly distributed (item G)
+        std::vector<ux::TabCellButton*> tabs;
+        findAll<ux::TabCellButton> (*hdr, tabs);
+        CHECK ((int) tabs.size() == 5, "five nav cells");
+        int minW = 9999, maxW = 0;
+        for (auto* t : tabs) { minW = juce::jmin (minW, t->getWidth()); maxW = juce::jmax (maxW, t->getWidth()); }
+        std::printf ("  nav cell widths %d..%d\n", minW, maxW);
+        CHECK (maxW - minW <= 1, "nav cells evenly spaced (reference distribution)");
+
+        savePng (*ed, "round3-full-rhodes.png");
+
+        // the gear menu drawn over the live window, exactly as the LookAndFeel
+        // paints a real PopupMenu window (menu windows are separate desktop
+        // windows, so they cannot be captured by a component snapshot)
+        {
+            auto* pm = dynamic_cast<juce::PopupMenu::LookAndFeelMethods*> (&lnf);
+            const int mx = L::gearX, my = L::iconY + L::iconD + 6, mw = 300, mh = 262;
+            juce::Image menuImg (juce::Image::ARGB, mw, mh, true, juce::SoftwareImageType());
+            {
+            juce::Graphics g (menuImg);
+            pm->drawPopupMenuBackground (g, mw, mh);
+            int y = 8;
+            auto row = [&] (int h) { auto r = juce::Rectangle<int> (8, y, mw - 16, h); y += h; return r; };
+            pm->drawPopupMenuSectionHeader (g, row (26), "Settings");
+            pm->drawPopupMenuItem (g, row (30), false, true, false, false, false,
+                                   "Audio / MIDI Devices...", {}, nullptr, nullptr);
+            pm->drawPopupMenuItem (g, row (30), false, true, true, false, false,
+                                   "Preferences...", {}, nullptr, nullptr);
+            pm->drawPopupMenuItem (g, row (30), false, true, false, false, false,
+                                   "Rescan Library", {}, nullptr, nullptr);
+            pm->drawPopupMenuItem (g, row (9), true, true, false, false, false, {}, {}, nullptr, nullptr);
+            pm->drawPopupMenuSectionHeader (g, row (26), "Licence");
+            pm->drawPopupMenuItem (g, row (30), false, true, false, false, false,
+                                   "Activate licence...", {}, nullptr, nullptr);
+            }   // the Graphics must go out of scope before the image is read back
+            auto img = ed->createComponentSnapshot (ed->getLocalBounds(), false, 1.0f);
+            { juce::Graphics gw (img); gw.drawImageAt (menuImg, mx, my); }
+            saveImage (img, "round3-menu-open.png");
+        }
+
+        if (auto* host = OverlayHost::find (hdr))
+        {
+            host->showOverlay (std::make_unique<LicensePanel> (proc),
+                               LicensePanel::kWidth, LicensePanel::kHeight);
+            savePng (*ed, "round3-licence.png");
+            host->closeOverlay();
+            host->showOverlay (std::make_unique<SettingsPanel> (proc),
+                               SettingsPanel::kWidth, SettingsPanel::kHeight);
+            savePng (*ed, "round3-settings.png");
+            host->closeOverlay();
+        }
+
+        // performance presets are listed on PERFORM (item G)
+        auto factory = JMSignatureProcessor::performancePresetDir().getChildFile ("Factory");
+        const int n = factory.findChildFiles (juce::File::findFiles, false, "*.json").size();
+        std::printf ("  factory performance presets on disk: %d (%s)\n", n,
+                     factory.getFullPathName().toRawUTF8());
+        CHECK (n >= 4, "factory performance presets exist for the PERFORM browser");
+        delete ed;
     }
 
     juce::LookAndFeel::setDefaultLookAndFeel (nullptr);

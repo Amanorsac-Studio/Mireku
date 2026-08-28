@@ -91,6 +91,8 @@ public:
         scratch_.setSize (2, maxBlock);
         for (auto& f : voicingChain_) f.prepare (sampleRate);
         motionLfo_.setRate (0.15f, sampleRate);
+        bendSemis_.store (0.0f);
+        bendCur_ = 1.0;
         allNotesOff (false);
     }
 
@@ -178,6 +180,31 @@ public:
             }
     }
 
+    /// CLIENT REVIEW ROUND 4 (item 2) — pitch bend, previously omitted for v1.
+    /// `semitones` is the already-scaled bend (the processor multiplies the
+    /// wheel by the configurable range), applied to every sounding voice as a
+    /// playback-rate multiplier and SMOOTHED at block rate with a per-sample
+    /// ramp, so it glides instead of stepping. Lock-free: one atomic store.
+    void setPitchBend (float semitones) { bendSemis_.store (semitones); }
+    float pitchBendSemitones() const { return bendSemis_.load(); }
+    /// The smoothed rate multiplier currently applied to sounding voices.
+    double pitchBendRatio() const { return bendCur_; }
+
+    // --------------------------------------------------- test introspection
+    int firstActiveVoice() const
+    {
+        for (size_t i = 0; i < voices_.size(); ++i) if (voices_[i].active) return (int) i;
+        return -1;
+    }
+    double voicePosition (int idx) const
+    {
+        return idx >= 0 && idx < (int) voices_.size() ? voices_[(size_t) idx].pos : 0.0;
+    }
+    double voiceBaseRatio (int idx) const
+    {
+        return idx >= 0 && idx < (int) voices_.size() ? voices_[(size_t) idx].ratio : 0.0;
+    }
+
     void sustainPedal (bool down)
     {
         const juce::SpinLock::ScopedLockType sl (lock_);
@@ -233,9 +260,20 @@ public:
         auto* L = scratch_.getWritePointer (0);
         auto* R = scratch_.getWritePointer (1);
 
+        // Round 4 (item 2): one block-rate smoothing step for the bend, turned
+        // into a per-sample linear ramp shared by every voice. A one-pole with
+        // tau ~= 12 ms; a wheel sweep therefore glides continuously instead of
+        // stepping at block boundaries.
+        const double bendTarget = std::pow (2.0, (double) bendSemis_.load() / 12.0);
+        const double a = 1.0 - std::exp (-(double) numSamples / juce::jmax (1.0, 0.012 * sr_));
+        const double bendEnd = bendCur_ + (bendTarget - bendCur_) * a;
+        const double bendStart = bendCur_;
+        const double bendStep = (bendEnd - bendStart) / (double) juce::jmax (1, numSamples);
+
         for (auto& v : voices_)
             if (v.active)
-                renderVoice (v, L, R, numSamples);
+                renderVoice (v, L, R, numSamples, bendStart, bendStep);
+        bendCur_ = bendEnd;
 
         applyVoicing (L, R, numSamples);
 
@@ -325,7 +363,8 @@ private:
         return best;
     }
 
-    void renderVoice (Voice& v, float* L, float* R, int n)
+    void renderVoice (Voice& v, float* L, float* R, int n,
+                      double bend = 1.0, double bendStep = 0.0)
     {
         auto& sd = *v.sample;
         const bool hasLoop = sd.loop.has_value() && sd.loop->endSample > sd.loop->startSample;
@@ -397,7 +436,8 @@ private:
             L[i] += sl * g;
             R[i] += srr * g;
 
-            v.pos += v.ratio;
+            v.pos += v.ratio * bend;               // round 4 (item 2): pitch bend
+            bend += bendStep;
             if (hasLoop && v.pos >= loopEnd)
                 v.pos -= loopLen;
             else if (! hasLoop && v.pos >= (double) sd.lengthFrames - 1)
@@ -480,6 +520,8 @@ private:
     std::array<std::atomic<float>, 8> engineParams_ {};
     AmpEnvParams ampEnv_;
     bool sustainDown_ = false;
+    std::atomic<float> bendSemis_ { 0.0f };      // round 4 (item 2)
+    double bendCur_ = 1.0;                       // smoothed rate multiplier
     int world_ = 0;
     double sr_ = 48000;
     juce::int64 stampCounter_ = 0;

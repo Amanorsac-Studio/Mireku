@@ -66,9 +66,9 @@ JMSignatureEditor::JMSignatureEditor (JMSignatureProcessor& p)
     bar_->setBounds (0, L::barY, Theme::M::designW, L::barH);
     root_.addAndMakeVisible (*bar_);
 
-    keyboard_ = std::make_unique<juce::MidiKeyboardComponent> (proc_.keyboardState,
-                                                               juce::MidiKeyboardComponent::horizontalKeyboard);
-    keyboard_->setKeyWidth (22.0f);
+    // R4(2): the on-screen keyboard now carries a spring-return PITCH wheel and
+    // a MOD wheel (CC1) beside the keys, as on a real keyboard.
+    keyboard_ = std::make_unique<KeyboardStrip> (proc_);
     keyboard_->setBounds (L::rackX, L::rackY + 40, L::rackW, L::rackH - 60);
     keyboard_->setVisible (false);
     root_.addChildComponent (*keyboard_);      // shown only via the KEYBOARD button

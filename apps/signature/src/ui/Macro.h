@@ -274,9 +274,9 @@ public:
             g.setColour (Theme::muted);
             g.setFont (Theme::ui (13.0f));
             g.drawFittedText ("No targets yet.\n"
-                              "Drag a parameter's gold link tab onto this macro knob, arm LEARN and click a\n"
-                              "control, or right-click any control and choose \"Assign to Macro "
-                              + juce::String (idx_ + 1) + "\".",
+                              "Drag a parameter's gold link tab onto this macro knob; or right-click the\n"
+                              "macro, choose Learn and click a control; or right-click any control and\n"
+                              "choose \"Assign to Macro " + juce::String (idx_ + 1) + "\".",
                               getLocalBounds().reduced (30, 0).withTrimmedTop (104).withHeight (72),
                               juce::Justification::centredTop, 3);
         }
@@ -370,13 +370,158 @@ private:
     juce::String status_;
 };
 
+//======================================================= CLIENT REVIEW ROUND 4
+// Item 1 — the MIDI routing editor that lives in the settings window.
+//
+// One widget vocabulary for both halves of the routing model: a row carries a
+// name and four A/B/C/D cells that light in the slot's world accent. Devices
+// additionally carry an ON plate. Everything writes straight into
+// `proc.midiRouting` (atomics) and then calls refreshMidiDevices().
+
+/// Four A-B-C-D cells = one slot mask.
+class SlotMaskCells : public juce::Component
+{
+public:
+    std::function<void (juce::uint8)> onChange;
+
+    void setMask (juce::uint8 m) { if (m != mask_) { mask_ = m; repaint(); } }
+    juce::uint8 mask() const { return mask_; }
+
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        if (e.mouseWasDraggedSinceMouseDown() || ! isEnabled()) return;
+        const int cell = juce::jlimit (0, 3, e.x * 4 / juce::jmax (1, getWidth()));
+        mask_ = (juce::uint8) (mask_ ^ (1u << cell));
+        repaint();
+        if (onChange) onChange (mask_);
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        const float w = (float) getWidth() / 4.0f;
+        for (int i = 0; i < 4; ++i)
+        {
+            auto c = juce::Rectangle<float> ((float) i * w, 0.0f, w, (float) getHeight()).reduced (2.0f);
+            const bool on = (mask_ & (1u << i)) != 0;
+            auto accent = Theme::worldAccent (i);
+            g.setColour (on ? accent.withAlpha (0.85f) : juce::Colour (0xff141210));
+            g.fillRoundedRectangle (c, 4.0f);
+            g.setColour (on ? Theme::goldHi.withAlpha (0.9f) : Theme::goldDark.withAlpha (0.7f));
+            g.drawRoundedRectangle (c.reduced (0.5f), 4.0f, 1.0f);
+            g.setFont (Theme::display (12.0f));
+            g.setColour (on ? juce::Colour (0xff100D06) : Theme::muted);
+            g.drawText (juce::String::charToString ((juce::juce_wchar) ('A' + i)), c,
+                        juce::Justification::centred, false);
+        }
+    }
+
+private:
+    juce::uint8 mask_ = kSlotMaskAll;
+};
+
+/// One routing row: caption (+ optional ON plate) and the four cells.
+class RoutingRow : public juce::Component
+{
+public:
+    RoutingRow (juce::String caption, bool withEnable) : caption_ (std::move (caption))
+    {
+        if (withEnable)
+        {
+            enable_ = std::make_unique<ux::PlateButton> ("ON");
+            enable_->setFontHeight (10.0f);
+            enable_->setClickingTogglesState (true);
+            enable_->onClick = [this] { if (onEnable) onEnable (enable_->getToggleState()); refreshDim(); };
+            addAndMakeVisible (*enable_);
+        }
+        addAndMakeVisible (cells_);
+    }
+
+    std::function<void (bool)> onEnable;
+    SlotMaskCells& cells() { return cells_; }
+    void setEnabledState (bool on)
+    {
+        if (enable_ != nullptr) enable_->setToggleState (on, juce::dontSendNotification);
+        refreshDim();
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds();
+        cells_.setBounds (r.removeFromRight (132).reduced (0, 3));
+        if (enable_ != nullptr) enable_->setBounds (r.removeFromRight (56).reduced (4, 3));
+        textArea_ = r;
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        g.setColour (Theme::cream.withAlpha (enable_ != nullptr && ! enable_->getToggleState() ? 0.5f : 1.0f));
+        g.setFont (Theme::ui (12.0f));
+        g.drawText (caption_, textArea_.withTrimmedLeft (6), juce::Justification::centredLeft, false);
+        g.setColour (Theme::line.withAlpha (0.5f));
+        g.fillRect (0, getHeight() - 1, getWidth(), 1);
+    }
+
+private:
+    void refreshDim()
+    {
+        cells_.setAlpha (enable_ == nullptr || enable_->getToggleState() ? 1.0f : 0.45f);
+        repaint();
+    }
+    juce::String caption_;
+    juce::Rectangle<int> textArea_;
+    std::unique_ptr<ux::PlateButton> enable_;
+    SlotMaskCells cells_;
+};
+
+/// A tiny "- value +" plate stepper (pitch-bend range lives on one).
+class IntStepper : public juce::Component
+{
+public:
+    IntStepper (juce::String suffix, int lo, int hi) : suffix_ (std::move (suffix)), lo_ (lo), hi_ (hi)
+    {
+        minus_.setButtonText ("-"); plus_.setButtonText ("+");
+        minus_.setFontHeight (13.0f); plus_.setFontHeight (13.0f);
+        minus_.onClick = [this] { bump (-1); };
+        plus_.onClick  = [this] { bump (1); };
+        addAndMakeVisible (minus_);
+        addAndMakeVisible (plus_);
+    }
+    std::function<void (int)> onChange;
+    void setValue (int v) { value_ = juce::jlimit (lo_, hi_, v); repaint(); }
+    int value() const { return value_; }
+    void resized() override
+    {
+        auto r = getLocalBounds();
+        minus_.setBounds (r.removeFromLeft (34).reduced (1));
+        plus_.setBounds (r.removeFromRight (34).reduced (1));
+        text_ = r;
+    }
+    void paint (juce::Graphics& g) override
+    {
+        g.setColour (Theme::goldHi);
+        g.setFont (Theme::display (15.0f));
+        g.drawText (juce::String (value_) + suffix_, text_, juce::Justification::centred, false);
+    }
+private:
+    void bump (int d)
+    {
+        setValue (value_ + d);
+        if (onChange) onChange (value_);
+    }
+    juce::String suffix_;
+    int lo_, hi_, value_ = 0;
+    juce::Rectangle<int> text_;
+    ux::PlateButton minus_, plus_;
+};
+
 //==============================================================================
 /// Item B — the gear's own settings panel (library folder, rescan, and in
-/// standalone builds a route to the host audio/MIDI device dialog).
+/// standalone builds a route to the host audio/MIDI device dialog), extended in
+/// round 4 with the MIDI routing editor (item 1) and the pitch-bend range.
 class SettingsPanel : public ChromePanel
 {
 public:
-    static constexpr int kWidth = 640, kHeight = 300;
+    static constexpr int kWidth = 760, kHeight = 640;
 
     /// Set by the standalone app so the gear can open the device dialog without
     /// the plugin builds having to know the standalone client exists.
@@ -423,17 +568,132 @@ public:
         audio_.onClick = [] { if (auto& h = audioSettingsHook()) h(); };
         audio_.setEnabled (audioSettingsHook() != nullptr);
         addAndMakeVisible (audio_);
+
+        // ---------------------------------------------------- R4(2) bend range
+        bend_ = std::make_unique<IntStepper> (" st", 0, 12);
+        bend_->setValue (proc_.pitchBendRange());
+        bend_->onChange = [this] (int v)
+        {
+            if (auto* p = dynamic_cast<juce::AudioParameterInt*> (proc_.apvts.getParameter ("bendRange")))
+            {
+                p->beginChangeGesture();
+                *p = v;
+                p->endChangeGesture();
+            }
+        };
+        addAndMakeVisible (*bend_);
+
+        // ------------------------------------------------- R4(1) MIDI routing
+        omni_.setButtonText ("ALL -> ALL");
+        omni_.setFontHeight (10.0f);
+        omni_.onClick = [this]
+        {
+            proc_.midiRouting.resetChannelsToOmni();
+            for (auto& d : proc_.midiRouting.devices()) d.mask = kSlotMaskAll;
+            proc_.refreshMidiDevices();
+            rebuildRouting();
+        };
+        addAndMakeVisible (omni_);
+
+        split_.setButtonText ("CH 1-4 -> A-D");
+        split_.setFontHeight (10.0f);
+        split_.onClick = [this]
+        {
+            for (int c = 1; c <= 16; ++c)
+                proc_.midiRouting.setChannelMask (c, c <= 4 ? (juce::uint8) (1u << (c - 1)) : 0);
+            rebuildRouting();
+        };
+        addAndMakeVisible (split_);
+
+        rescanMidi_.setButtonText ("RESCAN MIDI");
+        rescanMidi_.setFontHeight (10.0f);
+        rescanMidi_.onClick = [this] { proc_.refreshMidiDevices(); rebuildRouting(); };
+        addAndMakeVisible (rescanMidi_);
+
+        viewport_.setViewedComponent (&list_, false);
+        viewport_.setScrollBarsShown (true, false);
+        addAndMakeVisible (viewport_);
+        proc_.refreshMidiDevices();
+        rebuildRouting();
+    }
+
+    /// Rebuilds the routing rows from the live model. Devices only appear in
+    /// standalone builds — a plugin must not open MIDI hardware, so there the
+    /// channel table IS the whole feature.
+    void rebuildRouting()
+    {
+        rows_.clear();
+        headers_.clear();
+        auto& routing = proc_.midiRouting;
+
+        if (MidiDeviceRouter::active().load())
+        {
+            headers_.add ("MIDI INPUT DEVICES  -  each device plays the slots you light");
+            for (size_t i = 0; i < routing.devices().size(); ++i)
+            {
+                auto& d = routing.devices()[i];
+                auto* row = new RoutingRow (d.name.isNotEmpty() ? d.name : d.identifier, true);
+                row->setEnabledState (d.enabled);
+                row->cells().setMask (d.mask);
+                row->onEnable = [this, i] (bool on)
+                {
+                    proc_.midiRouting.devices()[i].enabled = on;
+                    proc_.refreshMidiDevices();
+                };
+                row->cells().onChange = [this, i] (juce::uint8 m)
+                {
+                    proc_.midiRouting.devices()[i].mask = m;
+                    proc_.refreshMidiDevices();
+                };
+                rows_.add (row);
+                list_.addAndMakeVisible (row);
+                headers_.add ({});                      // keeps header/row indices aligned
+            }
+            if (routing.devices().empty())
+                headers_.add ("(no MIDI inputs found - plug one in and press RESCAN MIDI)");
+        }
+
+        headers_.add (MidiDeviceRouter::active().load()
+                          ? "MIDI CHANNELS  -  applied on top of the device routing"
+                          : "MIDI CHANNELS  -  the host sends one stream, so channel is the routing");
+        for (int c = 1; c <= 16; ++c)
+        {
+            auto* row = new RoutingRow ("CHANNEL " + juce::String (c), false);
+            row->cells().setMask (routing.channelMask (c));
+            row->cells().onChange = [this, c] (juce::uint8 m) { proc_.midiRouting.setChannelMask (c, m); };
+            rows_.add (row);
+            list_.addAndMakeVisible (row);
+            headers_.add ({});
+        }
+        layoutList();
     }
 
     void contentResized (juce::Rectangle<int> area) override
     {
         area.removeFromTop (66);
-        auto row = area.removeFromTop (32).reduced (12, 0);
-        browse_.setBounds (row.removeFromLeft (130));
-        row.removeFromLeft (12);
-        rescan_.setBounds (row.removeFromLeft (180));
-        area.removeFromTop (46);
-        audio_.setBounds (area.removeFromTop (32).reduced (12, 0).withWidth (240));
+        auto row = area.removeFromTop (30).reduced (12, 0);
+        browse_.setBounds (row.removeFromLeft (120));
+        row.removeFromLeft (10);
+        rescan_.setBounds (row.removeFromLeft (150));
+        row.removeFromLeft (10);
+        audio_.setBounds (row.removeFromLeft (200));
+
+        area.removeFromTop (30);
+        auto row2 = area.removeFromTop (28).reduced (12, 0);
+        row2.removeFromLeft (150);                       // caption drawn in paint()
+        bend_->setBounds (row2.removeFromLeft (120));
+
+        area.removeFromTop (26);
+        auto row3 = area.removeFromTop (24).reduced (12, 0);
+        omni_.setBounds (row3.removeFromLeft (100));
+        row3.removeFromLeft (8);
+        split_.setBounds (row3.removeFromLeft (120));
+        row3.removeFromLeft (8);
+        rescanMidi_.setBounds (row3.removeFromLeft (110));
+
+        area.removeFromTop (6);
+        viewport_.setBounds (area.reduced (12, 0));
+        layoutList();
     }
 
     void paint (juce::Graphics& g) override
@@ -441,22 +701,70 @@ public:
         ChromePanel::paint (g);
         g.setColour (Theme::muted);
         g.setFont (Theme::display (12.0f));
-        g.drawText ("LIBRARY FOLDER", 28, 60, getWidth() - 56, 16, juce::Justification::centredLeft, false);
+        g.drawText ("LIBRARY FOLDER", 28, 58, getWidth() - 56, 16, juce::Justification::centredLeft, false);
         g.setColour (Theme::cream);
         g.setFont (Theme::value (12.0f));
         g.drawText (proc_.state.library.libraryDir().getFullPathName()
                         + (proc_.state.library.usedFallback() ? "   (empty - using testdata fallback)" : ""),
-                    28, 78, getWidth() - 56, 16, juce::Justification::centredLeft, false);
-        g.setColour (Theme::muted);
-        g.setFont (Theme::display (12.0f));
-        g.drawText (audio_.isEnabled() ? "AUDIO DEVICES" : "AUDIO DEVICES  (STANDALONE ONLY)",
-                    28, audio_.getY() - 20, getWidth() - 56, 16, juce::Justification::centredLeft, false);
+                    28, 74, getWidth() - 56, 16, juce::Justification::centredLeft, false);
+        if (bend_ != nullptr)
+        {
+            g.setColour (Theme::muted);
+            g.setFont (Theme::display (12.0f));
+            g.drawText ("PITCH BEND RANGE", 28, bend_->getY() + 4, 160, 16,
+                        juce::Justification::centredLeft, false);
+            g.setColour (Theme::gold);
+            g.setFont (Theme::display (13.0f));
+            g.drawText ("MIDI ROUTING", 28, omni_.getY() - 20, getWidth() - 56, 16,
+                        juce::Justification::centredLeft, false);
+        }
     }
 
 private:
+    void layoutList()
+    {
+        const int w = juce::jmax (100, viewport_.getWidth() - 12);
+        int y = 0, rowIdx = 0;
+        for (auto& h : headers_)
+        {
+            if (h.isNotEmpty()) { y += 24; continue; }
+            if (rowIdx < rows_.size()) rows_[rowIdx++]->setBounds (0, y, w, 26);
+            y += 26;
+        }
+        list_.setSize (w, juce::jmax (y, viewport_.getHeight()));
+        list_.headers = headers_;
+        list_.repaint();
+    }
+
+    /// The scrolled content: rows are child components, the section headers are
+    /// painted between them from the same ordered list.
+    struct List : juce::Component
+    {
+        juce::StringArray headers;
+        void paint (juce::Graphics& g) override
+        {
+            int y = 0;
+            for (auto& h : headers)
+            {
+                if (h.isNotEmpty())
+                {
+                    ux::drawChromeSectionHeader (g, juce::Rectangle<float> (0.0f, (float) y,
+                                                                            (float) getWidth(), 24.0f), h);
+                    y += 24;
+                }
+                else y += 26;
+            }
+        }
+    };
+
     JMSignatureProcessor& proc_;
-    ux::PlateButton browse_, rescan_, audio_;
+    ux::PlateButton browse_, rescan_, audio_, omni_, split_, rescanMidi_;
     std::unique_ptr<juce::FileChooser> chooser_;
+    std::unique_ptr<IntStepper> bend_;
+    juce::Viewport viewport_;
+    List list_;
+    juce::OwnedArray<RoutingRow> rows_;
+    juce::StringArray headers_;
 };
 
 } // namespace jm

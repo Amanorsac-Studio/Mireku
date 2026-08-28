@@ -192,9 +192,14 @@ public:
         // perform dock (local) ------------------------------------------------
         static constexpr int dkTitleH = 26;
         static constexpr int dkSlotX = 4, dkSlotY = 30, dkSlotW = 550, dkSlotH = 78, dkSlotPitch = 87;
-        static constexpr int dkModeX = 4, dkModeY = 380, dkModeW = 250, dkModeH = 48;
-        static constexpr int dkTransX = 264, dkTransY = 380, dkTransW = 290, dkTransH = 48;
-        static constexpr int dkMacroY = 436, dkMacroH = 142, dkMacroD = 72;
+        // R4(2): OCTAVE is a visible stepper beside TRANSPOSE (was shift-click)
+        static constexpr int dkModeX = 4, dkModeY = 380, dkModeW = 214, dkModeH = 48;
+        static constexpr int dkTransX = 222, dkTransY = 380, dkTransW = 190, dkTransH = 48;
+        static constexpr int dkOctX = 418, dkOctY = 380, dkOctW = 136, dkOctH = 48;
+        // R4(4): the LEARN / EDIT chips are gone (right-click / double-click the
+        // knob instead), so the macro cell loses its 20 px chip row and the knob
+        // centre stays exactly where it was.
+        static constexpr int dkMacroY = 436, dkMacroH = 122, dkMacroD = 72;
         static constexpr int dkMacroCx[4] = { 77, 206, 335, 464 };
 
         // perform CENTER page (client correction: the four slots move to the
@@ -204,9 +209,10 @@ public:
         static constexpr int pcSlotW = 590, pcSlotH = 132;
         static constexpr int pcSlotX[4] = { 26, 638, 26, 638 };
         static constexpr int pcSlotY[4] = { 46, 46, 186, 186 };
-        static constexpr int pcModeX = 280, pcModeY = 332, pcModeW = 300, pcModeH = 52;
-        static constexpr int pcTransX = 674, pcTransY = 332, pcTransW = 340, pcTransH = 52;
-        static constexpr int pcMacroY = 396, pcMacroH = 180, pcMacroD = 104;
+        static constexpr int pcModeX = 196, pcModeY = 332, pcModeW = 290, pcModeH = 52;
+        static constexpr int pcTransX = 520, pcTransY = 332, pcTransW = 300, pcTransH = 52;
+        static constexpr int pcOctX = 854, pcOctY = 332, pcOctW = 204, pcOctH = 52;
+        static constexpr int pcMacroY = 396, pcMacroH = 160, pcMacroD = 104;
         static constexpr int pcMacroCx[4] = { 251, 502, 753, 1004 };
 
         // fx rack (local) -----------------------------------------------------

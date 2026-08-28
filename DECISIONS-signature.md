@@ -21,7 +21,9 @@ Owner: JM Signature build agent.
 - **Velocity crossfade:** equal-power over a ±8-velocity window centred on each layer boundary; gains below 1e-4 are dropped (so the overlap edges collapse to a single voice). Unit-tested.
 - **MIDI timing:** MIDI events are applied at block start (not sample-accurate splitting). At typical host block sizes (≤512 samples ≈ 11 ms) this is inaudible for a sampled instrument; noted as a possible refinement.
 - **Transpose + held notes:** changing transpose while notes are held can orphan a note-off mapping (standard synth caveat); all-notes-off/sustain logic still clears everything.
-- Pitch bend is intentionally not implemented for v1 (sampled worlds; not in the spec).
+- ~~Pitch bend is intentionally not implemented for v1 (sampled worlds; not in the spec).~~
+  **Superseded by client review round 4 (item 2)**: pitch bend is implemented as a smoothed
+  playback-rate multiplier with a configurable ±range (default ±2 st).
 
 ## Model pages ↔ Perform slots
 - The plugin owns **4 slot engines** (Perform A–D). By default slot A=Rhodes, B=MKS, C=FM, D=Strings. A model page edits **the first slot hosting that world**; if no slot hosts the world, the page falls back to the same-index slot and loading a patch from that page assigns the world to it. This keeps one engine instance count (4) while satisfying "each slot loads any world/patch".
@@ -38,7 +40,8 @@ Owner: JM Signature build agent.
 ## MIDI learn / macros
 - Pre-mapped fast paths (CC64 sustain, CC1 per-world, CC11 expression) are handled directly on the audio thread (atomic writes only). **Learned CC assignments** are applied on a 30 Hz message-thread timer via the parameter router (~max 33 ms latency) so state and UI stay coherent without audio-thread hazards.
 - CC1/CC11 modulation is ephemeral (drives DSP, not persisted into preset state) — matching how mod wheel/expression behave on hardware.
-- Macro learn: arm LEARN on a macro, click any knob (model page or FX). Targets get full-range linear mapping by default; per-target invert and linear/exp curve toggle via the macro's target menu. Macros are host parameters (`macro1..4`) and therefore automatable; they can also be MIDI-learned like any control (path `host.macroN`).
+- Macro learn: arm LEARN on a macro (round 4: right-click the macro knob -> Learn; the chip
+  is gone), then click any knob (model page or FX). Targets get full-range linear mapping by default; per-target invert and linear/exp curve toggle via the macro's target menu. Macros are host parameters (`macro1..4`) and therefore automatable; they can also be MIDI-learned like any control (path `host.macroN`).
 
 ## State / presets
 - Plugin state and performance presets serialize to JSON (slots, engine params, racks, amp envelopes, macros + targets, MIDI map, host params). FX/engine params inside that JSON use the exact fx-params.ts ids with enums as choice strings and bools as true/false, so slot preset JSON is directly portable with the `.jmi` preset schema.
@@ -120,6 +123,159 @@ Implemented from `docs/svg-pack-v2` (CLAUDE-IMPLEMENTATION-V2.md + tokens/design
 - **Acceptance self-check**: new `JMSignatureSnapshot` console target renders the pages offscreen at exactly 1000x720, measures every hero-control centre against specs/screen-layouts.json, verifies header/content constants, 3-over-2, PERFORM 2x2 bounds, absence of DECAYING, and writes PNG snapshots (build/snapshots/). Reference-screen SVGs could not be rasterized headlessly here (they reference sibling asset files + data URIs; no external SVG rasterizer available), so the overlay comparison is done against the machine-readable coordinates those SVGs are generated from — measured offsets reported below.
 - One more legibility call: at (500,137) the live patch subtitle sat directly on an undimmed gold band of the rhodes cloth (above the recessed surface). Added the polished-reference's dark title plaque (352,92,296x54) behind the title block — it doubles as the click affordance for the preset browser. Title/patch text never sits on raw pattern.
 - Standalone note: the in-progress Release relink failed once with LNK1104 because the user's running (pre-V2) standalone locked the exe; that stale instance was terminated to complete the link (coordinator relaunches). The new standalone was NOT launched.
+
+## Client review round 4 — MIDI routing, pitch bend + wheels, button shape, macro chips (2026-08-28)
+
+Four items (1-4). Item 5 (MOD MATRIX / LFO / ARP) is explicitly **not started** — those
+bottom-bar plates are still inert placeholders, out of `JM-BUILD-SPEC.md` scope and under
+separate discussion with the client. Behaviour outside items 1-4 is unchanged.
+
+### 1. Multi-MIDI input routing — "each MIDI input triggers a different module"
+- **One model, two feeds** (`src/engine/MidiRouting.h`). The common currency is a 4-bit
+  **slot mask** (bit i = Perform slot A..D) that every MIDI message carries into the engine:
+  - **Plugin (VST3/AU)** — the host delivers ONE merged stream with no device identity, so
+    the meaningful routing is **MIDI channel -> slot mask** (16 atomic masks). Omni is the
+    default (0b1111 on every channel), which is byte-for-byte the pre-round-4 behaviour.
+  - **Standalone** — the useful question is "which **device** plays which slot". JUCE's
+    `StandalonePluginHolder` *can* hold several inputs open, but it merges them all into a
+    single buffer through one `MidiMessageCollector` and **throws the device identity away**,
+    so it cannot answer that question at all. We therefore open the devices ourselves
+    (`MidiDeviceRouter`, one `juce::MidiInput` per enabled device) and stamp each message
+    with that device's mask on the MIDI thread.
+  - The two **compose**: effective mask = `deviceMask AND channelMask[channel]`. A plugin
+    build never constructs a `MidiDeviceRouter` — a plugin must not grab MIDI hardware.
+- **Double-trigger avoided**: the holder auto-enables every MIDI input it finds (see its
+  `timerCallback`), so before/while owning a device we call
+  `holder->deviceManager.setMidiInputDeviceEnabled(id, false)` through
+  `MidiDeviceRouter::releaseFromHolderHook()`, installed by `StandaloneApp.cpp`. The hook
+  runs on **every** sync, not only on first open, because hot-plug makes the holder re-enable
+  inputs. Devices the user has NOT enabled in our panel keep flowing through the holder as
+  before, so the default standalone experience is unchanged.
+- **Thread-safety law**: the MIDI input thread does an atomic mask read plus a lock-free push
+  into `RoutedMidiQueue` (a fixed 1024-slot `AbstractFifo` of 5-byte PODs — no `MidiMessage`,
+  no allocation). Producers take a spin flag among themselves; the audio thread never does.
+  The audio thread drains the queue at block start and otherwise reads only
+  `std::atomic<uint8>` masks. `refreshMidiDevices()` bounces to the message thread if a host
+  calls `setStateInformation` from a loader thread.
+- **Filtering is applied once**, in `handleRoutedMessage()`, so note-ons, note-offs, CC64
+  sustain, CC1 mod wheel and pitch bend all honour the same mask and §5.4 cannot leak across
+  slots. Judgment calls: **all-notes-off / all-sound-off ignore the mask** (a stuck note must
+  always be clearable), and **CC11 expression stays global** because there is one master gain
+  — it is applied whenever the message reaches any slot at all. Changing routing while notes
+  are held can orphan a note-off: the same standard caveat already logged for transpose.
+- The **on-screen keyboard and wheels** are part of the instrument, not an external source:
+  they push pre-resolved omni events (`resolved = 1`) into the routed queue instead of the
+  host buffer, so a "channel 1 -> slot A" routing cannot silently mute the UI keyboard.
+- **UI**: the gear's Preferences window (now 760x640) grew a MIDI ROUTING section — a
+  scrolling table of rows, each with an A/B/C/D cell group lit in the slot's world accent.
+  Standalone shows a device row per input (with an ON plate) above the 16 channel rows;
+  plugin builds show the channel table alone, with a line saying why. Shortcuts: **ALL -> ALL**,
+  **CH 1-4 -> A-D**, **RESCAN MIDI**. Pitch-bend range sits in the same window.
+- **Persistence**: `midiRouting` (16 channel masks + a device table keyed by JUCE device
+  identifier, so routing survives re-plugging) is written into the plugin state JSON.
+
+### 2. Octave beside transpose, pitch bend + mod wheel on the keyboard
+- The V2 pack hid octave behind a shift-click on the transpose stepper. `TransposeControl` is
+  now a reusable **`StepperControl`** placed twice — **TRANSPOSE** (semitones, ±12) and
+  **OCTAVE** (±2) — side by side, each captioned, each with its own end plates, chevrons and
+  mouse-wheel nudge. The `transpose` / `octave` parameters are untouched, so automation,
+  MIDI learn and saved state behave exactly as before. Layout constants moved in `Theme::L`
+  (dock: mode 214 / trans 190 / oct 136; PERFORM centre: 290 / 300 / 204).
+- **The keyboard grew its wheels** (`KeyboardStrip`, `PerformanceWheel`): a spring-return
+  **PITCH** wheel (it glides home over a few frames rather than snapping, which is what a
+  physical wheel does) and a **MOD** wheel that stays put. Both emit **real MIDI**
+  (`pitchWheel` / CC1) into the routed queue, so nothing about them is a special case: CC1
+  keeps its per-world pre-mapping from §5.3 (Rhodes tremolo depth / MKS chorus depth / FM
+  brightness / Strings swell) with no extra code.
+- **Pitch bend is implemented** (it was deliberately omitted in v1 — see "Engine" above,
+  now superseded). `SamplerEngine::setPitchBend(semitones)` stores one atomic; `render()`
+  does ONE block-rate one-pole smoothing step (tau 12 ms) and hands every voice a per-sample
+  **linear ramp** of the rate multiplier, so a sweep glides continuously instead of stepping
+  at block boundaries and the cost is one multiply-add per sample regardless of voice count.
+  Applied as `pos += ratio * bend`, i.e. a true playback-rate change on sounding voices.
+- **Range is configurable** — it was cheap: a new `AudioParameterInt "bendRange"` (0..12,
+  **default 2**, the standard), edited by a stepper in Preferences and persisted with
+  everything else. RPN 0 (a host or controller setting the range over MIDI) is **not**
+  parsed; the range is ours. Logged as the remaining delta.
+
+### 3. Keyboard button selection shape — root cause
+- The kit's button plate (`button-empty-up.png`, **377x123**) is a **stadium**: its "corners"
+  are two semicircular caps of radius = half the art's height. It was being drawn with
+  `kit::drawNineSlice`, which is only correct for a rounded *rectangle*. At the bottom bar's
+  220x40 cell that meant `capY = 30` of source squeezed into `dcy = 18`, while the art's
+  **63 px flat waist was crushed into 4 px** — so each rounded end kept a tall cap profile
+  next to a hairline middle and collapsed into a **wedge**. That is the "triangle" the client
+  saw. On top of it the engaged state filled `r.reduced(4)` with a **corner-4 rounded
+  rectangle**, which does not follow a stadium either.
+- Fix: **`kit::drawPillPlate()`** 3-slices the art *horizontally* at ONE uniform vertical
+  scale (full source height -> full destination height, only the flat middle stretched), so
+  the silhouette is an exact stadium at any width. `kit::pillInner()` / `kit::pillRadius()`
+  return the plate's own inner well (measured off the art: frame ~12.2 % of height top and
+  bottom, ~16 % at the caps) and its stadium radius, and **every** state — engaged fill,
+  engaged rim, hover wash, the no-image fallback — is now drawn on that one geometry.
+- **Where else it appeared**: the defect was in `ux::drawPlateButton`, so it affected *every*
+  `PlateButton` in the app, not just KEYBOARD — the header **LIMITER**, all five FX
+  **BYPASS** plates, **+ ADD UNIT**, **SAVE**, **PRESETS / MASTER FX**, the modal **CLOSE /
+  ACTIVATE / CANCEL / BROWSE / RESCAN** plates and the (now removed) macro chips. All are
+  fixed by the one change. **FACTORY** in the browser is *not* affected: the USER / FACTORY /
+  FAVORITES strip is the Segment register (`drawTabCell`), whose active cell was already a
+  rounded rectangle matching its own cell — verified against the snapshot.
+
+### 4. Macro interaction — the chips are gone
+- `MacroKnobUnit` no longer owns LEARN and EDIT `PlateButton`s. The 20 px chip row is
+  reclaimed and the `Theme::L` macro cell heights drop by exactly 20 (180->160, 142->122)
+  with `macroY` unchanged, so **the knob centres do not move**.
+- **Right-click the knob** -> styled context menu (`jm::styledMenu`, so it is drawn in the
+  CHROME register from round 3): Learn (ticked while armed) · Edit targets... · Rename... ·
+  a Targets submenu listing every link by friendly name with a one-click Remove · Clear all
+  targets · MIDI Learn / Clear MIDI mapping.
+- **Double-click the knob** -> the existing `MacroEditorPanel` (bipolar depth / invert /
+  min / max / curve / remove / rename / clear all). To stop the two gestures fighting,
+  `ParamKnob::setDoubleClickResets(false)` is called for macro knobs only, so the slider's
+  own "double-click returns to default" is off there and nowhere else. Single-click drag
+  still turns the macro exactly as before.
+- Because there is no LEARN chip to light, the armed state is drawn **on the knob** (gold
+  ring + a small LEARN caption) in `paintOverChildren`.
+- **Every existing route still works** and is covered by tests: drag-and-drop a parameter's
+  gold link tab (or alt-drag) onto a macro, right-click a *parameter* -> "Assign to Macro
+  1-4", host automation of `macro1..4`, and MIDI learn on `host.macroN`.
+
+### Testing (round 4)
+- `tests/EngineTests.cpp` — **pitch bend**: base ratio 1.0 at the root note, exactly one
+  frame per sample with no bend, settled ratio 1.122462 for +2 st, the sounding voice's
+  measured position advance over 8 blocks matching that ratio to 2e-3, a monotonic glide
+  (never stepping past the target), a downward bend below unity, and an exact return to 1.0
+  when the wheel comes back to centre.
+- `tests/SnapshotCheck.cpp` — **MIDI routing** through the real processor: Omni reaches all
+  four slots; channel 2 routed to B sounds **only** B while unrouted channels still play;
+  CC64 sustain is filtered by the same mask and the deferred note-off still works on the
+  routed slot; a **device**-stamped event routed to C sounds only C; and channel + device
+  routing both survive a `getStateInformation` / `setStateInformation` round trip.
+  **Pitch bend** end to end (a real `pitchWheel` message moves slot A's rate to 2^(2/12) and
+  back). **Button shape**: the engaged plate is rendered at the real 220x40 bottom-bar size
+  twice (on/off) and *differenced*, so the assertions test the engaged state alone — it fills
+  the plate's inner well edge to edge, its corners are rounded (not square), and **zero**
+  changed pixels fall outside the stadium path. **Macro chips**: zero `PlateButton`s remain
+  inside a macro cell. **Steppers**: TRANSPOSE and OCTAVE exist as two non-overlapping,
+  same-baseline controls. **Wheels**: pitch springs, mod does not. **Settings**: the routing
+  table is present, with a device row per input in the standalone view.
+- Round-3 coverage (limiter, macro state round-trip, master section, chrome, letterbox) is
+  unchanged and still passing.
+
+## Verification after client review round 4 (2026-08-28)
+- Release rebuild (VST3 + Standalone + both console targets): **exit 0**.
+- `ctest -C Release`: **100% passed, 2/2** — EngineTests, UiSelfCheck.
+- `JMSignatureSnapshot`: **SELF-CHECK PASSED (0 failures)**, worst measured hero offset (0,0) px.
+- pluginval 1.3.5 strictness 8 `--skip-gui-tests --validate-in-process` on the VST3: **SUCCESS**.
+- New snapshots in `apps/signature/build/snapshots/`: `round4-settings-midi.png` (plugin view),
+  `round4-settings-midi-standalone.png` (device -> slot table), `round4-keyboard-wheels.png`
+  (transpose + octave, keyboard with PITCH/MOD wheels, KEYBOARD engaged),
+  `round4-macro-menu.png` (macro right-click menu over the live window),
+  `round4-keyboard-button-engaged.png` / `round4-keyboard-button-idle.png` (the item-3
+  before/after pair). The round-2/3 set is regenerated alongside.
+- The standalone was **not launched** (per instruction). The Release relink failed once with
+  `LNK1104` because the user's running "JM Signature" standalone (PID 24852) held the exe;
+  that stale pre-round-4 instance was terminated to complete the link, as in round 2.
 
 ## Client review round 3 — chrome, standalone ownership, limiter, macro drag-drop (2026-08-28)
 

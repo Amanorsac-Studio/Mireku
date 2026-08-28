@@ -188,6 +188,83 @@ static void testLoopContinuity()
 }
 
 //==============================================================================
+// CLIENT REVIEW ROUND 4 (item 2) — pitch bend. It is applied as a playback-rate
+// multiplier on sounding voices, smoothed so it glides, and must return exactly
+// to unity when the wheel comes back to centre.
+static void testPitchBend()
+{
+    std::printf ("\n== Pitch bend (round 4, item 2) ==\n");
+    const double sr = 48000.0;
+    auto bundle = makeSyntheticLoopBundle (200.0, sr, 400000, 100000, 300000, 4800);
+
+    SamplerEngine eng;
+    eng.setWorld (3);
+    eng.prepare (sr, 512);
+    eng.setBundle (bundle);
+    eng.setEngineParam ("swell", 0.0f);
+    eng.setEngineParam ("motion", 0.0f);
+    eng.setEngineParam ("warmth", 0.0f);
+    eng.ampEnv().attackMs = 1.0f;
+    eng.noteOn (60, 100);                                   // root note -> base ratio 1.0
+
+    juce::AudioBuffer<float> out (2, 512);
+    auto renderBlocks = [&] (int blocks) { for (int i = 0; i < blocks; ++i) { out.clear(); eng.render (out, 512); } };
+
+    const int v = eng.firstActiveVoice();
+    CHECK (v >= 0, "a voice is sounding");
+    CHECK (std::abs (eng.voiceBaseRatio (v) - 1.0) < 1.0e-6, "root note plays at base ratio 1.0");
+
+    // measure the advance per block with no bend
+    renderBlocks (4);
+    const double p0 = eng.voicePosition (v);
+    renderBlocks (8);
+    const double unbentAdvance = eng.voicePosition (v) - p0;
+    std::printf ("  unbent advance over 8 blocks: %.1f frames (expected %d)\n", unbentAdvance, 8 * 512);
+    CHECK (std::abs (unbentAdvance - 8.0 * 512.0) < 1.0, "no bend -> exactly one frame per sample");
+
+    // +2 semitones = 2^(2/12) = 1.122462
+    const double expected = std::pow (2.0, 2.0 / 12.0);
+    eng.setPitchBend (2.0f);
+    renderBlocks (40);                                      // let the 12 ms smoother settle
+    std::printf ("  settled bend ratio %.6f (expected %.6f)\n", eng.pitchBendRatio(), expected);
+    CHECK (std::abs (eng.pitchBendRatio() - expected) < 1.0e-4, "+2 st -> playback-rate ratio 2^(2/12)");
+
+    const double p1 = eng.voicePosition (v);
+    renderBlocks (8);
+    const double bentAdvance = eng.voicePosition (v) - p1;
+    std::printf ("  bent advance over 8 blocks: %.1f frames (ratio %.5f)\n",
+                 bentAdvance, bentAdvance / (8.0 * 512.0));
+    CHECK (std::abs (bentAdvance / (8.0 * 512.0) - expected) < 2.0e-3,
+           "sounding voice actually advances at the bent rate");
+
+    // a downward bend must be below unity, and the glide must be monotonic
+    eng.setPitchBend (-2.0f);
+    double prev = eng.pitchBendRatio();
+    bool monotonic = true;
+    for (int i = 0; i < 30; ++i)
+    {
+        out.clear();
+        eng.render (out, 512);
+        if (eng.pitchBendRatio() > prev + 1.0e-9) monotonic = false;
+        prev = eng.pitchBendRatio();
+    }
+    CHECK (monotonic, "bend glides monotonically (smoothed, never steps past the target)");
+    CHECK (eng.pitchBendRatio() < 0.9f, "-2 st -> ratio below unity");
+
+    // back to centre
+    eng.setPitchBend (0.0f);
+    renderBlocks (60);
+    std::printf ("  returned ratio %.6f\n", eng.pitchBendRatio());
+    CHECK (std::abs (eng.pitchBendRatio() - 1.0) < 1.0e-4, "wheel back to centre -> ratio returns to 1.0");
+
+    float peak = 0;
+    out.clear();
+    eng.render (out, 512);
+    for (int i = 0; i < 512; ++i) peak = juce::jmax (peak, std::abs (out.getSample (0, i)));
+    CHECK (peak > 0.01f && std::isfinite (peak), "voice still sounding and finite after the bend sweep");
+}
+
+//==============================================================================
 static void testCC64 (const BundlePtr& bundle)
 {
     std::printf ("\n== CC64 sustain logic (§5.4) ==\n");
@@ -571,6 +648,7 @@ int main()
     testVelocityCrossfade();
     testZoneSelection();
     testLoopContinuity();
+    testPitchBend();
     testRealBundle();
     testFxRackDsp();
     testPresetJsonRoundTrip();

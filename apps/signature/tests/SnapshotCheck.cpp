@@ -615,6 +615,311 @@ int main()
         delete ed;
     }
 
+    //========================================================================
+    // CLIENT REVIEW ROUND 4
+    //========================================================================
+
+    // ------------------------------------------- (1) MIDI routing -> slot mask
+    std::printf ("\n== R4 (1) MIDI routing (channel + device -> slot) ==\n");
+    {
+        proc.prepareToPlay (48000.0, 512);
+        // all four slots on, SOLO off, so only the routing can silence a slot
+        if (auto* s = proc.apvts.getParameter ("solo")) s->setValueNotifyingHost (0.0f);
+        for (int i = 0; i < 4; ++i)
+            if (auto* p = proc.apvts.getParameter ("slotEnable" + juce::String (i)))
+                p->setValueNotifyingHost (1.0f);
+
+        juce::AudioBuffer<float> buf (2, 512);
+        auto panic = [&]
+        {
+            juce::MidiBuffer mb;
+            mb.addEvent (juce::MidiMessage::allNotesOff (1), 0);
+            buf.clear();
+            proc.processBlock (buf, mb);
+            for (auto& e : proc.engines) e.allNotesOff (false);
+        };
+        auto play = [&] (const juce::MidiMessage& m)
+        {
+            juce::MidiBuffer mb;
+            mb.addEvent (m, 0);
+            buf.clear();
+            proc.processBlock (buf, mb);
+        };
+        auto voices = [&] { return std::array<int, 4> { proc.engines[0].activeVoices(),
+                                                        proc.engines[1].activeVoices(),
+                                                        proc.engines[2].activeVoices(),
+                                                        proc.engines[3].activeVoices() }; };
+
+        CHECK (proc.midiRouting.channelsAreOmni(), "default routing is Omni (unchanged behaviour)");
+
+        // Omni: a note reaches every enabled slot
+        panic();
+        play (juce::MidiMessage::noteOn (3, 60, (juce::uint8) 100));
+        auto vOmni = voices();
+        std::printf ("  omni note -> voices A%d B%d C%d D%d\n", vOmni[0], vOmni[1], vOmni[2], vOmni[3]);
+        CHECK (vOmni[0] > 0 && vOmni[1] > 0 && vOmni[2] > 0 && vOmni[3] > 0,
+               "Omni: one note reaches all four slots");
+
+        // channel 2 -> slot B only
+        panic();
+        proc.midiRouting.setChannelMask (2, 0b0010);
+        play (juce::MidiMessage::noteOn (2, 60, (juce::uint8) 100));
+        auto vB = voices();
+        std::printf ("  ch2->B note  -> voices A%d B%d C%d D%d\n", vB[0], vB[1], vB[2], vB[3]);
+        CHECK (vB[1] > 0 && vB[0] == 0 && vB[2] == 0 && vB[3] == 0,
+               "channel 2 routed to B sounds ONLY slot B");
+        // ... and the unrouted channels still work
+        play (juce::MidiMessage::noteOn (1, 64, (juce::uint8) 100));
+        CHECK (proc.engines[0].activeVoices() > 0, "an unrouted channel still reaches its slots");
+
+        // sustain + note-off obey the same mask (§5.4 must not leak across slots)
+        panic();
+        play (juce::MidiMessage::controllerEvent (2, 64, 127));
+        std::printf ("  CC64 on ch2 -> sustain A=%d B=%d\n",
+                     (int) proc.engines[0].sustainDown(), (int) proc.engines[1].sustainDown());
+        CHECK (proc.engines[1].sustainDown() && ! proc.engines[0].sustainDown(),
+               "CC64 sustain is filtered by the same routing");
+        play (juce::MidiMessage::noteOn (2, 60, (juce::uint8) 100));
+        play (juce::MidiMessage::noteOff (2, 60));
+        CHECK (proc.engines[1].sustainedVoices() >= 1, "deferred note-off still works on the routed slot");
+        play (juce::MidiMessage::controllerEvent (2, 64, 0));
+        panic();
+
+        // the DEVICE path: the standalone router stamps a mask before queuing,
+        // so it is exercised here without needing real hardware.
+        proc.midiRouting.resetChannelsToOmni();
+        proc.routedQueue.push (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0b0100, true);
+        buf.clear();
+        { juce::MidiBuffer empty; proc.processBlock (buf, empty); }
+        auto vC = voices();
+        std::printf ("  device->C note -> voices A%d B%d C%d D%d\n", vC[0], vC[1], vC[2], vC[3]);
+        CHECK (vC[2] > 0 && vC[0] == 0 && vC[1] == 0 && vC[3] == 0,
+               "a device routed to slot C sounds ONLY slot C");
+        panic();
+
+        // routing survives a state round-trip
+        proc.midiRouting.setChannelMask (5, 0b1001);
+        proc.midiRouting.devices().push_back ({ "test-id", "Test Keyboard", true, 0b0010 });
+        juce::MemoryBlock mb;
+        proc.getStateInformation (mb);
+        proc.midiRouting.resetChannelsToOmni();
+        proc.setStateInformation (mb.getData(), (int) mb.getSize());
+        CHECK (proc.midiRouting.channelMask (5) == 0b1001, "channel routing survives plugin state");
+        auto* dev = proc.midiRouting.findDevice ("test-id");
+        CHECK (dev != nullptr && dev->mask == 0b0010 && dev->enabled,
+               "device routing survives plugin state");
+        proc.midiRouting.resetChannelsToOmni();
+    }
+
+    // ---------------------------------------- (2) pitch bend through the plugin
+    std::printf ("\n== R4 (2) pitch bend + wheels ==\n");
+    {
+        CHECK (proc.apvts.getParameter ("bendRange") != nullptr, "configurable pitch-bend range parameter exists");
+        std::printf ("  default bend range: +/-%d st\n", proc.pitchBendRange());
+        CHECK (proc.pitchBendRange() == 2, "default range is the standard +/-2 semitones");
+
+        juce::AudioBuffer<float> buf (2, 512);
+        juce::MidiBuffer mb;
+        mb.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+        mb.addEvent (juce::MidiMessage::pitchWheel (1, 16383), 1);      // full up = +2 st
+        buf.clear();
+        proc.processBlock (buf, mb);
+        for (int i = 0; i < 60; ++i) { juce::MidiBuffer e; buf.clear(); proc.processBlock (buf, e); }
+        const double expected = std::pow (2.0, 2.0 / 12.0);
+        std::printf ("  slot A bend ratio after full-up wheel: %.6f (expected %.6f)\n",
+                     proc.engines[0].pitchBendRatio(), expected);
+        CHECK (std::abs (proc.engines[0].pitchBendRatio() - expected) < 1.0e-3,
+               "a real pitch-bend message shifts the playback rate by 2^(range/12)");
+
+        { juce::MidiBuffer c; c.addEvent (juce::MidiMessage::pitchWheel (1, 8192), 0);
+          buf.clear(); proc.processBlock (buf, c); }
+        for (int i = 0; i < 80; ++i) { juce::MidiBuffer e; buf.clear(); proc.processBlock (buf, e); }
+        CHECK (std::abs (proc.engines[0].pitchBendRatio() - 1.0) < 1.0e-3,
+               "wheel back to centre returns the rate to unity");
+        for (auto& e : proc.engines) e.allNotesOff (false);
+    }
+
+    // ------------------------- (3) engaged plate follows the button's own path
+    std::printf ("\n== R4 (3) engaged button fill follows the plate outline ==\n");
+    {
+        // The defect: the plate art (377x123) is a STADIUM, and nine-slicing it
+        // squashed its 63px waist into 4px while keeping 18px caps, so each
+        // rounded end became a wedge. Rendered here at the real bottom-bar size.
+        const int W = Theme::L::bbBtnW[0], H = Theme::L::bbBtnH;
+        auto render = [&] (bool on)
+        {
+            juce::Image img (juce::Image::ARGB, W, H, true, juce::SoftwareImageType());
+            juce::Graphics g (img);
+            ux::drawPlateButton (g, juce::Rectangle<float> (0.0f, 0.0f, (float) W, (float) H),
+                                 "KEYBOARD", on, false, false, true, 14.0f);
+            return img;
+        };
+        auto off = render (false), on = render (true);
+        saveImage (on, "round4-keyboard-button-engaged.png");
+        saveImage (off, "round4-keyboard-button-idle.png");
+
+        // isolate the ENGAGED state by differencing the two renders: whatever
+        // the "on" branch paints is exactly the set of changed pixels.
+        auto changed = [&] (int x, int y)
+        {
+            auto a = off.getPixelAt (x, y), b = on.getPixelAt (x, y);
+            return std::abs ((int) a.getRed()   - (int) b.getRed())
+                 + std::abs ((int) a.getGreen() - (int) b.getGreen())
+                 + std::abs ((int) a.getBlue()  - (int) b.getBlue()) > 40;
+        };
+        auto inner = kit::pillInner (juce::Rectangle<float> (0.0f, 0.0f, (float) W, (float) H));
+        const float rad = kit::pillRadius (inner);
+        std::printf ("  button %dx%d, engaged inner %.1f,%.1f %.1fx%.1f (radius %.1f)\n",
+                     W, H, inner.getX(), inner.getY(), inner.getWidth(), inner.getHeight(), rad);
+
+        // it fills the plate's inner well edge to edge...
+        CHECK (changed ((int) inner.getX() + 1, H / 2) && changed ((int) inner.getRight() - 2, H / 2),
+               "engaged fill spans the plate's inner well horizontally");
+        CHECK (changed (W / 2, (int) inner.getY() + 1) && changed (W / 2, (int) inner.getBottom() - 2),
+               "engaged fill spans the plate's inner well vertically");
+        // ...it is ROUNDED to the stadium, not squared off at the corners...
+        CHECK (! changed ((int) inner.getX() + 1, (int) inner.getY() + 1)
+               && ! changed ((int) inner.getRight() - 2, (int) inner.getBottom() - 2),
+               "engaged fill is rounded to the plate's stadium, not a square corner");
+        // ...and every changed pixel lies inside the stadium path, which is what
+        // "the selection fits the shape" means. (The old wedge failed this.)
+        int outside = 0;
+        auto insideStadium = [&] (float x, float y)
+        {
+            const float cx = juce::jlimit (inner.getX() + rad, inner.getRight() - rad, x);
+            const auto d = juce::Point<float> (x, y) - juce::Point<float> (cx, inner.getCentreY());
+            return d.getDistanceFromOrigin() <= rad + 1.5f;
+        };
+        for (int y = 0; y < H; ++y)
+            for (int x = 0; x < W; ++x)
+                if (changed (x, y) && ! insideStadium ((float) x + 0.5f, (float) y + 0.5f)) ++outside;
+        std::printf ("  engaged pixels outside the stadium path: %d\n", outside);
+        CHECK (outside == 0, "no engaged-state pixels outside the button's own outline");
+    }
+
+    // ----------------------- (2)/(4) the round-4 window, wheels and macro menu
+    std::printf ("\n== R4 snapshots (transpose+octave, keyboard wheels, macro menu) ==\n");
+    {
+        proc.state.currentPage = 4;
+        auto* ed = dynamic_cast<JMSignatureEditor*> (proc.createEditor());
+        ed->setSize (Theme::M::designW, Theme::M::designH);
+        ed->setVisible (true);
+
+        // two visible steppers, TRANSPOSE and OCTAVE, side by side (item 2)
+        std::vector<StepperControl*> steppers;
+        findAll<StepperControl> (*findOne<PerformCenterPanel> (*ed), steppers);
+        CHECK ((int) steppers.size() == 2, "TRANSPOSE and OCTAVE are two visible steppers");
+        if (steppers.size() == 2)
+        {
+            auto a = steppers[0]->getBounds(), b = steppers[1]->getBounds();
+            std::printf ("  steppers at %d,%d %dx%d and %d,%d %dx%d\n",
+                         a.getX(), a.getY(), a.getWidth(), a.getHeight(),
+                         b.getX(), b.getY(), b.getWidth(), b.getHeight());
+            CHECK (! a.intersects (b) && a.getY() == b.getY(), "they sit side by side, not overlapping");
+        }
+
+        // the chips are gone (item 4): a macro cell now owns only its knob
+        std::vector<MacroKnobUnit*> ms;
+        findAll<MacroKnobUnit> (*findOne<PerformCenterPanel> (*ed), ms);
+        int chips = 0;
+        for (auto* m : ms) { std::vector<ux::PlateButton*> pb; findAll<ux::PlateButton> (*m, pb); chips += (int) pb.size(); }
+        CHECK (chips == 0, "the LEARN / EDIT chips are gone from the macro cells (item 4)");
+
+        // keyboard + wheels (item 2)
+        auto* kb = findOne<KeyboardStrip> (*ed);
+        CHECK (kb != nullptr, "the on-screen keyboard strip exists");
+        if (kb != nullptr)
+        {
+            kb->setVisible (true);
+            kb->toFront (false);
+            // show the bottom-bar KEYBOARD plate in its ENGAGED state, which is
+            // the control the client's item 3 is about
+            std::vector<ux::PlateButton*> barBtns;
+            if (auto* bb = findOne<BottomBar> (*ed)) findAll<ux::PlateButton> (*bb, barBtns);
+            if (! barBtns.empty()) barBtns[0]->setToggleState (true, juce::dontSendNotification);
+            CHECK (kb->pitchWheel().springsToCentre(), "the pitch wheel springs back to centre");
+            CHECK (! kb->modWheel().springsToCentre(), "the mod wheel stays where it is left");
+            kb->pitchWheel().setValue (0.86f, false);
+            kb->modWheel().setValue (0.62f, false);
+        }
+        savePng (*ed, "round4-keyboard-wheels.png");
+
+        // the macro right-click menu, drawn with the LookAndFeel that paints the
+        // real popup window (menu windows are separate desktop windows)
+        {
+            auto* pm = dynamic_cast<juce::PopupMenu::LookAndFeelMethods*> (&lnf);
+            const int mw = 330, mh = 232;
+            juce::Image menuImg (juce::Image::ARGB, mw, mh, true, juce::SoftwareImageType());
+            {
+                juce::Graphics g (menuImg);
+                pm->drawPopupMenuBackground (g, mw, mh);
+                int y = 8;
+                auto row = [&] (int h) { auto r = juce::Rectangle<int> (8, y, mw - 16, h); y += h; return r; };
+                pm->drawPopupMenuSectionHeader (g, row (26), "MACRO 1");
+                pm->drawPopupMenuItem (g, row (30), false, true, false, false, false,
+                                       "Learn (then click any control)", {}, nullptr, nullptr);
+                pm->drawPopupMenuItem (g, row (30), false, true, true, false, false,
+                                       "Edit targets...   (double-click)", {}, nullptr, nullptr);
+                pm->drawPopupMenuItem (g, row (30), false, true, false, false, false,
+                                       "Rename...", {}, nullptr, nullptr);
+                pm->drawPopupMenuItem (g, row (9), true, true, false, false, false, {}, {}, nullptr, nullptr);
+                pm->drawPopupMenuItem (g, row (30), false, true, false, false, true,
+                                       "Targets (3)", {}, nullptr, nullptr);
+                pm->drawPopupMenuItem (g, row (30), false, true, false, false, false,
+                                       "Clear all targets", {}, nullptr, nullptr);
+                pm->drawPopupMenuItem (g, row (9), true, true, false, false, false, {}, {}, nullptr, nullptr);
+                pm->drawPopupMenuSectionHeader (g, row (26), "MIDI");
+            }
+            auto shot = ed->createComponentSnapshot (ed->getLocalBounds(), false, 1.0f);
+            int mx = 560, my = 560;
+            if (! ms.empty()) { auto b = ed->getLocalArea (ms[0], ms[0]->getLocalBounds());
+                                mx = b.getCentreX(); my = b.getCentreY(); }
+            { juce::Graphics gw (shot); gw.drawImageAt (menuImg, mx, my); }
+            saveImage (shot, "round4-macro-menu.png");
+        }
+
+        // the settings window with the MIDI routing editor (item 1)
+        // (the OverlayHost is the editor's root child, so it is found from a
+        //  descendant — walking up from `ed` itself would never reach it)
+        if (auto* host = OverlayHost::find (findOne<HeaderBar> (*ed)))
+        {
+            host->showOverlay (std::make_unique<SettingsPanel> (proc),
+                               SettingsPanel::kWidth, SettingsPanel::kHeight);
+            auto* sp = findOne<SettingsPanel> (*ed);
+            CHECK (sp != nullptr, "settings window opens");
+            std::vector<RoutingRow*> rr;
+            if (sp != nullptr) findAll<RoutingRow> (*sp, rr);
+            std::printf ("  routing rows in the settings window: %d\n", (int) rr.size());
+            CHECK ((int) rr.size() >= 16, "settings window exposes the 16 channel routing rows");
+            savePng (*ed, "round4-settings-midi.png");
+            host->closeOverlay();
+
+            // ...and the same window as the STANDALONE shows it, where the
+            // device -> slot table is the primary control (this console build
+            // has no device router, so the flag + two entries are staged).
+            MidiDeviceRouter::active().store (true);
+            proc.midiRouting.devices().clear();
+            proc.midiRouting.devices().push_back ({ "dev-1", "Nord Stage 3 (USB)",   true,  0b0001 });
+            proc.midiRouting.devices().push_back ({ "dev-2", "Arturia KeyLab 61",    true,  0b0110 });
+            proc.midiRouting.devices().push_back ({ "dev-3", "MPK Mini (not routed)", false, 0b1000 });
+            host->showOverlay (std::make_unique<SettingsPanel> (proc),
+                               SettingsPanel::kWidth, SettingsPanel::kHeight);
+            std::vector<RoutingRow*> rr2;
+            if (auto* sp2 = findOne<SettingsPanel> (*ed)) findAll<RoutingRow> (*sp2, rr2);
+            // (the panel also merges this machine's real MIDI inputs, so the
+            //  row count is 16 channels + staged devices + whatever is plugged in)
+            const int nDev = (int) proc.midiRouting.devices().size();
+            std::printf ("  standalone view rows: %d  (16 channels + %d devices)\n",
+                         (int) rr2.size(), nDev);
+            CHECK ((int) rr2.size() == 16 + nDev, "standalone view adds one routing row per MIDI device");
+            savePng (*ed, "round4-settings-midi-standalone.png");
+            host->closeOverlay();
+            MidiDeviceRouter::active().store (false);
+            proc.midiRouting.devices().clear();
+        }
+        delete ed;
+    }
+
     juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
     std::printf ("\nworst measured hero offset: (%d,%d) px\n", worstDx, worstDy);
     std::printf ("%s (%d failure%s)\n", failures == 0 ? "SELF-CHECK PASSED" : "SELF-CHECK FAILED",

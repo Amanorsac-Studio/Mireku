@@ -12,9 +12,11 @@
 // Three registers, one family:
 //   Segment  — the strip above (nav tabs, sub-tabs, USER/FACTORY/FAVORITES)
 //   Plate    — a standalone plaque driven by the kit's button-empty-up/down PNGs
-//              (BYPASS, LIMITER, bottom bar, PRESETS / MASTER FX, LEARN chips);
+//              (BYPASS, LIMITER, bottom bar, PRESETS / MASTER FX, settings);
 //              up = idle, down = pressed, which finally wires the pressed state
-//   SolidGold— the reference's filled-gold selected pill (FACTORY, KEYBOARD)
+//   SolidGold— the reference's filled-gold selected pill (FACTORY, KEYBOARD).
+//              CLIENT REVIEW ROUND 4 (item 3): this fill now follows the plate's
+//              own STADIUM outline; see drawPlateButton / kit::drawPillPlate.
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "../Theme.h"
@@ -114,31 +116,39 @@ inline void drawPlateButton (juce::Graphics& g, juce::Rectangle<float> r, const 
     // so small chips (macro LEARN / target) drop to the flat member of the same
     // family — identical palette and stroke weight, no bevel.
     const bool tiny = r.getHeight() < 26.0f;
+
+    // CLIENT REVIEW ROUND 4 (item 3) — the plate art is a STADIUM, so it is
+    // 3-sliced horizontally at one uniform vertical scale (kit::drawPillPlate).
+    // The nine-slice this replaced squashed the art's 63px waist into 4px while
+    // keeping 18px caps, which turned each rounded end into the wedge the client
+    // called "a triangle". Every state below is now derived from the SAME
+    // stadium geometry, so the fill/highlight follows the button's own outline.
+    const auto inner  = tiny ? r.reduced (2.0f) : kit::pillInner (r);
+    const float rad   = tiny ? 3.0f : kit::pillRadius (inner);
     if (plate.isValid() && ! tiny)
-        kit::drawNineSlice (g, plate, r, juce::jmax (10, plate.getWidth() / 7),
-                            juce::jmax (8, plate.getHeight() / 4), a);
+        kit::drawPillPlate (g, plate, r, a);
     else
     {
+        const float outerRad = tiny ? 4.0f : kit::pillRadius (r);
         g.setColour (juce::Colour (0xff131110).withAlpha (a));
-        g.fillRoundedRectangle (r, tiny ? 4.0f : 6.0f);
+        g.fillRoundedRectangle (r, outerRad);
         g.setColour (juce::Colour (0xff6E5320).withAlpha (0.85f * a));
-        g.drawRoundedRectangle (r.reduced (0.5f), tiny ? 4.0f : 6.0f, 1.0f);
+        g.drawRoundedRectangle (r.reduced (0.5f), outerRad, 1.0f);
     }
-    if (on)     // engaged: warm gold wash + bright rim, matching the reference
+    if (on)     // engaged: warm gold wash + bright rim, on the plate's own path
     {
-        auto inner = r.reduced (tiny ? 2.0f : 4.0f);
         juce::ColourGradient goldFill (juce::Colour (0xffF4C95A), inner.getX(), inner.getY(),
                                        juce::Colour (0xffB9822A), inner.getX(), inner.getBottom(), false);
         g.setGradientFill (goldFill);
         g.setOpacity (a);
-        g.fillRoundedRectangle (inner, tiny ? 3.0f : 4.0f);
+        g.fillRoundedRectangle (inner, rad);
         g.setColour (Theme::goldHi.withAlpha (a));
-        g.drawRoundedRectangle (inner, tiny ? 3.0f : 4.0f, 1.0f);
+        g.drawRoundedRectangle (inner.reduced (0.5f), rad, 1.0f);
     }
     if (hover && enabled && ! on)
     {
         g.setColour (Theme::gold.withAlpha (HwState::hoverGold));
-        g.fillRoundedRectangle (r.reduced (tiny ? 2.0f : 4.0f), 4.0f);
+        g.fillRoundedRectangle (inner, rad);
     }
     auto textArea = r;
     if (pressed && enabled) textArea = textArea.translated (0.0f, HwState::pressedOffset);

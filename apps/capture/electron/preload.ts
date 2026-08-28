@@ -5,6 +5,9 @@ export interface JmBridge {
   loadSession(id: string): Promise<string | null>;
   listSessions(): Promise<{ id: string; json: string }[]>;
   deleteSession(id: string): Promise<boolean>;
+  /** app-wide preferences (device selections) — JSON, renderer owns the schema */
+  loadSettings(): Promise<string | null>;
+  saveSettings(json: string): Promise<boolean>;
   writeTake(
     id: string,
     file: string,
@@ -31,6 +34,8 @@ const bridge: JmBridge = {
   loadSession: (id) => ipcRenderer.invoke('session:load', id),
   listSessions: () => ipcRenderer.invoke('session:list'),
   deleteSession: (id) => ipcRenderer.invoke('session:delete', id),
+  loadSettings: () => ipcRenderer.invoke('settings:load'),
+  saveSettings: (json) => ipcRenderer.invoke('settings:save', json),
   writeTake: (id, file, sampleRate, bitDepth, channels) =>
     ipcRenderer.invoke('take:write', id, file, sampleRate, bitDepth, channels),
   readTake: (id, file) => ipcRenderer.invoke('take:read', id, file),

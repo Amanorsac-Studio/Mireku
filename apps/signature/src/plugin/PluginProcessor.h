@@ -6,6 +6,7 @@
 #include "../engine/Sampler.h"
 #include "../engine/AppState.h"
 #include "../engine/Limiter.h"
+#include "../engine/MidiRouting.h"
 
 namespace jm {
 
@@ -50,6 +51,28 @@ public:
     MasterLimiter masterLimiter;      // client review round 3 (D): master-bus safety limiter
 
     juce::MidiKeyboardState keyboardState;   // on-screen keyboard (standalone/testing)
+
+    // ---------------------------------------------- CLIENT REVIEW ROUND 4 (1)
+    // One routing model, two feeds: MIDI channel -> slot mask (works in every
+    // build, and is the only thing a plugin can offer) AND, in standalone only,
+    // MIDI device -> slot mask via our own MidiInput callbacks. See
+    // engine/MidiRouting.h for why JUCE's StandalonePluginHolder cannot do the
+    // device half. Persisted with the plugin state.
+    MidiRouting midiRouting;
+    RoutedMidiQueue routedQueue;                       // devices + on-screen controls
+    std::unique_ptr<MidiDeviceRouter> deviceRouter;    // standalone only
+
+    /// Message thread: re-scan the machine's MIDI inputs and open/close ours to
+    /// match `midiRouting`. A no-op in plugin builds (a plugin must never grab
+    /// MIDI hardware — the host owns it).
+    void refreshMidiDevices();
+
+    /// The on-screen keyboard's pitch-bend / mod wheels push REAL MIDI through
+    /// the same routed pipeline, so nothing about them is a special case.
+    void sendUiMidi (const juce::MidiMessage& m) { routedQueue.push (m, kSlotMaskAll, true); }
+
+    /// ±semitone range applied to incoming pitch-bend (settings, default 2).
+    int pitchBendRange() const;
 
     // meters / status (UI reads)
     std::atomic<float> masterPeakL { 0 }, masterPeakR { 0 };
@@ -100,6 +123,10 @@ public:
 private:
     void timerCallback() override;
     void handleMidiAtBlockStart (const juce::MidiBuffer& midi);
+    /// One entry point for every MIDI source (host buffer, routed devices, the
+    /// on-screen keyboard/wheels). `mask` is the 4-bit slot mask this message is
+    /// routed to; note-ons, note-offs, sustain, CCs and bend all honour it.
+    void handleRoutedMessage (const juce::MidiMessage& m, juce::uint8 mask);
     void enforceSolo (int enabledSlot);
 
     struct CcEvent { int cc; int value; };
@@ -114,14 +141,17 @@ private:
     std::atomic<float>* transposeParam = nullptr;
     std::atomic<float>* octaveParam = nullptr;
     std::atomic<float>* soloParam = nullptr;
+    std::atomic<float>* bendRangeParam = nullptr;
     std::array<std::atomic<float>*, 4> slotVol {}, slotPan {}, slotEnable {};
     std::array<float, 4> lastEnable { -1, -1, -1, -1 };
 
     juce::SmoothedValue<float> expressionGain { 1.0f };   // CC11
     juce::AudioBuffer<float> slotBuf;
+    juce::MidiBuffer uiMidiBuf_;                 // on-screen keyboard scratch (message-free)
     juce::AudioProcessLoadMeasurer loadMeasurer;
     double bpm_ = 120.0;
 
+    JUCE_DECLARE_WEAK_REFERENCEABLE (JMSignatureProcessor)
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (JMSignatureProcessor)
 };
 

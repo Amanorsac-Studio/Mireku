@@ -150,6 +150,57 @@ inline void drawNineSlice (juce::Graphics& g, const juce::Image& img, juce::Rect
         }
 }
 
+//============================================================ pill (stadium) plate
+/// CLIENT REVIEW ROUND 4 (item 3) — the kit's button plate (`button-empty-up`,
+/// 377x123) is a STADIUM: its "corners" are two semicircular caps whose radius
+/// is half the art's height. Nine-slicing it is geometrically wrong. At the
+/// bottom bar's 220x40 cell the nine-slice drew a 53x30 corner source into
+/// 53x18 while squashing the 63px-tall source waist into 4px, so each rounded
+/// end collapsed into a wedge — the "triangle" the client is describing.
+///
+/// This routine 3-slices HORIZONTALLY instead: the full source height is mapped
+/// to the full destination height at ONE uniform scale (so the cap profile is
+/// never distorted) and only the flat middle column is stretched. The silhouette
+/// is then an exact stadium at any width.
+inline void drawPillPlate (juce::Graphics& g, const juce::Image& img,
+                           juce::Rectangle<float> dest, float alpha = 1.0f)
+{
+    if (! img.isValid() || dest.getWidth() < 4.0f || dest.getHeight() < 2.0f) return;
+    const int iw = img.getWidth(), ih = img.getHeight();
+    const int capSrc = juce::jlimit (1, iw / 2 - 1, ih / 2 + 2);   // the whole rounded end
+    const float s = dest.getHeight() / (float) ih;                 // ONE uniform scale
+    const float capDst = juce::jmin ((float) capSrc * s, dest.getWidth() * 0.5f);
+
+    juce::Graphics::ScopedSaveState ss (g);
+    g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
+    g.setOpacity (alpha);
+    // left cap
+    g.drawImage (img, dest.getX(), dest.getY(), capDst, dest.getHeight(),
+                 0, 0, capSrc, ih);
+    // right cap
+    g.drawImage (img, dest.getRight() - capDst, dest.getY(), capDst, dest.getHeight(),
+                 iw - capSrc, 0, capSrc, ih);
+    // stretched waist
+    const float midW = dest.getWidth() - 2.0f * capDst;
+    if (midW > 0.05f && iw - 2 * capSrc > 0)
+        g.drawImage (img, dest.getX() + capDst, dest.getY(), midW, dest.getHeight(),
+                     capSrc, 0, iw - 2 * capSrc, ih);
+}
+
+/// The dark well inside the plate's gold bevel, measured off the art: the frame
+/// is ~12.2% of the height top/bottom and ~16% at the caps. Anything drawn as
+/// the button's ENGAGED state must use exactly this rectangle + a stadium
+/// radius, so the fill follows the button's own outline.
+inline juce::Rectangle<float> pillInner (juce::Rectangle<float> dest)
+{
+    const float h = dest.getHeight();
+    return dest.reduced (juce::jmin (h * 0.16f, dest.getWidth() * 0.45f), h * 0.125f);
+}
+inline float pillRadius (juce::Rectangle<float> r)
+{
+    return juce::jmin (r.getHeight(), r.getWidth()) * 0.5f;
+}
+
 //=========================================================== proportional fit
 /// Draws an image centred inside `dest`, preserving aspect (never stretched).
 inline void drawFitted (juce::Graphics& g, const juce::Image& img, juce::Rectangle<float> dest,

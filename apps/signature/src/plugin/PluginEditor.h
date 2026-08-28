@@ -67,7 +67,7 @@ private:
     std::unique_ptr<BottomBar> bar_;
     std::unique_ptr<ModelPagePanel> modelPage_;
     std::unique_ptr<PerformCenterPanel> performPage_;
-    std::unique_ptr<juce::MidiKeyboardComponent> keyboard_;
+    std::unique_ptr<KeyboardStrip> keyboard_;   // R4(2): keys + pitch/mod wheels
     bool showKeyboard_ = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (JMSignatureEditor)

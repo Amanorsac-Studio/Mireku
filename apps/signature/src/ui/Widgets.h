@@ -494,6 +494,13 @@ public:
     ~ParamKnob() override { removeMouseListener (this); }
 
     void setShowValue (bool b) { value_.setVisible (b); }
+    /// R4(4): macro knobs give double-click to the target editor, so the
+    /// slider's own "double-click resets to default" gesture is turned off for
+    /// them — the two must never fight over the same event.
+    void setDoubleClickResets (bool b)
+    {
+        slider_.setDoubleClickReturnValue (b, (double) proc_.getParamNormalized (path_));
+    }
     const juce::String& path() const { return path_; }
     juce::String caption() const { return name_.getText(); }
 

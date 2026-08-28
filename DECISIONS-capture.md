@@ -318,3 +318,129 @@ cut before these numbers were taken.
 - The kit's 12 extra knob state PNGs, the three sheet PNGs (except as the recrop source),
   `button-master-empty.png` and `font-style-preview.png` are unused by design — rotation is
   the kit's own recommended lightweight approach and live text is required.
+
+---
+
+## Devices & Audio settings panel — "no option for audio and MIDI input selection" (2026-08-28)
+
+Client report: *"we don't have option for audio and MIDI input selection."*
+
+### 31. Root cause — it was **not** a permissions problem
+The working hypothesis going in was that `electron/main.ts` installs no
+`setPermissionRequestHandler` / `setPermissionCheckHandler`, so `getUserMedia`
+and `requestMIDIAccess` were being denied and `enumerateDevices()` was
+returning anonymous entries. **That was measured and disproved before anything
+was changed.** An Electron 33 probe (`BrowserWindow` with the app's exact
+`webPreferences`, once with no handlers and once with handlers) and then the
+real built app driven over CDP all returned the same thing: `getUserMedia` →
+`ok`, **15 audio inputs, 0 of them anonymous**, and 11 MIDI in / 11 MIDI out
+with real names. Electron's built-in default handlers already grant `media`
+and non-sysex `midi`.
+
+The real cause is **discoverability**: device selection existed **only** at
+step 6 of 8 inside the New Session wizard, and even there only for the mode
+being created (MIDI **in** for Guided, MIDI **out** for Auto — never both).
+Once a session existed there was no surface anywhere in the app to see or
+change any device. Nothing in the header, no settings menu. From the client's
+seat that is indistinguishable from "there is no option".
+
+### 32. Permissions hardened anyway (`electron/main.ts`)
+Even though they were not the bug, relying on Electron's permissive defaults
+is not something to ship. `installPermissionHandlers()` now replaces both
+handlers with an explicit allow-list — `media` (audio only), `audioCapture`,
+`midi`, `midiSysex` — and denies everything else, plus
+`setDevicePermissionHandler(() => false)` for WebHID/USB/Serial. Verified in
+the running app: audio `getUserMedia` still `ok` and all 15 labels still
+populate, while **`getUserMedia({video:true})` now returns `NotAllowedError`**,
+which it did not before.
+
+### 33. The Devices panel (`src/ui/settings/SettingsPanel.tsx`)
+A gear in the header — matching Signature's `Perform.h` gear, which owns its
+device settings — opens a persistent panel at any time, on any screen:
+- **Audio input device** picker over every enumerated input;
+- **Source** (Stereo Pair / Mono) plus a **channel** picker, honoured for real:
+  `AudioIo.openInput(deviceId, channels)` inserts a `ChannelSplitter` →
+  `ChannelMerger` **only** when the pick differs from the default `[0, 1]`, so
+  the existing capture graph is byte-for-byte unchanged in the default case;
+- a **live input level meter** (the kit LED columns + a tabular dBFS readout),
+  so signal can be confirmed without starting a take;
+- **MIDI input** picker with an **activity lamp** that lights on any incoming
+  message and names the last note;
+- **MIDI output** picker with a **Test Note** button (Auto mode's path);
+- **48 kHz · 24-bit** shown as fixed, per spec §3 — displayed, never editable;
+- changes apply **immediately** (MIDI re-pointed at once; the audio input is
+  reopened unless a take or an Auto run is in flight, which the panel says),
+  are mirrored into the open session's config, and are **persisted** through
+  new `settings:load` / `settings:save` IPC to `userData/settings.json`,
+  following the existing session-snapshot pattern. They are restored at launch
+  and seed the next New Session wizard.
+
+### 34. Both pickers made robust (`src/ui/settings/useDeviceScan.ts`)
+One hook now serves the panel and the wizard: scan on mount, re-scan on OS
+hot-plug (`mediadevices.ondevicechange` + `MIDIAccess.onstatechange`), a manual
+**Re-scan** button, and a calm gold-edged advisory whenever a list is empty
+that says what to do — never a silent empty dropdown. The advisory
+distinguishes *permission refused* from *nothing plugged in*. The wizard also
+shows device counts and a shortcut into the panel, and no longer hides the
+MIDI role the current mode does not use behind a mode switch alone.
+
+**A real bug was found and fixed while testing this**: `scanInputs()`
+originally called `getUserMedia` on every scan to unlock labels, but opening a
+stream makes Windows emit `devicechange`, which re-triggered the scan — an
+infinite re-scan loop, visible as a "Scanning…" button that never settled.
+`scanInputs()` now only pays for the `getUserMedia` round trip when the labels
+are actually still withheld, and hot-plug events are debounced 400 ms.
+
+### 35. Windows caps capture at two channels
+Measured on the client's own hardware: Chromium's shared-mode WASAPI capture
+reports `capabilities.channelCount.max === 2` for **every** device, including
+the 4-in Behringer UMC 404HD and the VB-Audio virtual cable. Higher inputs are
+reachable only because the driver exposes them as *separate devices*
+("IN 3-4", "IN 3", "IN 4") — all of which the picker lists. The panel says so
+in a plain line rather than pretending a pair picker can do more than it can.
+The splitter/merger routing is in place regardless, so a platform that does
+grant more channels is already handled.
+
+### 36. Styling
+CHROME register only, per the family restyle: `ChromeDialog` bed with kit
+screws, the custom `Listbox` everywhere (**0 native `<select>` elements in the
+panel**, asserted in the live app), `Segmented` for the Source strip,
+`PlateButton`s, a recessed metering well and the kit LED meter. New CSS
+(`.jm-gear`, `.jm-settings*`, `.jm-activity-lamp`, `.jm-advisory`) takes every
+colour from a `tokens.ts` variable — **no colour literals added**. The advisory
+plaque is gold-edged, never warning-red: the coaching rule holds here too.
+
+### 37. Verification (the real Electron app, not a browser)
+`npm run typecheck -w jm-capture` clean · `npm run test -w jm-capture`
+**50/50 passed, 7/7 files** · `npm run build -w jm-capture` exit 0.
+
+The app was launched for real (`electron .` with `--remote-debugging-port`) and
+driven over CDP. Devices actually enumerated, with labels:
+
+- **Audio in (15):** Default - IN 1-2 (4- BEHRINGER UMC 404HD 192k) · IN 1 ·
+  IN 2 · IN 3 · IN 4 · IN 1-2 · IN 3-4 · IN 1-4 (all Behringer UMC 404HD) ·
+  Microphone Array (Intel Smart Sound Technology for Digital Microphones) ·
+  CABLE Output (VB-Audio Virtual Cable) · Line (4- MODX) (0499:172a) ·
+  Line In /Microphone (Waves SoundGrid) · Microphone (Camo) ·
+  Microphone (Iriun Webcam) · Communications - Microphone (Iriun Webcam)
+- **MIDI in / out (11 each):** MODX-1 · MODX-2 · MODX-3 ·
+  UMC404HD 192k MIDI In/Out · Muse MIDI Passthrough · Muse MIDI Receive ·
+  Muse MIDI Port 1 · Muse MIDI Port 2 · AMANORSAC · SG Device I/O · StudioRack
+
+End-to-end proofs taken live: selecting *IN 1-4* and *Muse MIDI Passthrough*
+wrote `settings.json` and the selection came back after a relaunch; the input
+meter read a real **−66 to −70 dBFS** off the Behringer, and kept reading after
+switching to Mono → Channel 1 (so the splitter/merger path is live, not
+silent); routing **Test Note** out through *Muse MIDI Passthrough* and back into
+the MIDI input lit the activity lamp — **"Receiving — C4"**. Page console clean.
+
+New screenshots in `apps/capture/screenshots/`: `18-settings-devices.png`,
+`19-settings-midi-activity.png`, `20-settings-audio-listbox.png`,
+`21-settings-channel-picker.png`, and an
+updated `06-wizard-devices.png`.
+
+### 38. Not touched
+Capture behaviour, DSP, session logic, the sampler, export and the `.jmi`
+format are unchanged. `SessionConfig.audioInputChannels` already existed and
+was written but never read; it is now actually honoured by `openInput`, with
+the default `[0, 1]` producing the identical graph it always did.

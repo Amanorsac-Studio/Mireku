@@ -1234,3 +1234,126 @@ input.jm-well[type='number']::-webkit-inner-spin-button {
   vertical-align: middle;
   opacity: 0.6;
 }
+
+/* ================================================================== */
+/* Header gear + Devices settings panel                                */
+/* ================================================================== */
+
+/* Signature's header gear: a plaque icon button, lit gold while its panel
+   is open. Kept in the segment/plate family, never a bare browser button. */
+.jm-gear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: var(--jm-size-radius-control);
+  cursor: pointer;
+  background: linear-gradient(180deg, var(--jm-color-plaque-top), var(--jm-color-plaque-bottom));
+  border: 1px solid var(--jm-color-plaque-hairline);
+  box-shadow: 0 3px 10px var(--jm-color-shadow-soft);
+  color: var(--jm-color-label-idle);
+  transition: color 120ms ease;
+}
+
+.jm-gear:hover {
+  color: var(--jm-color-gold-bright);
+}
+
+.jm-gear.on {
+  color: var(--jm-color-gold-bright);
+  background: linear-gradient(180deg, var(--jm-color-cell-top), var(--jm-color-cell-bottom));
+  border-color: var(--jm-color-cell-edge);
+  box-shadow:
+    inset 0 2px 0 var(--jm-color-gold-hot-bloom),
+    0 3px 10px var(--jm-color-shadow-soft);
+}
+
+.jm-settings {
+  position: relative;
+  min-width: 560px;
+  max-width: 620px;
+  max-height: 86vh;
+  overflow-y: auto;
+  gap: calc(var(--jm-size-gap-unit) * 1.15);
+  padding: calc(var(--jm-size-gap-unit) * 2.5);
+}
+
+.jm-settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(var(--jm-size-gap-unit) * 2);
+}
+
+.jm-settings-row {
+  align-items: flex-end;
+  gap: calc(var(--jm-size-gap-unit) * 1.5);
+}
+
+/* Recessed metering well: level columns plus a tabular dBFS readout. */
+.jm-settings-meter {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: calc(var(--jm-size-gap-unit) * 1.5);
+  padding: calc(var(--jm-size-gap-unit) * 1.25) calc(var(--jm-size-gap-unit) * 2.25);
+}
+
+.jm-settings-db {
+  font-variant-numeric: tabular-nums;
+  min-width: 76px;
+  text-align: right;
+  color: var(--jm-color-gold);
+}
+
+.jm-settings-activity {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--jm-size-gap-unit) * 1.25);
+  padding: calc(var(--jm-size-gap-unit) * 0.75) calc(var(--jm-size-gap-unit) * 1.25);
+}
+
+/* MIDI activity lamp — dark when idle, gold when a message just arrived. */
+.jm-activity-lamp {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--jm-color-gold-dark);
+  transition: background 80ms linear, box-shadow 80ms linear;
+}
+
+.jm-activity-lamp.hot {
+  background: var(--jm-color-gold-hot);
+  box-shadow: 0 0 9px var(--jm-color-gold-hot);
+}
+
+.jm-settings-format {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(var(--jm-size-gap-unit) * 2);
+}
+
+.jm-settings-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(var(--jm-size-gap-unit) * 2);
+}
+
+/* Advisory plaque — the calm empty / permission state. Gold-edged, never
+   warning-red: the family's coaching rule holds here too. */
+.jm-advisory {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--jm-size-gap-unit) * 0.5);
+  padding: calc(var(--jm-size-gap-unit) * 1.25) calc(var(--jm-size-gap-unit) * 1.5);
+  border-radius: var(--jm-size-radius-control);
+  background: linear-gradient(180deg, var(--jm-color-plaque-top), var(--jm-color-plaque-bottom));
+  border: 1px solid var(--jm-color-gold-dark);
+  border-left: 2px solid var(--jm-color-gold);
+  box-shadow: 0 3px 10px var(--jm-color-shadow-soft);
+}

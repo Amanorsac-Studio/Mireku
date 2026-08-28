@@ -101,6 +101,24 @@ public:
         // drawn in the JM hardware language — item A
         juce::LookAndFeel::setDefaultLookAndFeel (&lnf_);
 
+        // CLIENT REVIEW ROUND 4 (item 1) — multi-MIDI-input routing.
+        // StandalonePluginHolder can hold several inputs open but MERGES them
+        // into one buffer, discarding which device a note came from, so it
+        // cannot answer "this keyboard plays slot B". We therefore open the
+        // devices ourselves (MidiDeviceRouter) and, before opening one, take it
+        // away from the holder so the same notes never arrive twice.
+        // This must be set BEFORE the processor is constructed.
+        MidiDeviceRouter::active().store (true);
+        MidiDeviceRouter::releaseFromHolderHook() = [] (const juce::String& identifier)
+        {
+            // JUCE's holder enables EVERY MIDI input it finds (see its
+            // timerCallback) and merges them, so we take back the ones we route
+            // ourselves. Its AudioDeviceManager is public, which is the only
+            // handle needed.
+            if (auto* holder = juce::StandalonePluginHolder::getInstance())
+                holder->deviceManager.setMidiInputDeviceEnabled (identifier, false);
+        };
+
         mainWindow_ = std::make_unique<JMStandaloneWindow> (getApplicationName(),
                                                             appProperties_.getUserSettings());
         // item B — the gear icon in our own header now opens device settings
@@ -115,6 +133,8 @@ public:
     void shutdown() override
     {
         SettingsPanel::audioSettingsHook() = nullptr;
+        MidiDeviceRouter::releaseFromHolderHook() = nullptr;
+        MidiDeviceRouter::active().store (false);
         mainWindow_ = nullptr;
         juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
         appProperties_.saveIfNeeded();

@@ -22,7 +22,7 @@ export function LoopbackHelper() {
     setTesting(true);
     setResult(null);
     try {
-      await audioIo.openInput(session.config.audioInputId);
+      await audioIo.openInput(session.config.audioInputId, session.config.audioInputChannels);
       audioIo.startRecording();
       audioIo.playTestTone(1);
       await new Promise((r) => setTimeout(r, 1400));

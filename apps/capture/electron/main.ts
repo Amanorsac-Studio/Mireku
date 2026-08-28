@@ -5,7 +5,7 @@
  * The renderer captures Float32 audio and ships buffers over IPC.
  */
 
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, session, shell } from 'electron';
 import { mkdirSync, readdirSync, readFileSync, writeFileSync, existsSync, copyFileSync, rmSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,6 +25,53 @@ function sessionDir(id: string): string {
   const d = join(sessionsDir(), safe);
   mkdirSync(join(d, 'samples'), { recursive: true });
   return d;
+}
+
+/* ---------------- Permissions ---------------- */
+
+/**
+ * JM Capture needs exactly two privileged renderer capabilities:
+ *   • microphone / line-in capture  (`media` with audio, `audioCapture`)
+ *     — the audio input device and its labels in `enumerateDevices` (§3.1);
+ *   • Web MIDI (`midi`, `midiSysex`) — Guided-mode MIDI in and Auto-mode
+ *     MIDI out (§3.1, §3.4).
+ *
+ * Electron's built-in handlers are permissive; these replace them with an
+ * explicit allow-list so a compromised renderer cannot reach for the camera,
+ * screen capture, geolocation, notifications, or a WebHID/USB/serial device.
+ * Every permission not named here is denied.
+ */
+const ALLOWED_PERMISSIONS = new Set(['media', 'audioCapture', 'midi', 'midiSysex']);
+
+/** `media` is granted for audio only — Capture never records video. */
+function mediaKindsAllowed(kinds: readonly string[] | undefined): boolean {
+  if (!kinds || kinds.length === 0) return true; // enumerateDevices-style check
+  return kinds.every((k) => k === 'audio' || k === 'unknown');
+}
+
+function installPermissionHandlers(): void {
+  const ses = session.defaultSession;
+
+  ses.setPermissionRequestHandler((_wc, permission, callback, details) => {
+    if (!ALLOWED_PERMISSIONS.has(permission)) return callback(false);
+    if (permission === 'media') {
+      const d = details as { mediaTypes?: string[] };
+      return callback(mediaKindsAllowed(d.mediaTypes));
+    }
+    callback(true);
+  });
+
+  ses.setPermissionCheckHandler((_wc, permission, _origin, details) => {
+    if (!ALLOWED_PERMISSIONS.has(permission)) return false;
+    if (permission === 'media') {
+      const d = details as { mediaType?: string };
+      return mediaKindsAllowed(d.mediaType ? [d.mediaType] : undefined);
+    }
+    return true;
+  });
+
+  // No WebHID / WebUSB / Web Serial device is ever needed.
+  ses.setDevicePermissionHandler(() => false);
 }
 
 function createWindow(): void {
@@ -73,6 +120,27 @@ ipcMain.handle('session:list', () => {
 
 ipcMain.handle('session:delete', (_e, id: string) => {
   rmSync(sessionDir(id), { recursive: true, force: true });
+  return true;
+});
+
+/* ---------------- IPC: app settings ---------------- */
+
+/**
+ * Device selections and other app-wide preferences, so the picks made in the
+ * Settings panel survive a relaunch. Same shape as the session snapshots: the
+ * renderer owns the schema, the main process owns the file.
+ */
+function settingsPath(): string {
+  return join(app.getPath('userData'), 'settings.json');
+}
+
+ipcMain.handle('settings:load', () => {
+  const p = settingsPath();
+  return existsSync(p) ? readFileSync(p, 'utf8') : null;
+});
+
+ipcMain.handle('settings:save', (_e, json: string) => {
+  writeFileSync(settingsPath(), json, 'utf8');
   return true;
 });
 
@@ -190,6 +258,7 @@ ipcMain.handle('shell:showItem', (_e, p: string) => {
 });
 
 app.whenReady().then(() => {
+  installPermissionHandlers();
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

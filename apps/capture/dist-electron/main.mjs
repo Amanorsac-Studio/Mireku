@@ -1,5 +1,5 @@
 // electron/main.ts
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, session, shell } from "electron";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync, existsSync, copyFileSync, rmSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +16,31 @@ function sessionDir(id) {
   const d = join(sessionsDir(), safe);
   mkdirSync(join(d, "samples"), { recursive: true });
   return d;
+}
+var ALLOWED_PERMISSIONS = /* @__PURE__ */ new Set(["media", "audioCapture", "midi", "midiSysex"]);
+function mediaKindsAllowed(kinds) {
+  if (!kinds || kinds.length === 0) return true;
+  return kinds.every((k) => k === "audio" || k === "unknown");
+}
+function installPermissionHandlers() {
+  const ses = session.defaultSession;
+  ses.setPermissionRequestHandler((_wc, permission, callback, details) => {
+    if (!ALLOWED_PERMISSIONS.has(permission)) return callback(false);
+    if (permission === "media") {
+      const d = details;
+      return callback(mediaKindsAllowed(d.mediaTypes));
+    }
+    callback(true);
+  });
+  ses.setPermissionCheckHandler((_wc, permission, _origin, details) => {
+    if (!ALLOWED_PERMISSIONS.has(permission)) return false;
+    if (permission === "media") {
+      const d = details;
+      return mediaKindsAllowed(d.mediaType ? [d.mediaType] : void 0);
+    }
+    return true;
+  });
+  ses.setDevicePermissionHandler(() => false);
 }
 function createWindow() {
   const win = new BrowserWindow({
@@ -57,6 +82,17 @@ ipcMain.handle("session:list", () => {
 });
 ipcMain.handle("session:delete", (_e, id) => {
   rmSync(sessionDir(id), { recursive: true, force: true });
+  return true;
+});
+function settingsPath() {
+  return join(app.getPath("userData"), "settings.json");
+}
+ipcMain.handle("settings:load", () => {
+  const p = settingsPath();
+  return existsSync(p) ? readFileSync(p, "utf8") : null;
+});
+ipcMain.handle("settings:save", (_e, json) => {
+  writeFileSync(settingsPath(), json, "utf8");
   return true;
 });
 ipcMain.handle(
@@ -138,6 +174,7 @@ ipcMain.handle("shell:showItem", (_e, p) => {
   return true;
 });
 app.whenReady().then(() => {
+  installPermissionHandlers();
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

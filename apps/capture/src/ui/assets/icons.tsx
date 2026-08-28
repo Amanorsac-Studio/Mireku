@@ -103,6 +103,20 @@ export function IconMore(p: IconProps) {
   );
 }
 
+/**
+ * Settings gear. The delivered pack has no gear, so this is drawn in the same
+ * register as the rest of the set (24-box, 2 px round-capped currentColor
+ * strokes) — the counterpart of Signature's `ux::PackIcon::gear` in the header.
+ */
+export function IconGear(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <circle cx="12" cy="12" r="3.2" />
+      <path d="M12 2.6 13.5 5.1 16.3 4.4 16.6 7.3 19.4 8.1 18.2 10.7 20 13 18.2 15.3 19.4 17.9 16.6 18.7 16.3 21.6 13.5 20.9 12 23.4 10.5 20.9 7.7 21.6 7.4 18.7 4.6 17.9 5.8 15.3 4 13 5.8 10.7 4.6 8.1 7.4 7.3 7.7 4.4 10.5 5.1 Z" />
+    </Svg>
+  );
+}
+
 export function IconKeyboard(p: IconProps) {
   return (
     <Svg {...p}>

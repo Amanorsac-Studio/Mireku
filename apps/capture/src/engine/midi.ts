@@ -12,20 +12,53 @@ export interface MidiEvents {
   onControlChange?(cc: number, value: number): void;
 }
 
+/** Why `init()` failed, so a picker can explain itself rather than sit empty. */
+export type MidiPermission = 'granted' | 'denied' | 'unsupported';
+
 export class MidiManager {
   private access: MIDIAccess | null = null;
   private input: MIDIInput | null = null;
   private output: MIDIOutput | null = null;
   events: MidiEvents = {};
 
+  permission: MidiPermission = 'unsupported';
+  /**
+   * `performance.now()` of the last message from the selected input, and the
+   * last note number seen. The Settings panel's activity lamp reads these, so
+   * it lights whether or not any screen is currently consuming MIDI events.
+   */
+  activityAt = 0;
+  lastNote: number | null = null;
+  /** fired when the OS adds or removes a MIDI port */
+  onPortsChanged: (() => void) | null = null;
+
   async init(): Promise<boolean> {
-    if (!('requestMIDIAccess' in navigator)) return false;
-    try {
-      this.access = await navigator.requestMIDIAccess({ sysex: false });
-      return true;
-    } catch {
+    if (typeof navigator === 'undefined' || !('requestMIDIAccess' in navigator)) {
+      this.permission = 'unsupported';
       return false;
     }
+    if (this.access) return true;
+    try {
+      this.access = await navigator.requestMIDIAccess({ sysex: false });
+      this.access.onstatechange = () => this.onPortsChanged?.();
+      this.permission = 'granted';
+      return true;
+    } catch {
+      this.permission = 'denied';
+      return false;
+    }
+  }
+
+  get ready(): boolean {
+    return this.access !== null;
+  }
+
+  get selectedInputId(): string | null {
+    return this.input?.id ?? null;
+  }
+
+  get selectedOutputId(): string | null {
+    return this.output?.id ?? null;
   }
 
   listInputs(): MidiDeviceInfo[] {
@@ -49,6 +82,10 @@ export class MidiManager {
       const data = e.data;
       if (!data || data.length < 2) return;
       const status = data[0] & 0xf0;
+      // activity is recorded before dispatch so the Settings lamp lights even
+      // when no screen has installed handlers
+      if (status !== 0xf0) this.activityAt = performance.now();
+      if (status === 0x90 || status === 0x80) this.lastNote = data[1];
       if (status === 0x90 && data[2] > 0) this.events.onNoteOn?.(data[1], data[2]);
       else if (status === 0x80 || (status === 0x90 && data[2] === 0)) this.events.onNoteOff?.(data[1]);
       else if (status === 0xb0) this.events.onControlChange?.(data[1], data[2]);

@@ -22,6 +22,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout JMSignatureProcessor::create
     // which no layout ever declared — the button was permanently disabled and
     // there was no DSP behind it. Both now exist (see engine/Limiter.h).
     lay.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "limiter", 1 }, "Master Limiter", true));
+    // CLIENT REVIEW ROUND 4 (item 2): pitch bend is implemented now, and the
+    // brief asked for a configurable range "if that's cheap". It is — one int
+    // parameter, edited in Settings, persisted with everything else.
+    lay.add (std::make_unique<juce::AudioParameterInt> (juce::ParameterID { "bendRange", 1 },
+                                                        "Pitch Bend Range", 0, 12, 2));
     for (int i = 0; i < 4; ++i)
     {
         auto n = juce::String::charToString ((juce::juce_wchar) ('A' + i));
@@ -50,6 +55,13 @@ JMSignatureProcessor::JMSignatureProcessor()
     transposeParam = apvts.getRawParameterValue ("transpose");
     octaveParam = apvts.getRawParameterValue ("octave");
     soloParam = apvts.getRawParameterValue ("solo");
+    bendRangeParam = apvts.getRawParameterValue ("bendRange");
+
+    // Round 4 (1): in standalone builds we own the MIDI inputs so each device
+    // can drive a different slot. Plugin builds leave the hardware alone.
+    if (MidiDeviceRouter::active().load())
+        deviceRouter = std::make_unique<MidiDeviceRouter> (routedQueue);
+    midiRouting.refreshDeviceList();
 
     state.library.rescan();
     ensureFactoryPerformancePresets();
@@ -70,6 +82,7 @@ void JMSignatureProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
 {
     loadMeasurer.reset (sampleRate, samplesPerBlock);
     slotBuf.setSize (2, samplesPerBlock);
+    uiMidiBuf_.ensureSize (4096);          // never allocates on the audio thread
     expressionGain.reset (sampleRate, 0.05);
     masterGain.reset (sampleRate, 0.02);
     masterGain.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (masterVolParam->load(), -60.0f));
@@ -84,45 +97,88 @@ void JMSignatureProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     syncAllToDsp();
 }
 
-void JMSignatureProcessor::handleMidiAtBlockStart (const juce::MidiBuffer& midi)
+int JMSignatureProcessor::pitchBendRange() const
+{
+    return bendRangeParam != nullptr ? (int) bendRangeParam->load() : 2;
+}
+
+void JMSignatureProcessor::refreshMidiDevices()
+{
+    // Opening/closing MidiInputs and mutating the device table is message-thread
+    // work; setStateInformation() can arrive on a host loader thread, so bounce.
+    if (! juce::MessageManager::existsAndIsCurrentThread())
+    {
+        juce::MessageManager::callAsync ([safe = juce::WeakReference<JMSignatureProcessor> (this)]
+        {
+            if (safe != nullptr) safe->refreshMidiDevices();
+        });
+        return;
+    }
+    midiRouting.refreshDeviceList();
+    if (deviceRouter != nullptr) deviceRouter->sync (midiRouting);
+}
+
+// CLIENT REVIEW ROUND 4 (item 1) — every MIDI source funnels through here with
+// a 4-bit slot mask, so per-slot filtering is applied to note-ons, note-offs,
+// sustain, CCs and pitch bend by exactly the same rule. mask == 0 means "this
+// message is routed to no slot"; only the panic messages ignore it.
+void JMSignatureProcessor::handleRoutedMessage (const juce::MidiMessage& m, juce::uint8 mask)
 {
     const int shift = (int) transposeParam->load() + 12 * (int) octaveParam->load();
-    for (const auto meta : midi)
+    auto routed = [mask] (int slot) { return (mask & (1u << slot)) != 0; };
+
     {
-        const auto m = meta.getMessage();
         if (m.isNoteOn())
         {
             const int note = juce::jlimit (0, 127, m.getNoteNumber() + shift);
             for (int i = 0; i < 4; ++i)
-                if (slotEnable[(size_t) i]->load() >= 0.5f)
+                if (routed (i) && slotEnable[(size_t) i]->load() >= 0.5f)
                     engines[(size_t) i].noteOn (note, m.getVelocity());
         }
         else if (m.isNoteOff())
         {
             const int note = juce::jlimit (0, 127, m.getNoteNumber() + shift);
-            for (auto& e : engines) e.noteOff (note);
+            for (int i = 0; i < 4; ++i)
+                if (routed (i)) engines[(size_t) i].noteOff (note);
         }
         else if (m.isAllNotesOff() || m.isAllSoundOff())
         {
+            // panic is never filtered — a stuck note must always be clearable
             for (auto& e : engines) e.allNotesOff (m.isAllNotesOff());
+        }
+        else if (m.isPitchWheel())
+        {
+            // Round 4 (item 2): pitch bend IS implemented now — ±bendRange
+            // semitones as a smoothed playback-rate multiplier (Sampler.h).
+            const float semis = ((float) m.getPitchWheelValue() - 8192.0f) / 8192.0f
+                                * (float) pitchBendRange();
+            for (int i = 0; i < 4; ++i)
+                if (routed (i)) engines[(size_t) i].setPitchBend (semis);
         }
         else if (m.isController())
         {
             const int cc = m.getControllerNumber(), val = m.getControllerValue();
             if (cc == 64)                                     // §5.4 sustain
             {
-                for (auto& e : engines) e.sustainPedal (val >= 64);
+                for (int i = 0; i < 4; ++i)
+                    if (routed (i)) engines[(size_t) i].sustainPedal (val >= 64);
             }
             else if (cc == 11)                                // expression → volume
             {
-                const float n = (float) val / 127.0f;
-                expressionGain.setTargetValue (n * n);
+                // expression rides the MASTER bus, so it is applied whenever the
+                // message reaches any slot at all (there is one master gain).
+                if (mask != 0)
+                {
+                    const float n = (float) val / 127.0f;
+                    expressionGain.setTargetValue (n * n);
+                }
             }
             else if (cc == 1)                                 // mod wheel per world (§5.3)
             {
                 const float n = (float) val / 127.0f;
                 for (int i = 0; i < 4; ++i)
                 {
+                    if (! routed (i)) continue;
                     if (slotEnable[(size_t) i]->load() < 0.5f) continue;
                     switch (engines[(size_t) i].world())
                     {
@@ -142,7 +198,7 @@ void JMSignatureProcessor::handleMidiAtBlockStart (const juce::MidiBuffer& midi)
                 }
                 state.learn.lastIncomingCc.store (cc);
             }
-            else                                              // learned CCs → message thread
+            else if (mask != 0)                               // learned CCs → message thread
             {
                 state.learn.lastIncomingCc.store (cc);
                 int s1, n1, s2, n2;
@@ -151,11 +207,31 @@ void JMSignatureProcessor::handleMidiAtBlockStart (const juce::MidiBuffer& midi)
                 ccFifo.finishedWrite (n1);
             }
         }
-        else if (m.isPitchWheel())
-        {
-            // Pitch bend intentionally not implemented for sampled worlds (v1).
-        }
     }
+}
+
+void JMSignatureProcessor::handleMidiAtBlockStart (const juce::MidiBuffer& midi)
+{
+    // Host / standalone-holder stream: routed by CHANNEL (the only identity a
+    // merged stream carries). Messages with no channel (e.g. system realtime)
+    // are treated as omni.
+    for (const auto meta : midi)
+    {
+        const auto m = meta.getMessage();
+        const int ch = m.getChannel();
+        handleRoutedMessage (m, ch > 0 ? midiRouting.channelMask (ch) : kSlotMaskAll);
+    }
+
+    // Devices we opened ourselves (standalone) and the on-screen keyboard /
+    // pitch-bend / mod wheels: already carrying their resolved slot mask.
+    routedQueue.drain ([this] (const RoutedMidiEvent& e)
+    {
+        const auto m = e.toMessage();
+        const int ch = m.getChannel();
+        const juce::uint8 chMask = (e.resolved != 0 || ch <= 0) ? kSlotMaskAll
+                                                                : midiRouting.channelMask (ch);
+        handleRoutedMessage (m, (juce::uint8) (e.mask & chMask));
+    });
 }
 
 void JMSignatureProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
@@ -171,7 +247,15 @@ void JMSignatureProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         if (auto pos = ph->getPosition())
             if (auto b = pos->getBpm()) bpm_ = *b;
 
-    keyboardState.processNextMidiBuffer (midi, 0, n, true);
+    // The on-screen keyboard is part of the instrument, not an external source:
+    // its notes go into the routed queue pre-resolved (omni) rather than into
+    // the host buffer, so a "channel 1 -> slot A" routing cannot silently mute
+    // the UI keyboard (round 4, item 1).
+    uiMidiBuf_.clear();
+    keyboardState.processNextMidiBuffer (uiMidiBuf_, 0, n, true);
+    for (const auto meta : uiMidiBuf_)
+        routedQueue.push (meta.getMessage(), kSlotMaskAll, true);
+
     handleMidiAtBlockStart (midi);
 
     int voices = 0;
@@ -770,6 +854,7 @@ void JMSignatureProcessor::getStateInformation (juce::MemoryBlock& dest)
     o->setProperty ("masterRack", rackToVar (state.masterRack));
     o->setProperty ("macros", state.macrosToVar());
     o->setProperty ("midiMap", state.midiMap.toVar());
+    o->setProperty ("midiRouting", midiRouting.toVar());     // round 4 (item 1)
     o->setProperty ("currentPage", state.currentPage);
     o->setProperty ("performPresetName", state.performPresetName);
     auto* hp = new juce::DynamicObject();
@@ -791,6 +876,8 @@ void JMSignatureProcessor::setStateInformation (const void* data, int size)
     state.masterRack = rackFromVar (v.getProperty ("masterRack", juce::var()));
     state.macrosFromVar (v.getProperty ("macros", juce::var()));
     state.midiMap.fromVar (v.getProperty ("midiMap", juce::var()));
+    midiRouting.fromVar (v.getProperty ("midiRouting", juce::var()));
+    refreshMidiDevices();                                    // re-open what was saved
     state.currentPage = (int) v.getProperty ("currentPage", 0);
     state.performPresetName = v.getProperty ("performPresetName", "").toString();
     if (auto* hp = v.getProperty ("hostParams", juce::var()).getDynamicObject())

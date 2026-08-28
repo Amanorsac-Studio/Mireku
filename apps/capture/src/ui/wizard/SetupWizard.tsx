@@ -1,12 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { Channels, World } from '@jm/jmi-format/web';
 import { midiToNoteName, noteNameToMidi } from '@jm/jmi-format/web';
-import { audioIo, type AudioDeviceInfo } from '../../engine/audioIo';
-import { midi, type MidiDeviceInfo } from '../../engine/midi';
 import { createSession, planFromRange, serializeSession, type SessionConfig } from '../../engine/session';
 import { useApp } from '../../state/appStore';
-import { bridge } from '../../state/services';
+import { bridge, services } from '../../state/services';
 import { Button, Field, Input, Label, Panel, Select, useWorldCloth } from '../common';
+import { useDeviceScan } from '../settings/useDeviceScan';
 import { GoldDivider, Segmented } from '../hardware';
 import { worldAccent } from '../theme/tokens';
 import { IconLeft, IconRight } from '../assets/icons';
@@ -23,6 +22,9 @@ const STEPS = ['Name', 'World', 'Sound Type', 'Channels', 'Mode', 'Devices', 'Sa
 export function SetupWizard() {
   const setScreen = useApp((s) => s.setScreen);
   const setSession = useApp((s) => s.setSession);
+  /** the app-wide remembered devices seed this wizard and are updated by it */
+  const devices = useApp((s) => s.devices);
+  const setSettingsOpen = useApp((s) => s.setSettingsOpen);
 
   const [step, setStep] = useState(0);
   const [name, setName] = useState('');
@@ -30,25 +32,17 @@ export function SetupWizard() {
   const [soundType, setSoundType] = useState<'decaying' | 'sustaining' | 'auto-detect'>('auto-detect');
   const [channels, setChannels] = useState<Channels>('stereo');
   const [mode, setMode] = useState<'guided' | 'auto'>('guided');
-  const [audioInputs, setAudioInputs] = useState<AudioDeviceInfo[]>([]);
-  const [audioInputId, setAudioInputId] = useState<string | null>(null);
-  const [midiInputs, setMidiInputs] = useState<MidiDeviceInfo[]>([]);
-  const [midiOutputs, setMidiOutputs] = useState<MidiDeviceInfo[]>([]);
-  const [midiInputId, setMidiInputId] = useState<string | null>(null);
-  const [midiOutputId, setMidiOutputId] = useState<string | null>(null);
+  const [audioInputId, setAudioInputId] = useState<string | null>(devices.audioInputId);
+  const [midiInputId, setMidiInputId] = useState<string | null>(devices.midiInputId);
+  const [midiOutputId, setMidiOutputId] = useState<string | null>(devices.midiOutputId);
   const [rangeLo, setRangeLo] = useState('A0');
   const [rangeHi, setRangeHi] = useState('C8');
   const [interval, setInterval_] = useState(3);
   const [rrCount, setRrCount] = useState(3);
 
-  useEffect(() => {
-    if (step !== 5) return;
-    void audioIo.listInputs().then(setAudioInputs);
-    void midi.init().then(() => {
-      setMidiInputs(midi.listInputs());
-      setMidiOutputs(midi.listOutputs());
-    });
-  }, [step]);
+  // Scans on entering the Devices step, then keeps itself current across OS
+  // hot-plug and offers a manual re-scan (see useDeviceScan).
+  const scan = useDeviceScan(step === 5);
 
   const plan = useMemo(() => {
     try {
@@ -62,6 +56,8 @@ export function SetupWizard() {
 
   const start = async () => {
     if (!plan) return;
+    const audioInputChannels: [number] | [number, number] =
+      channels === 'stereo' ? [0, 1] : [devices.audioInputChannels[0]];
     const config: SessionConfig = {
       id: `session-${Date.now()}`,
       instrumentName: name || 'Untitled Instrument',
@@ -72,7 +68,7 @@ export function SetupWizard() {
       sampleRate: 48000,
       bitDepth: 24,
       audioInputId,
-      audioInputChannels: channels === 'stereo' ? [0, 1] : [0],
+      audioInputChannels,
       midiInputId,
       midiOutputId,
       plan,
@@ -81,6 +77,8 @@ export function SetupWizard() {
     const session = createSession(config);
     await bridge.saveSession(config.id, serializeSession(session));
     setSession(session);
+    // the wizard's picks become the remembered app-wide selection
+    await services.applyDevices({ audioInputId, audioInputChannels, midiInputId, midiOutputId });
     setScreen(mode === 'guided' ? 'guided' : 'loopback');
   };
 
@@ -159,39 +157,86 @@ export function SetupWizard() {
           )}
           {step === 5 && (
             <div className="jm-col">
+              <div className="jm-row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                <Label>
+                  {scan.scanning
+                    ? 'Scanning for devices…'
+                    : `${scan.audioInputs.length} audio in · ${scan.midiInputs.length} MIDI in · ${scan.midiOutputs.length} MIDI out`}
+                </Label>
+                <Button compact onClick={scan.rescan} title="Re-scan for audio and MIDI devices">
+                  Re-scan
+                </Button>
+              </div>
+
               <Field label="Audio Input Device">
-                <Select
-                  value={audioInputId ?? ''}
-                  onChange={(val) => setAudioInputId(val || null)}
-                  options={[
-                    { value: '', label: 'System default', section: 'Audio Input' },
-                    ...audioInputs.map((d) => ({ value: d.id, label: d.label, section: 'Audio Input' })),
-                  ]}
-                />
-              </Field>
-              {mode === 'guided' ? (
-                <Field label="MIDI Input Device">
+                {scan.audioInputs.length === 0 ? (
+                  <WizardEmpty
+                    title={scan.audioPermission === 'denied' ? 'Microphone access was refused' : 'No audio inputs found'}
+                    body={
+                      scan.audioPermission === 'denied'
+                        ? 'Allow desktop apps to use the microphone in the OS privacy settings, then press Re-scan.'
+                        : 'Connect and switch on your audio interface, then press Re-scan.'
+                    }
+                  />
+                ) : (
                   <Select
-                    value={midiInputId ?? ''}
-                    onChange={(val) => setMidiInputId(val || null)}
+                    value={audioInputId ?? ''}
+                    onChange={(val) => setAudioInputId(val || null)}
                     options={[
-                      { value: '', label: 'None detected', section: 'MIDI Input' },
-                      ...midiInputs.map((d) => ({ value: d.id, label: d.name, section: 'MIDI Input' })),
+                      { value: '', label: 'System default', section: 'Audio Input' },
+                      ...scan.audioInputs.map((d) => ({ value: d.id, label: d.label, section: 'Audio Input' })),
                     ]}
                   />
+                )}
+              </Field>
+
+              {mode === 'guided' ? (
+                <Field label="MIDI Input Device">
+                  {scan.midiInputs.length === 0 ? (
+                    <WizardEmpty
+                      title="No MIDI inputs found"
+                      body="Guided mode listens to your keyboard. Connect it and press Re-scan — you can also start the session and pick it later from the header gear."
+                    />
+                  ) : (
+                    <Select
+                      value={midiInputId ?? ''}
+                      onChange={(val) => setMidiInputId(val || null)}
+                      options={[
+                        { value: '', label: 'None', section: 'MIDI Input' },
+                        ...scan.midiInputs.map((d) => ({ value: d.id, label: d.name, section: 'MIDI Input' })),
+                      ]}
+                    />
+                  )}
                 </Field>
               ) : (
                 <Field label="MIDI Output Device">
-                  <Select
-                    value={midiOutputId ?? ''}
-                    onChange={(val) => setMidiOutputId(val || null)}
-                    options={[
-                      { value: '', label: 'None detected', section: 'MIDI Output' },
-                      ...midiOutputs.map((d) => ({ value: d.id, label: d.name, section: 'MIDI Output' })),
-                    ]}
-                  />
+                  {scan.midiOutputs.length === 0 ? (
+                    <WizardEmpty
+                      title="No MIDI outputs found"
+                      body="Auto mode plays the instrument through a MIDI output. Connect the interface or start your virtual MIDI port, then press Re-scan."
+                    />
+                  ) : (
+                    <Select
+                      value={midiOutputId ?? ''}
+                      onChange={(val) => setMidiOutputId(val || null)}
+                      options={[
+                        { value: '', label: 'None', section: 'MIDI Output' },
+                        ...scan.midiOutputs.map((d) => ({ value: d.id, label: d.name, section: 'MIDI Output' })),
+                      ]}
+                    />
+                  )}
                 </Field>
               )}
+
+              <Label>
+                All three devices — plus input channel pair and a live level meter — stay available from the gear in the
+                header once the session is running.
+              </Label>
+              <div className="jm-row">
+                <Button compact onClick={() => setSettingsOpen(true)}>
+                  Open Device Settings
+                </Button>
+              </div>
             </div>
           )}
           {step === 6 && (
@@ -249,6 +294,19 @@ export function SetupWizard() {
           </Button>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * "No devices / permission needed" state for a wizard picker — a calm,
+ * gold-edged advisory that says what to do, never a silent empty dropdown.
+ */
+function WizardEmpty({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="jm-advisory">
+      <div className="jm-value">{title}</div>
+      <div className="jm-label">{body}</div>
     </div>
   );
 }

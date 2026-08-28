@@ -21,7 +21,7 @@ import {
   WebAudioVoiceSink,
 } from '../engine/sampler/samplerWebAudio';
 import type { JmBridge } from '../../electron/preload';
-import { useApp } from './appStore';
+import { DEFAULT_DEVICES, useApp, type DeviceSettings } from './appStore';
 
 declare global {
   interface Window {
@@ -33,11 +33,14 @@ declare global {
 const memoryBridge: JmBridge = (() => {
   const sessions = new Map<string, string>();
   const takes = new Map<string, { sampleRate: number; channels: ArrayBuffer[] }>();
+  let settings: string | null = null;
   return {
     saveSession: async (id, json) => (sessions.set(id, json), true),
     loadSession: async (id) => sessions.get(id) ?? null,
     listSessions: async () => [...sessions.entries()].map(([id, json]) => ({ id, json })),
     deleteSession: async (id) => (sessions.delete(id), true),
+    loadSettings: async () => settings,
+    saveSettings: async (json) => ((settings = json), true),
     writeTake: async (id, file, sampleRate, _bd, channels) => {
       takes.set(`${id}/${file}`, { sampleRate, channels });
       return file;
@@ -86,12 +89,97 @@ class Services {
     return audioIo.ctx;
   }
 
+  /* ---------------- devices / settings ---------------- */
+
+  /**
+   * Restore the persisted device selection at startup and point the MIDI
+   * manager at it. Called once from the app chassis.
+   */
+  async loadDeviceSettings(): Promise<DeviceSettings> {
+    let devices = DEFAULT_DEVICES;
+    try {
+      const json = await bridge.loadSettings();
+      if (json) {
+        const parsed = JSON.parse(json) as Partial<DeviceSettings>;
+        devices = { ...DEFAULT_DEVICES, ...parsed };
+        // guard a hand-edited or older settings file
+        if (!Array.isArray(devices.audioInputChannels) || devices.audioInputChannels.length < 1) {
+          devices.audioInputChannels = DEFAULT_DEVICES.audioInputChannels;
+        }
+      }
+    } catch {
+      /* unreadable settings — fall back to defaults rather than block startup */
+    }
+    useApp.getState().setDevices(devices);
+    await midi.init();
+    midi.selectInput(devices.midiInputId);
+    midi.selectOutput(devices.midiOutputId);
+    return devices;
+  }
+
+  /**
+   * Apply a device selection immediately: re-point MIDI, reopen the audio
+   * input when it is safe to do so, mirror the choice into the open session's
+   * config, and persist it for next launch.
+   *
+   * "Safe" means not mid-take: reopening the input during a recording or an
+   * Auto run would truncate it, so the audio device is left alone until that
+   * finishes (the panel says so).
+   */
+  async applyDevices(next: DeviceSettings): Promise<void> {
+    const app = useApp.getState();
+    app.setDevices(next);
+
+    midi.selectInput(next.midiInputId);
+    midi.selectOutput(next.midiOutputId);
+
+    const busy = app.auto.running || audioIo.isRecording();
+    if (!busy && audioIo.inputOpen && !audioIo.matchesInput(next.audioInputId, next.audioInputChannels)) {
+      await audioIo.openInput(next.audioInputId, next.audioInputChannels);
+    }
+
+    const session = app.session;
+    if (session) {
+      const updated = {
+        ...session,
+        config: {
+          ...session.config,
+          audioInputId: next.audioInputId,
+          audioInputChannels: next.audioInputChannels,
+          midiInputId: next.midiInputId,
+          midiOutputId: next.midiOutputId,
+        },
+      };
+      app.setSession(updated);
+      void bridge.saveSession(updated.config.id, serializeSession(updated));
+    }
+
+    void bridge.saveSettings(JSON.stringify(next));
+  }
+
+  /** True while a take or an Auto run is in flight (audio must not be reopened). */
+  get captureBusy(): boolean {
+    return useApp.getState().auto.running || audioIo.isRecording();
+  }
+
+  /** Open the input purely so the Settings panel can meter it. */
+  async openInputForMonitoring(devices: DeviceSettings): Promise<void> {
+    if (audioIo.matchesInput(devices.audioInputId, devices.audioInputChannels)) return;
+    await this.ensureAudio();
+    await audioIo.openInput(devices.audioInputId, devices.audioInputChannels);
+  }
+
+  /** True when a screen (not just the Settings meter) needs the input open. */
+  get inputInUse(): boolean {
+    return this.guided !== null || useApp.getState().auto.running;
+  }
+
   /* ---------------- guided mode ---------------- */
 
   async startGuided(session: SessionState): Promise<void> {
     const app = useApp.getState();
     await this.ensureAudio();
-    await audioIo.openInput(session.config.audioInputId);
+    await audioIo.openInput(session.config.audioInputId, session.config.audioInputChannels);
 
     this.guided = new GuidedController(
       session,
@@ -162,7 +250,7 @@ class Services {
   async startAuto(session: SessionState): Promise<void> {
     const app = useApp.getState();
     await this.ensureAudio();
-    await audioIo.openInput(session.config.audioInputId);
+    await audioIo.openInput(session.config.audioInputId, session.config.audioInputChannels);
     midi.selectOutput(session.config.midiOutputId);
 
     const capture = new WebAudioCapturePort(audioIo);

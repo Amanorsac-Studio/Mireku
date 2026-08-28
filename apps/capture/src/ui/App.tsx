@@ -10,6 +10,8 @@ import { AuditionScreen } from './audition/AuditionScreen';
 import { ExportScreen } from './export/ExportScreen';
 import { KitMeter, Segmented } from './hardware';
 import { KIT } from './assets/kit';
+import { IconGear } from './assets/icons';
+import { SettingsPanel } from './settings/SettingsPanel';
 import { sessionStats } from '../engine/session';
 
 type Screen = ReturnType<typeof useApp.getState>['screen'];
@@ -25,9 +27,13 @@ export function App() {
   const session = useApp((s) => s.session);
   const setScreen = useApp((s) => s.setScreen);
   const setSavedSessions = useApp((s) => s.setSavedSessions);
+  const settingsOpen = useApp((s) => s.settingsOpen);
+  const setSettingsOpen = useApp((s) => s.setSettingsOpen);
 
   useEffect(() => {
     void bridge.listSessions().then(setSavedSessions);
+    // restore the remembered audio/MIDI device selection and arm MIDI
+    void services.loadDeviceSettings();
   }, [setSavedSessions]);
 
   const navOptions: { value: Screen; label: string }[] = [];
@@ -55,6 +61,17 @@ export function App() {
           <Segmented options={navOptions} value={navValue} onChange={(s) => setScreen(s)} />
         </div>
         <InputCluster />
+        {/* Signature puts device settings behind the header gear; Capture
+            matches it, so audio + MIDI selection is reachable at any time. */}
+        <button
+          type="button"
+          className={`jm-gear${settingsOpen ? ' on' : ''}`}
+          title="Devices — audio input, MIDI in / out"
+          aria-label="Devices and audio settings"
+          onClick={() => setSettingsOpen(!settingsOpen)}
+        >
+          <IconGear size={19} />
+        </button>
       </div>
       <div className="jm-screen">
         {screen === 'home' && <HomeScreen />}
@@ -65,6 +82,7 @@ export function App() {
         {screen === 'audition' && <AuditionScreen />}
         {screen === 'export' && <ExportScreen />}
       </div>
+      {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
       <StatusBar />
     </div>
   );

@@ -15,6 +15,25 @@ export interface VerdictFlash {
   at: number;
 }
 
+/**
+ * App-wide device selection, persisted through the main process
+ * (`settings.json` in userData) so it is remembered next launch. A new session
+ * inherits these; the Settings panel edits them at any time.
+ */
+export interface DeviceSettings {
+  audioInputId: string | null;
+  audioInputChannels: [number] | [number, number];
+  midiInputId: string | null;
+  midiOutputId: string | null;
+}
+
+export const DEFAULT_DEVICES: DeviceSettings = {
+  audioInputId: null,
+  audioInputChannels: [0, 1],
+  midiInputId: null,
+  midiOutputId: null,
+};
+
 export interface AutoProgress {
   running: boolean;
   position: SessionPosition | null;
@@ -44,6 +63,8 @@ interface AppState {
   tempo: number;
   exportResult: ExportResult | null;
   monoFoldOffer: boolean;
+  devices: DeviceSettings;
+  settingsOpen: boolean;
 
   setScreen(s: Screen): void;
   setSession(s: SessionState | null): void;
@@ -59,6 +80,8 @@ interface AppState {
   setTempo(bpm: number): void;
   setExportResult(r: ExportResult | null): void;
   setMonoFoldOffer(b: boolean): void;
+  setDevices(d: DeviceSettings): void;
+  setSettingsOpen(b: boolean): void;
 }
 
 export const useApp = create<AppState>((set) => ({
@@ -76,6 +99,8 @@ export const useApp = create<AppState>((set) => ({
   tempo: 120,
   exportResult: null,
   monoFoldOffer: false,
+  devices: DEFAULT_DEVICES,
+  settingsOpen: false,
 
   setScreen: (screen) => set({ screen }),
   setSession: (session) => set({ session }),
@@ -91,4 +116,6 @@ export const useApp = create<AppState>((set) => ({
   setTempo: (tempo) => set({ tempo }),
   setExportResult: (exportResult) => set({ exportResult }),
   setMonoFoldOffer: (monoFoldOffer) => set({ monoFoldOffer }),
+  setDevices: (devices) => set({ devices }),
+  setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
 }));

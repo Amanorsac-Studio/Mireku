@@ -111,6 +111,7 @@ void JMSignatureProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     masterLimiter.prepare (sampleRate, samplesPerBlock);
     setLatencySamples (masterLimiter.latencySamples());
     mod.prepare (sampleRate);
+    arp.prepare (sampleRate);       // PHASE 2: also clears held notes and the sounding set
     for (int i = 0; i < 4; ++i)
     {
         engines[(size_t) i].prepare (sampleRate, samplesPerBlock);
@@ -151,33 +152,56 @@ void JMSignatureProcessor::refreshMidiDevices()
 // a 4-bit slot mask, so per-slot filtering is applied to note-ons, note-offs,
 // sustain, CCs and pitch bend by exactly the same rule. mask == 0 means "this
 // message is routed to no slot"; only the panic messages ignore it.
-void JMSignatureProcessor::handleRoutedMessage (const juce::MidiMessage& m, juce::uint8 mask)
+void JMSignatureProcessor::handleRoutedMessage (const juce::MidiMessage& m, juce::uint8 mask, int offset)
 {
     const int shift = (int) transposeParam->load() + 12 * (int) octaveParam->load();
+
+    // ------------------------------------------------------ MODULATION PHASE 2
+    // THE ROUTING FORK. It happens HERE, after the device/channel slot mask has
+    // been resolved, which is what makes per-slot enable work the way the spec
+    // describes: one held chord can be arpeggiated into slot C while slots A and
+    // B receive it as played (research §3.8).
+    //
+    //   arpMask    = the slots this key reaches that have the arp ON  -> the arp
+    //   directMask = the slots this key reaches that have the arp OFF -> the sampler
+    //
+    // Only NOTES and CC64 are forked. Pitch bend, mod wheel, expression and
+    // aftertouch are forwarded to every routed slot exactly as before — the arp
+    // consumes the pedal, nothing else (research §3.6 / §3.8).
+    const auto& as = arp.activeSettings();
+    const juce::uint8 arpMask = as.runsOnAnySlot()
+                                    ? (juce::uint8) (mask & (juce::uint8) (as.slotMask & 0x0F)) : 0;
+    const juce::uint8 directMask = (juce::uint8) (mask & ~arpMask);
     auto routed = [mask] (int slot) { return (mask & (1u << slot)) != 0; };
+    auto direct = [directMask] (int slot) { return (directMask & (1u << slot)) != 0; };
+    auto arpSink = [this] (const ArpEvent& e) { applyArpEvent (e); };
 
     {
         if (m.isNoteOn())
         {
             const int note = juce::jlimit (0, 127, m.getNoteNumber() + shift);
             for (int i = 0; i < 4; ++i)
-                if (routed (i) && slotEnable[(size_t) i]->load() >= 0.5f)
+                if (direct (i) && slotEnable[(size_t) i]->load() >= 0.5f)
                     engines[(size_t) i].noteOn (note, m.getVelocity());
+            if (arpMask != 0) arp.noteOn (note, m.getVelocity(), arpMask, offset, arpSink);
             // MODULATION PHASE 1: velocity / key track / random are per-note
             // sources, and the 0-held-notes -> 1 edge is what drives First-note
-            // retrigger and the LFO fade-in for these GLOBAL LFOs.
+            // retrigger and the LFO fade-in for these GLOBAL LFOs. The PLAYED
+            // note drives them, arpeggiated or not.
             if (mask != 0) mod.noteOn (note, m.getVelocity());
         }
         else if (m.isNoteOff())
         {
             const int note = juce::jlimit (0, 127, m.getNoteNumber() + shift);
             for (int i = 0; i < 4; ++i)
-                if (routed (i)) engines[(size_t) i].noteOff (note);
+                if (direct (i)) engines[(size_t) i].noteOff (note);
+            if (arpMask != 0) arp.noteOff (note, arpSink);
             if (mask != 0) mod.noteOff();
         }
         else if (m.isAllNotesOff() || m.isAllSoundOff())
         {
             // panic is never filtered — a stuck note must always be clearable
+            arp.panic (arpSink);
             for (auto& e : engines) e.allNotesOff (m.isAllNotesOff());
             mod.allNotesOff();
         }
@@ -203,8 +227,14 @@ void JMSignatureProcessor::handleRoutedMessage (const juce::MidiMessage& m, juce
             const int cc = m.getControllerNumber(), val = m.getControllerValue();
             if (cc == 64)                                     // §5.4 sustain
             {
+                // PHASE 2 rule 1 (research §3.6, Yamaha: "the sustain pedal does
+                // not sustain the sound, it holds the keys for you"). The arp
+                // CONSUMES CC64 for the slots it drives — forwarding it there
+                // would sustain every step's release tail into mush. Slots with
+                // the arp off keep the §5.4 behaviour byte for byte.
                 for (int i = 0; i < 4; ++i)
-                    if (routed (i)) engines[(size_t) i].sustainPedal (val >= 64);
+                    if (direct (i)) engines[(size_t) i].sustainPedal (val >= 64);
+                if (arpMask != 0) arp.setPedal (val >= 64, arpSink);
             }
             else if (cc == 11)                                // expression → volume
             {
@@ -255,28 +285,39 @@ void JMSignatureProcessor::handleRoutedMessage (const juce::MidiMessage& m, juce
     }
 }
 
-void JMSignatureProcessor::handleMidiAtBlockStart (const juce::MidiBuffer& midi)
+void JMSignatureProcessor::drainRoutedQueueAtBlockStart()
 {
-    // Host / standalone-holder stream: routed by CHANNEL (the only identity a
-    // merged stream carries). Messages with no channel (e.g. system realtime)
-    // are treated as omni.
-    for (const auto meta : midi)
-    {
-        const auto m = meta.getMessage();
-        const int ch = m.getChannel();
-        handleRoutedMessage (m, ch > 0 ? midiRouting.channelMask (ch) : kSlotMaskAll);
-    }
-
     // Devices we opened ourselves (standalone) and the on-screen keyboard /
-    // pitch-bend / mod wheels: already carrying their resolved slot mask.
+    // pitch-bend / mod wheels: already carrying their resolved slot mask. These
+    // cross from device / message threads through a lock-free FIFO of 5-byte
+    // PODs and carry NO timestamp, so offset 0 is the honest answer for them
+    // (research §4.2). The host buffer is the half that gained real timestamps.
     routedQueue.drain ([this] (const RoutedMidiEvent& e)
     {
         const auto m = e.toMessage();
         const int ch = m.getChannel();
         const juce::uint8 chMask = (e.resolved != 0 || ch <= 0) ? kSlotMaskAll
                                                                 : midiRouting.channelMask (ch);
-        handleRoutedMessage (m, (juce::uint8) (e.mask & chMask));
+        handleRoutedMessage (m, (juce::uint8) (e.mask & chMask), 0);
     });
+}
+
+// MODULATION PHASE 2 — one arp-generated note into the slots its source key was
+// routed to. Audio thread; `e.mask` is already the intersection of that key's
+// routing with the arp's per-slot enable.
+void JMSignatureProcessor::applyArpEvent (const ArpEvent& e)
+{
+    for (int i = 0; i < 4; ++i)
+    {
+        if ((e.mask & (1u << i)) == 0) continue;
+        if (e.noteOn)
+        {
+            if (slotEnable[(size_t) i]->load() >= 0.5f)
+                engines[(size_t) i].noteOn (e.note, e.velocity);
+        }
+        else
+            engines[(size_t) i].noteOff (e.note);
+    }
 }
 
 void JMSignatureProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
@@ -305,22 +346,68 @@ void JMSignatureProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     for (const auto meta : uiMidiBuf_)
         routedQueue.push (meta.getMessage(), kSlotMaskAll, true);
 
-    handleMidiAtBlockStart (midi);
-
     for (int i = 0; i < 4; ++i) mod.setMacroBase (i, macroParams[(size_t) i]->load());
 
-    // MODULATION PHASE 1 — the control block. When nothing is modulated the
-    // whole host block is rendered in one go exactly as before; when the matrix
-    // is live the block is split into 64-sample chunks (research section 1.5: ~689 Hz
-    // at 44.1 kHz, which comfortably tracks a 40 Hz LFO and matches SynthLab /
-    // the low end of u-he's range) and the matrix is evaluated on each boundary.
+    // MODULATION PHASE 2 — the arp latches its settings and computes every step
+    // onset in this block BEFORE the render loop, from ppq (research §3.7), and
+    // handles the transport edges (stop / locate / loop wrap) here so the flush
+    // happens in the same block the edge is detected.
+    auto arpSink = [this] (const ArpEvent& e) { applyArpEvent (e); };
+    arp.beginBlock (transport, n, mod.arpOffset (amRate), mod.arpOffset (amGate), arpSink);
+
+    // The untimestamped sources are delivered AFTER beginBlock so that a key
+    // played on a MIDI device or the on-screen keyboard starts its phrase inside
+    // THIS block's schedule rather than the previous one's.
+    drainRoutedQueueAtBlockStart();
+
+    // ------------------------------------------------------------------------
+    // MODULATION PHASE 1 + 2 — the render loop, now SUB-BLOCK SPLIT.
+    //
+    // Phase 1 split the block into 64-sample control chunks for the matrix.
+    // Phase 2 additionally splits at every host MIDI timestamp and every arp
+    // event, with JUCE's own 32-sample minimum subdivision (research §3.7:
+    // juce::Synthesiser's setMinimumRenderingSubdivisionSize default) so a burst
+    // of near-simultaneous events does not shred the block into 1-sample
+    // fragments. Events landing inside the first 32 samples of a sub-block are
+    // applied at its start, which is exactly JUCE's non-strict batching.
+    //
+    // NOTE THIS ALSO FIXES ORDINARY PLAY: handleMidiAtBlockStart() used to throw
+    // every timestamp away and apply the whole buffer at sample 0 (research trap
+    // 13). Notes now start where the host said they do.
+    constexpr int kMinSubBlock = 32;
     const int chunk = mod.active() ? juce::jmin (n, kModControlBlock) : n;
-    for (int off = 0; off < n; off += chunk)
+    auto mIt = midi.begin();
+    const auto mEnd = midi.end();
+    int pos = 0;
+    while (pos < n)
     {
-        const int len = juce::jmin (chunk, n - off);
-        mod.process (transport, len, off, *this);
-        renderChunk (buffer, off, len);
+        const int cut = juce::jmin (n, pos + kMinSubBlock);
+
+        // 1. host MIDI due at or within the minimum subdivision of this point
+        while (mIt != mEnd && (*mIt).samplePosition < cut)
+        {
+            const auto meta = *mIt;
+            const auto m = meta.getMessage();
+            const int ch = m.getChannel();
+            handleRoutedMessage (m, ch > 0 ? midiRouting.channelMask (ch) : kSlotMaskAll, pos);
+            ++mIt;
+        }
+        // 2. arp note-offs then note-ons due here (off strictly before on at a
+        //    100% gate — research §3.5)
+        arp.emitDue (cut, arpSink);
+
+        // 3. how far can we render before the next event or control boundary?
+        int end = juce::jmin (n, pos + chunk);
+        if (mIt != mEnd) end = juce::jmin (end, juce::jmax (cut, (*mIt).samplePosition));
+        const int arpNext = arp.nextEventOffset();
+        if (arpNext > pos) end = juce::jmin (end, juce::jmax (cut, arpNext));
+        end = juce::jlimit (juce::jmin (cut, n), n, end);
+
+        mod.process (transport, end - pos, pos, *this);
+        renderChunk (buffer, pos, end - pos);
+        pos = end;
     }
+    arp.endBlock();
 
     // master volume — smoothed (R3/D: it was a per-block constant, so every
     // knob move stepped the gain at the block boundary and zipped). Modulation
@@ -513,6 +600,17 @@ bool JMSignatureProcessor::resolveModDest (const juce::String& path, ModDest& ou
         if (! path.endsWith (".rate")) return false;
         out.kind = (int) ModDestKind::lfoRate;
         out.unit = i;
+        return true;
+    }
+    // ---- PHASE 2: the two arp parameters that are musically worth sweeping
+    //      (research/task: rate and gate). Mode, octaves and the per-slot enables
+    //      are structural and are deliberately not offered.
+    if (path.startsWith ("arp."))
+    {
+        const int t = path == "arp.rate" ? amRate : path == "arp.gate" ? amGate : -1;
+        if (t < 0) return false;
+        out.kind = (int) ModDestKind::arpParam;
+        out.unit = t;
         return true;
     }
     if (path.startsWith ("mod.row"))
@@ -754,6 +852,21 @@ void JMSignatureProcessor::publishModulation()
     pubGroup_ = std::move (groups);
     pubGroupDest_ = std::move (groupDests);
     pubGroupPath_ = std::move (groupPaths);
+
+    publishArp();     // one call site republishes the whole modulation system
+}
+
+// MODULATION PHASE 2 — the arp settings cross to the audio thread through the
+// same double-buffered POD + atomic index idiom the routing table uses
+// (research §4.1): the message thread fills the inactive buffer and publishes it
+// with one release store, the audio thread does one acquire load per block. The
+// audio thread's own state (held notes, latch, sounding set) is NEVER touched
+// from here — a settings change that invalidates the schedule is resolved on the
+// audio thread, in ArpEngine::beginBlock, where the note-off flush can happen.
+void JMSignatureProcessor::publishArp()
+{
+    arp.editBuffer() = state.mod.arp;
+    arp.publish();
 }
 
 void JMSignatureProcessor::refreshModulationBases()
@@ -814,6 +927,8 @@ juce::StringArray JMSignatureProcessor::modDestinationPaths() const
     out.add ("host.masterVol");
     for (int m = 0; m < 4; ++m) out.add ("host.macro" + juce::String (m + 1));
     for (int i = 0; i < kNumLfos; ++i) out.add ("mod.lfo" + juce::String (i + 1) + ".rate");
+    out.add ("arp.rate");
+    out.add ("arp.gate");
     for (int i = 0; i < juce::jlimit (0, kMaxMatrixRows, state.mod.rowCount); ++i)
         out.add ("mod.row" + juce::String (i + 1) + ".depth");
     return out;
@@ -1017,6 +1132,8 @@ juce::String JMSignatureProcessor::paramDisplayName (const juce::String& path) c
             return p->getName (64);
         return path;
     }
+    if (path == "arp.rate") return "ARP  -  RATE (FREE)";
+    if (path == "arp.gate") return "ARP  -  GATE";
 
     juce::String prefix, rest;
     const FxRackState* rack = nullptr;

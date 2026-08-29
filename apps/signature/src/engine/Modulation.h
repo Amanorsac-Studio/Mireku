@@ -407,8 +407,15 @@ enum class ModDestKind : int
     fxBypass,    // FX unit bypass           (slot, unit)
     hostParam,   // APVTS param, applied as an offset at point of use (unit = HostModTarget)
     lfoRate,     // cross-modulation         (unit = LFO index)
-    rowDepth     // cross-modulation         (unit = matrix row index)
+    rowDepth,    // cross-modulation         (unit = matrix row index)
+    arpParam     // PHASE 2 arpeggiator      (unit = ArpModTarget)
 };
+
+/// PHASE 2: the arp parameters modulation may reach. Rate and gate are the two
+/// that make musical sense to sweep; mode, octaves and the per-slot enables are
+/// structural and would only produce a stutter (and would invalidate the step
+/// schedule on every control block).
+enum ArpModTarget { amRate = 0, amGate, amCount };
 
 /// The continuous host parameters modulation may reach. Bool/int host params
 /// (solo, limiter, transpose, octave, bend range) are deliberately NOT offerable
@@ -612,6 +619,7 @@ public:
         for (int i = 0; i < kNumLfos; ++i) nextLfoRateOffset_[(size_t) i] = 0.0f;
         for (int i = 0; i < kMaxMatrixRows; ++i) nextRowDepthOffset_[(size_t) i] = 0.0f;
         for (int i = 0; i < hmCount; ++i) hostOffset_[(size_t) i] = 0.0f;
+        for (int i = 0; i < amCount; ++i) arpOffset_[(size_t) i] = 0.0f;
 
         for (int g = 0; g < t.groupCount; ++g)
         {
@@ -627,6 +635,9 @@ public:
                     break;
                 case ModDestKind::rowDepth:
                     if (d.unit >= 0 && d.unit < kMaxMatrixRows) nextRowDepthOffset_[(size_t) d.unit] = s;
+                    break;
+                case ModDestKind::arpParam:
+                    if (d.unit >= 0 && d.unit < amCount) arpOffset_[(size_t) d.unit] = s;
                     break;
                 default:
                     applier.applyModulatedValue (d, juce::jlimit (0.0f, 1.0f, groupBase (g) + s));
@@ -644,6 +655,15 @@ public:
     float hostOffset (int target) const
     {
         return target >= 0 && target < hmCount ? hostOffset_[(size_t) target] : 0.0f;
+    }
+
+    /// PHASE 2: the normalised offset for an arp parameter. Read once per host
+    /// block by ArpEngine::beginBlock (base + offset; the stored setting is never
+    /// written), so it carries the last control block's value — the same
+    /// one-block latch the cross-modulation destinations use.
+    float arpOffset (int target) const
+    {
+        return target >= 0 && target < amCount ? arpOffset_[(size_t) target] : 0.0f;
     }
 
     /// UI readback: the offset a published row is contributing right now.
@@ -669,6 +689,7 @@ private:
     std::array<float, kNumModSources> src_ {};
     std::array<float, kMaxModLinks> sum_ {};
     std::array<float, hmCount> hostOffset_ {};
+    std::array<float, amCount> arpOffset_ {};
     std::array<float, kNumLfos> lfoRateOffset_ {}, nextLfoRateOffset_ {};
     std::array<float, kMaxMatrixRows> rowDepthOffset_ {}, nextRowDepthOffset_ {};
 

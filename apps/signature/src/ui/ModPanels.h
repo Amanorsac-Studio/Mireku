@@ -450,6 +450,7 @@ private:
                                    + juce::String::charToString ((juce::juce_wchar) ('A' + p.substring (4, 5).getIntValue()))
                              : p.startsWith ("master.") ? "MASTER FX"
                              : p.startsWith ("mod.") ? "MODULATION"
+                             : p.startsWith ("arp.") ? "ARPEGGIATOR"
                              : "GLOBAL";
             if (sec != section) { m.addSectionHeader (sec); section = sec; }
             const bool cycles = proc_.modRowWouldCycle (idx_, row().source, p);
@@ -542,6 +543,269 @@ private:
     JMSignatureProcessor& proc_;
     ux::PlateButton clear_;
     juce::OwnedArray<MatrixRowEditor> rows_;
+};
+
+//==============================================================================
+// MODULATION PHASE 2 — THE ARP PANEL (spec §E).
+//
+// Opens from the bottom-bar ARP plate that shipped disabled in phase 1, in the
+// same ChromePanel overlay treatment as MOD MATRIX and LFO. Every surface is a
+// ux::Hardware register, every menu goes through jm::styledMenu, and every
+// colour and metric comes from Theme.h — no default JUCE chrome, and the
+// approved arrangement is untouched.
+class ArpPanel : public ChromePanel, private juce::Timer
+{
+public:
+    static constexpr int kWidth = 900, kHeight = 412;
+
+    explicit ArpPanel (JMSignatureProcessor& p) : ChromePanel ("Arpeggiator"), proc_ (p)
+    {
+        // ---- master enable + per-slot enable (spec: ONE global arp, per-slot on)
+        power_.onToggle = [this] (bool b) { arp().enabled = b ? 1 : 0; commit(); refresh(); };
+        addAndMakeVisible (power_);
+        for (int i = 0; i < 4; ++i)
+        {
+            auto& b = slot_[(size_t) i];
+            b.setButtonText (juce::String::charToString ((juce::juce_wchar) ('A' + i)));
+            b.setFontHeight (13.0f);
+            b.setClickingTogglesState (true);
+            b.onClick = [this, i]
+            {
+                const int bit = 1 << i;
+                arp().slotMask = slot_[(size_t) i].getToggleState() ? (arp().slotMask | bit)
+                                                                    : (arp().slotMask & ~bit);
+                commit();
+            };
+            addAndMakeVisible (b);
+        }
+
+        // ---- mode + turnaround
+        for (int i = 0; i < kNumArpModes; ++i) mode_.addItem (arpModeName (i), i + 1);
+        mode_.onChange = [this] { arp().mode = mode_.getSelectedId() - 1; commit(); refresh(); };
+        addAndMakeVisible (mode_);
+
+        // Research §3.1 / trap 7: the Up/Down turnaround is a documented fork
+        // (Arturia names both), not two more modes. EXCLUSIVE is the default.
+        turn_.addItem ("EXCLUSIVE", 1);
+        turn_.addItem ("INCLUSIVE", 2);
+        turn_.onChange = [this] { arp().inclusive = turn_.getSelectedId() == 2 ? 1 : 0; commit(); };
+        addAndMakeVisible (turn_);
+
+        // ---- rate: synced division (1/1 … 1/32 with dotted and triplet) or free Hz
+        {
+            int id = 1;
+            for (int idx : arpDivisionOrder()) { div_.addItem (divisionName (idx), id); divIds_.push_back (idx); ++id; }
+        }
+        div_.onChange = [this]
+        {
+            const int k = div_.getSelectedId() - 1;
+            if (k >= 0 && k < (int) divIds_.size()) arp().division = divIds_[(size_t) k];
+            commit();
+        };
+        addAndMakeVisible (div_);
+        sync_.onToggle = [this] (bool b) { arp().sync = b ? 1 : 0; commit(); refresh(); };
+        addAndMakeVisible (sync_);
+
+        rate_ = std::make_unique<PlainKnob> ("RATE", kArpRateMin, kArpRateMax, 6.0, 0);
+        rate_->setSkewForCentre (4.0);
+        rate_->format = [] (double v) { return juce::String (v, v < 1.0 ? 2 : 1) + " Hz"; };
+        rate_->onChange = [this] (double v) { arp().rateHz = (float) v; commit(); };
+        addAndMakeVisible (*rate_);
+
+        gate_ = std::make_unique<PlainKnob> ("GATE", 1.0, 100.0, 50.0, 1);
+        gate_->format = [] (double v) { return juce::String (juce::roundToInt (v)) + " %"; };
+        gate_->onChange = [this] (double v) { arp().gate = (float) v; commit(); };
+        addAndMakeVisible (*gate_);
+
+        // Research §3.4 / trap 9: "0-75% swing" means three different things
+        // across the MPC, "amount" and raw-fraction conventions. Ours is defined
+        // as the offbeat's position in its pair, p = 0.5 + swing/300, and the
+        // knob SAYS SO: 0 straight, 50 triplet, 75 max.
+        swing_ = std::make_unique<PlainKnob> ("SWING", 0.0, (double) kArpSwingMax, 0.0, 3);
+        swing_->format = [] (double v)
+        {
+            const int i = juce::roundToInt (v);
+            return juce::String (i) + " %" + (i == 0 ? "  STRAIGHT" : i == 50 ? "  TRIPLET"
+                                                    : i >= 75 ? "  MAX" : "");
+        };
+        swing_->onChange = [this] (double v) { arp().swing = (float) v; commit(); };
+        addAndMakeVisible (*swing_);
+
+        // ---- octaves + direction
+        for (int i = 1; i <= 4; ++i) oct_.addItem (juce::String (i), i);
+        oct_.onChange = [this] { arp().octaves = juce::jlimit (1, 4, oct_.getSelectedId()); commit(); };
+        addAndMakeVisible (oct_);
+        for (int i = 0; i < 3; ++i) octDir_.addItem (arpOctDirName (i), i + 1);
+        octDir_.onChange = [this] { arp().octDir = octDir_.getSelectedId() - 1; commit(); };
+        addAndMakeVisible (octDir_);
+
+        // ---- hold (the same latch the pedal drives; they OR together, rule 5)
+        hold_.onToggle = [this] (bool b) { arp().hold = b ? 1 : 0; commit(); };
+        addAndMakeVisible (hold_);
+
+        // ---- velocity
+        for (int i = 0; i < 3; ++i) vel_.addItem (arpVelModeName (i), i + 1);
+        vel_.onChange = [this] { arp().velMode = vel_.getSelectedId() - 1; commit(); refresh(); };
+        addAndMakeVisible (vel_);
+        fixed_ = std::make_unique<PlainKnob> ("LEVEL", 1.0, 127.0, 100.0, 4);
+        fixed_->format = [] (double v) { return juce::String (juce::roundToInt (v)); };
+        fixed_->onChange = [this] (double v) { arp().fixedVel = juce::roundToInt (v); commit(); };
+        addAndMakeVisible (*fixed_);
+        for (int i = 0; i < 4; ++i)
+        {
+            auto& b = accent_[(size_t) i];
+            b.setButtonText (juce::String (i + 1));
+            b.setFontHeight (11.0f);
+            b.setClickingTogglesState (true);
+            b.onClick = [this, i]
+            {
+                const int bit = 1 << i;
+                arp().accentMask = accent_[(size_t) i].getToggleState() ? (arp().accentMask | bit)
+                                                                       : (arp().accentMask & ~bit);
+                commit();
+            };
+            addAndMakeVisible (b);
+        }
+
+        refresh();
+        startTimerHz (12);
+    }
+
+    void refresh()
+    {
+        auto& a = arp();
+        power_.setState (a.enabled != 0);
+        for (int i = 0; i < 4; ++i)
+            slot_[(size_t) i].setToggleState ((a.slotMask & (1 << i)) != 0, juce::dontSendNotification);
+        mode_.setSelectedId (a.mode + 1, juce::dontSendNotification);
+        turn_.setSelectedId (a.inclusive != 0 ? 2 : 1, juce::dontSendNotification);
+        for (size_t k = 0; k < divIds_.size(); ++k)
+            if (divIds_[k] == a.division) div_.setSelectedId ((int) k + 1, juce::dontSendNotification);
+        sync_.setState (a.sync != 0);
+        rate_->setValue (a.rateHz);
+        gate_->setValue (a.gate);
+        swing_->setValue (a.swing);
+        oct_.setSelectedId (juce::jlimit (1, 4, a.octaves), juce::dontSendNotification);
+        octDir_.setSelectedId (a.octDir + 1, juce::dontSendNotification);
+        hold_.setState (a.hold != 0);
+        vel_.setSelectedId (a.velMode + 1, juce::dontSendNotification);
+        fixed_->setValue (a.fixedVel);
+        for (int i = 0; i < 4; ++i)
+            accent_[(size_t) i].setToggleState ((a.accentMask & (1 << i)) != 0, juce::dontSendNotification);
+
+        rate_->setEnabled (a.sync == 0);
+        div_.setEnabled (a.sync != 0);
+        turn_.setEnabled (a.mode == (int) ArpMode::upDown || a.mode == (int) ArpMode::downUp);
+        fixed_->setEnabled (a.velMode != (int) ArpVelMode::asPlayed);
+        for (auto& b : accent_) b.setEnabled (a.velMode == (int) ArpVelMode::accent);
+        repaint();
+    }
+
+    void contentResized (juce::Rectangle<int> area) override
+    {
+        auto head = area.removeFromTop (30);
+        power_.setBounds (head.removeFromLeft (60).withSizeKeepingCentre (52, 24));
+        head.removeFromLeft (26);
+        for (int i = 0; i < 4; ++i)
+        {
+            slot_[(size_t) i].setBounds (head.removeFromLeft (40).reduced (2, 1));
+            head.removeFromLeft (4);
+        }
+        head.removeFromLeft (30);
+        hold_.setBounds (head.removeFromLeft (56).withSizeKeepingCentre (52, 24));
+
+        area.removeFromTop (34);
+        auto knobs = area.removeFromTop (104);
+        auto cell = [&] (int w) { auto c = knobs.removeFromLeft (w); knobs.removeFromLeft (12); return c; };
+        rate_->setBounds (cell (110));
+        gate_->setBounds (cell (110));
+        swing_->setBounds (cell (150));
+
+        auto right = knobs;
+        auto r1 = right.removeFromTop (30);
+        mode_.setBounds (r1.removeFromLeft (150));
+        r1.removeFromLeft (14);
+        turn_.setBounds (r1.removeFromLeft (140));
+        right.removeFromTop (22);
+        auto r2 = right.removeFromTop (30);
+        div_.setBounds (r2.removeFromLeft (100));
+        r2.removeFromLeft (12);
+        sync_.setBounds (r2.removeFromLeft (56).withSizeKeepingCentre (52, 22));
+        r2.removeFromLeft (24);
+        oct_.setBounds (r2.removeFromLeft (60));
+        r2.removeFromLeft (12);
+        octDir_.setBounds (r2.removeFromLeft (100));
+
+        area.removeFromTop (40);
+        auto v = area.removeFromTop (96);
+        fixed_->setBounds (v.removeFromLeft (104));
+        v.removeFromLeft (18);
+        auto vr = v.removeFromTop (44).withTrimmedTop (14);
+        vel_.setBounds (vr.removeFromLeft (150).withHeight (28));
+        vr.removeFromLeft (24);
+        for (int i = 0; i < 4; ++i)
+        {
+            accent_[(size_t) i].setBounds (vr.removeFromLeft (36).withHeight (28));
+            vr.removeFromLeft (5);
+        }
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        ChromePanel::paint (g);
+        g.setFont (Theme::display (10.0f));
+        auto cap = [&] (juce::Component& c, const char* t)
+        {
+            g.setColour (Theme::muted);
+            g.drawText (t, c.getX(), c.getY() - 13, c.getWidth() + 80, 12,
+                        juce::Justification::centredLeft, false);
+        };
+        cap (power_, "ARP");
+        cap (slot_[0], "SLOTS");
+        cap (hold_, "HOLD");
+        cap (mode_, "MODE");
+        cap (turn_, "TURNAROUND");
+        cap (div_, "DIVISION");
+        cap (sync_, "SYNC");
+        cap (oct_, "OCT");
+        cap (octDir_, "OCT DIR");
+        cap (vel_, "VELOCITY");
+        cap (accent_[0], "ACCENT (4 STEPS)");
+
+        // The two sentences that keep the feature honest: the swing scale
+        // (research trap 9) and the pedal rule (research §3.6 — the pedal holds
+        // the KEYS, and slots with the arp off still sustain normally).
+        g.setColour (Theme::muted.withAlpha (0.8f));
+        g.setFont (Theme::ui (10.5f));
+        g.drawText ("SWING: OFFBEAT SITS AT 0.5 + SWING/300 OF THE PAIR - 0% STRAIGHT, 50% TRIPLET, 75% MAX.",
+                    18, getHeight() - 44, getWidth() - 36, 14, juce::Justification::centredLeft, false);
+        g.drawText ("SUSTAIN PEDAL LATCHES THE ARP (IT HOLDS THE KEYS, NOT THE SOUND). "
+                    "SLOTS WITH THE ARP OFF PLAY THE CHORD AS PLAYED AND SUSTAIN NORMALLY.",
+                    18, getHeight() - 28, getWidth() - 36, 14, juce::Justification::centredLeft, false);
+
+        // live lamp: lit while the arp is actually generating notes
+        const bool live = proc_.arp.patternLength() > 0 && arpConst().enabled != 0;
+        g.setColour (live ? Theme::okGreen : Theme::goldDark.withAlpha (0.6f));
+        g.fillEllipse ((float) getWidth() - 128.0f, 60.0f, 9.0f, 9.0f);
+        g.setColour (live ? Theme::goldHi : Theme::muted);
+        g.setFont (Theme::value (11.0f));
+        g.drawText (proc_.arp.latchIsActive() ? "LATCHED" : (live ? "RUNNING" : "IDLE"),
+                    getWidth() - 114, 54, 96, 20, juce::Justification::centredLeft, false);
+    }
+
+private:
+    void timerCallback() override { repaint(); }
+    ArpSettings& arp() { return proc_.state.mod.arp; }
+    const ArpSettings& arpConst() const { return proc_.state.mod.arp; }
+    void commit() { proc_.publishArp(); repaint(); }
+
+    JMSignatureProcessor& proc_;
+    PillToggle power_, sync_, hold_;
+    std::array<ux::PlateButton, 4> slot_;
+    std::array<ux::PlateButton, 4> accent_;
+    juce::ComboBox mode_, turn_, div_, oct_, octDir_, vel_;
+    std::vector<int> divIds_;
+    std::unique_ptr<PlainKnob> rate_, gate_, swing_, fixed_;
 };
 
 } // namespace jm

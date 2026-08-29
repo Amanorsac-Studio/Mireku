@@ -1013,6 +1013,502 @@ static void testMatrixSummingAndControlRate()
     CHECK (true, "cross-modulating an LFO rate completes (one control block of latency, no cycle)");
 }
 
+//==============================================================================
+//                     MODULATION PHASE 2 — ARPEGGIATOR
+//
+// The point of these tests is the things that actually break: the turnaround and
+// its two degenerate cases, the note set changing mid-pattern, octave expansion,
+// the swing scale (which the research flagged as ambiguous across three
+// conventions), the gate floor, the five sustain-pedal rules, and the transport
+// edges. Ordering is asserted against ArpEngine::buildPattern — the exact
+// function the audio thread runs — and timing against a driven block loop that
+// mirrors processBlock's sub-block split.
+//==============================================================================
+
+static std::vector<int> arpOrder (std::vector<int> notes, const ArpSettings& s)
+{
+    std::vector<ArpEngine::Note> in;
+    int o = 0;
+    for (int n : notes) in.push_back (ArpEngine::Note { n, 100, 0x0F, ++o });
+    std::vector<ArpEngine::Note> out ((size_t) kMaxArpPattern);
+    const int len = ArpEngine::buildPattern (in.data(), (int) in.size(), s, out.data(), kMaxArpPattern);
+    std::vector<int> r;
+    for (int i = 0; i < len; ++i) r.push_back (out[(size_t) i].note);
+    return r;
+}
+static bool eq (const std::vector<int>& a, std::vector<int> b) { return a == b; }
+
+static void testArpNoteOrdering()
+{
+    std::printf ("\n== Arp note ordering, mode by mode (research 3.1) ==\n");
+    const std::vector<int> triad { 60, 64, 67 };
+    ArpSettings s;
+
+    s.mode = (int) ArpMode::up;       CHECK (eq (arpOrder (triad, s), { 60, 64, 67 }), "UP = ascending");
+    s.mode = (int) ArpMode::down;     CHECK (eq (arpOrder (triad, s), { 67, 64, 60 }), "DOWN = descending");
+    s.mode = (int) ArpMode::chord;    CHECK (eq (arpOrder (triad, s), { 60, 64, 67 }), "CHORD = one step holding every note");
+    s.mode = (int) ArpMode::asPlayed;
+    CHECK (eq (arpOrder ({ 64, 60, 67 }, s), { 64, 60, 67 }), "AS PLAYED keeps the order the keys were struck");
+    s.mode = (int) ArpMode::random;
+    CHECK (arpOrder (triad, s).size() == 3, "RANDOM draws from the n-note set (shuffled bag)");
+
+    // --- the turnaround: cycle length n / 2n / 2n-2 (research 3.1)
+    s.mode = (int) ArpMode::upDown;   s.inclusive = 0;
+    CHECK (eq (arpOrder (triad, s), { 60, 64, 67, 64 }), "UP/DOWN exclusive = 2n-2, extremes not repeated");
+    s.inclusive = 1;
+    CHECK (eq (arpOrder (triad, s), { 60, 64, 67, 67, 64, 60 }), "UP/DOWN inclusive = 2n, extremes repeated");
+    s.mode = (int) ArpMode::downUp;   s.inclusive = 0;
+    CHECK (eq (arpOrder (triad, s), { 67, 64, 60, 64 }), "DOWN/UP exclusive = 2n-2");
+    s.inclusive = 1;
+    CHECK (eq (arpOrder (triad, s), { 67, 64, 60, 60, 64, 67 }), "DOWN/UP inclusive = 2n");
+
+    // --- the degenerate cases 2n-2 divides by zero at (trap 7)
+    s.mode = (int) ArpMode::upDown;   s.inclusive = 0;
+    CHECK (eq (arpOrder ({ 60 }, s), { 60 }), "UP/DOWN exclusive, 1 note -> 1 step (not 0)");
+    CHECK (eq (arpOrder ({ 60, 64 }, s), { 60, 64 }), "UP/DOWN exclusive, 2 notes -> 2 steps (not 0)");
+    s.mode = (int) ArpMode::downUp;
+    CHECK (eq (arpOrder ({ 60 }, s), { 60 }), "DOWN/UP exclusive, 1 note -> 1 step");
+    CHECK (eq (arpOrder ({ 60, 64 }, s), { 64, 60 }), "DOWN/UP exclusive, 2 notes -> 2 steps, high first");
+    s.inclusive = 1;
+    s.mode = (int) ArpMode::upDown;
+    CHECK (eq (arpOrder ({ 60 }, s), { 60 }), "UP/DOWN inclusive, 1 note -> 1 step");
+    CHECK (eq (arpOrder ({ 60, 64 }, s), { 60, 64, 64, 60 }), "UP/DOWN inclusive, 2 notes -> 4 steps");
+
+    // --- octave expansion: FLATTEN first, then order (research 3.3, Bitwig "Thin")
+    s = ArpSettings {};
+    s.mode = (int) ArpMode::up;  s.octaves = 2;  s.octDir = (int) ArpOctDir::up;
+    CHECK (eq (arpOrder ({ 60, 64 }, s), { 60, 64, 72, 76 }), "octaves UP: one linear shape, not a repeated pattern");
+    s.octDir = (int) ArpOctDir::down;
+    CHECK (eq (arpOrder ({ 60, 64 }, s), { 48, 52, 60, 64 }), "octaves DOWN extends below the played notes");
+    s.octaves = 3; s.octDir = (int) ArpOctDir::both;
+    CHECK (eq (arpOrder ({ 60, 64 }, s), { 48, 52, 60, 64, 72, 76 }), "octaves BOTH centres the expansion");
+    s.octaves = 4; s.octDir = (int) ArpOctDir::up; s.mode = (int) ArpMode::down;
+    CHECK (arpOrder ({ 60 }, s).size() == 4 && arpOrder ({ 60 }, s)[0] == 96,
+           "octaves compose with DOWN: 4 octaves, highest first");
+    s.mode = (int) ArpMode::upDown; s.inclusive = 0; s.octaves = 2; s.octDir = (int) ArpOctDir::up;
+    CHECK (eq (arpOrder ({ 60, 64 }, s), { 60, 64, 72, 76, 72, 64 }),
+           "octave expansion happens BEFORE the turnaround (cycle 2*4-2 = 6)");
+}
+
+//------------------------------------------------------------------ block driver
+namespace arptest {
+
+struct FakeHead : juce::AudioPlayHead
+{
+    double ppq = 0.0, bpm = 120.0;
+    bool playing = true;
+    juce::Optional<PositionInfo> getPosition() const override
+    {
+        PositionInfo p;
+        p.setPpqPosition (ppq);
+        p.setBpm (bpm);
+        p.setIsPlaying (playing);
+        return p;
+    }
+};
+
+struct Rec { long long sample; int note; int vel; bool on; int mask; };
+
+/// Mirrors processBlock's loop: beginBlock, then walk the block splitting at
+/// every arp event, then endBlock. The minimum subdivision is 1 here (the
+/// processor uses JUCE's 32) so the tests can measure exact sample offsets.
+struct Runner
+{
+    ArpEngine arp;
+    TransportClock clock;
+    FakeHead head;
+    double sr = 48000.0;
+    long long t = 0;
+    int cur = 0;
+    std::vector<Rec> ev;
+
+    void publish (const ArpSettings& s) { arp.editBuffer() = s; arp.publish(); }
+    void prepare (const ArpSettings& s) { arp.prepare (sr); publish (s); block (64); ev.clear(); }
+
+    void block (int n)
+    {
+        clock.update (&head, n, sr);
+        auto sink = [this] (const ArpEvent& e)
+        { ev.push_back ({ t + cur, e.note, e.velocity, e.noteOn, (int) e.mask }); };
+        cur = 0;
+        arp.beginBlock (clock, n, 0.0f, 0.0f, sink);
+        int pos = 0;
+        while (pos < n)
+        {
+            const int cut = juce::jmin (n, pos + 1);
+            cur = pos;
+            arp.emitDue (cut, sink);
+            int end = juce::jmin (n, pos + 64);
+            const int an = arp.nextEventOffset();
+            if (an > pos) end = juce::jmin (end, juce::jmax (cut, an));
+            end = juce::jlimit (juce::jmin (cut, n), n, end);
+            pos = end;
+        }
+        arp.endBlock();
+        if (head.playing) head.ppq += (double) n * head.bpm / (60.0 * sr);
+        t += n;
+    }
+
+    void run (int blocks, int n = 512) { for (int i = 0; i < blocks; ++i) block (n); }
+
+    void noteOn (int note, int vel = 100, juce::uint8 mask = 0x0F)
+    {
+        cur = 0;
+        arp.noteOn (note, vel, mask, 0, [this] (const ArpEvent& e)
+                    { ev.push_back ({ t, e.note, e.velocity, e.noteOn, (int) e.mask }); });
+    }
+    void noteOff (int note)
+    {
+        arp.noteOff (note, [this] (const ArpEvent& e)
+                     { ev.push_back ({ t, e.note, 0, e.noteOn, (int) e.mask }); });
+    }
+    void pedal (bool down)
+    {
+        arp.setPedal (down, [this] (const ArpEvent& e)
+                      { ev.push_back ({ t, e.note, 0, e.noteOn, (int) e.mask }); });
+    }
+
+    std::vector<long long> onsets() const
+    {
+        std::vector<long long> o;
+        for (auto& e : ev) if (e.on) o.push_back (e.sample);
+        return o;
+    }
+    int countOff() const { int n = 0; for (auto& e : ev) if (! e.on) ++n; return n; }
+};
+
+} // namespace arptest
+
+static void testArpSwingAndGate()
+{
+    using namespace arptest;
+    std::printf ("\n== Arp swing scale p = 0.5 + swing/300, and gate (research 3.4 / 3.5) ==\n");
+
+    // 1/8 at 120 BPM, 48 kHz: one step = 0.5 quarter = 12000 samples.
+    const double stepSamples = 12000.0;
+    ArpSettings s;
+    s.enabled = 1; s.sync = 1; s.division = 3;    // 1/8
+    s.gate = 50.0f; s.mode = (int) ArpMode::up;
+
+    auto onsetsFor = [&] (float swing)
+    {
+        Runner r;
+        auto ss = s; ss.swing = swing;
+        r.arp.prepare (48000.0);
+        r.publish (ss);
+        r.block (64);                       // latch the settings
+        r.ev.clear();
+        r.t = 0; r.head.ppq = 0.0;
+        r.noteOn (60);
+        r.run (24, 4096);
+        return r.onsets();
+    };
+
+    auto near = [] (long long a, double b, double tol) { return std::abs ((double) a - b) <= tol; };
+
+    auto o0 = onsetsFor (0.0f);
+    bool straight = o0.size() >= 6;
+    for (size_t i = 0; i < o0.size() && straight; ++i)
+        straight = near (o0[i], (double) i * stepSamples, 2.0);
+    CHECK (straight, "swing 0% = straight: every onset on k * step");
+
+    auto o50 = onsetsFor (50.0f);
+    // p = 0.5 + 50/300 = 2/3 -> the offbeat sits one third of a step late
+    bool triplet = o50.size() >= 6;
+    for (size_t i = 0; i < o50.size() && triplet; ++i)
+    {
+        const double expect = (double) i * stepSamples + ((i & 1) ? stepSamples / 3.0 : 0.0);
+        triplet = near (o50[i], expect, 2.0);
+    }
+    CHECK (triplet, "swing 50% = triplet feel: offbeat at p = 2/3 of the pair");
+
+    auto o75 = onsetsFor (75.0f);
+    bool maxSwing = o75.size() >= 6;
+    for (size_t i = 0; i < o75.size() && maxSwing; ++i)
+    {
+        const double expect = (double) i * stepSamples + ((i & 1) ? stepSamples * 0.5 : 0.0);
+        maxSwing = near (o75[i], expect, 2.0);
+    }
+    CHECK (maxSwing, "swing 75% = the MPC ceiling: offbeat at p = 0.75 of the pair");
+    CHECK (arpSwingPairPosition (0.0) == 0.5 && std::abs (arpSwingPairPosition (50.0) - 2.0 / 3.0) < 1e-9
+           && arpSwingPairPosition (75.0) == 0.75, "the swing formula itself: 0 / 50 / 75 -> 0.5 / 2÷3 / 0.75");
+
+    // ---- gate proportion, including a very short one
+    auto gateLen = [&] (float gate, int division)
+    {
+        Runner r;
+        auto ss = s; ss.gate = gate; ss.division = division; ss.swing = 0.0f;
+        r.arp.prepare (48000.0);
+        r.publish (ss);
+        r.block (64);
+        r.ev.clear(); r.t = 0; r.head.ppq = 0.0;
+        r.noteOn (60);
+        r.run (8, 4096);
+        long long on = -1, off = -1;
+        for (auto& e : r.ev)
+        {
+            if (e.on && on < 0) on = e.sample;
+            else if (! e.on && on >= 0 && off < 0) off = e.sample;
+        }
+        return std::pair<long long, long long> { on, off };
+    };
+
+    auto g50 = gateLen (50.0f, 3);
+    CHECK (g50.first >= 0 && std::abs ((double) (g50.second - g50.first) - stepSamples * 0.5) <= 2.0,
+           "gate 50% at 1/8 -> note-off half a step after the note-on");
+    auto g100 = gateLen (100.0f, 3);
+    CHECK (std::abs ((double) (g100.second - g100.first) - stepSamples) <= 2.0,
+           "gate 100% -> off lands on the next on, and is emitted strictly before it");
+    auto g1 = gateLen (1.0f, 0);                      // 1% at 1/32 = 3000-sample step
+    CHECK (g1.second > g1.first, "a very short gate never puts the note-off on the note-on's own sample (trap 10)");
+    CHECK (g1.second - g1.first >= 1 && g1.second - g1.first <= 40,
+           "gate 1% at 1/32 is ~30 samples and at least 1");
+}
+
+static void testArpSustainRules()
+{
+    using namespace arptest;
+    std::printf ("\n== Arp latch: the five sustain-pedal rules (research 3.6) ==\n");
+    ArpSettings s;
+    s.enabled = 1; s.sync = 1; s.division = 3; s.mode = (int) ArpMode::up; s.gate = 50.0f;
+
+    // RULE 1 is a routing rule (CC64 is never forwarded to an arp-driven slot's
+    // SamplerEngine) and is asserted end to end in SnapshotCheck against the real
+    // processor. Rules 2-5 live here.
+
+    // ---- RULE 2: pedal down latches the keys held at that moment; keys played
+    //      while the pedal is down are ADDED.
+    {
+        Runner r; r.arp.prepare (48000.0); r.publish (s); r.block (64);
+        r.noteOn (60); r.noteOn (64);
+        r.pedal (true);
+        CHECK (r.arp.latchIsActive() && r.arp.latchedNoteCount() == 2,
+               "rule 2: pedal down captures the keys physically held right now");
+        r.noteOff (60); r.noteOff (64);
+        r.block (512);
+        CHECK (r.arp.patternLength() == 2, "rule 2: releasing the keys does NOT stop the pattern");
+        r.noteOn (67);                                   // one key still down? no -> new phrase
+        CHECK (r.arp.latchedNoteCount() == 1 && r.arp.patternNoteAt (0) == 67,
+               "rule 3: all keys up + pedal down -> the next note CLEARS and starts a new chord");
+        r.noteOn (71);                                   // 67 still down -> add
+        CHECK (r.arp.latchedNoteCount() == 2 && r.arp.patternNoteAt (1) == 71,
+               "rule 3: a key still down -> new notes are ADDED to the latched chord");
+    }
+
+    // ---- RULE 4: pedal up falls back to the physically held keys; with none,
+    //      the pattern stops and the sounding step gets an explicit note-off.
+    {
+        Runner r; r.arp.prepare (48000.0); r.publish (s); r.block (64);
+        r.noteOn (60); r.noteOn (64);
+        r.pedal (true);
+        r.noteOff (64);                                  // 60 still physically down
+        r.run (4, 512);
+        r.ev.clear();
+        r.pedal (false);
+        CHECK (! r.arp.latchIsActive() && r.arp.patternLength() == 1 && r.arp.patternNoteAt (0) == 60,
+               "rule 4: pedal up falls back to the keys still physically held");
+        r.noteOff (60);
+        CHECK (r.arp.patternLength() == 0, "rule 4: no keys left -> the pattern stops");
+        CHECK (r.arp.soundingCount() == 0, "rule 4: every generated note-on got an explicit note-off (trap 12)");
+    }
+
+    // ---- RULE 5: the Hold control is the same latch and ORs with the pedal.
+    {
+        Runner r; r.arp.prepare (48000.0); r.publish (s); r.block (64);
+        r.noteOn (60); r.noteOn (64);
+        auto h = s; h.hold = 1;
+        r.publish (h);
+        r.block (512);
+        CHECK (r.arp.latchIsActive() && r.arp.latchedNoteCount() == 2, "rule 5: HOLD latches like the pedal");
+        r.noteOff (60); r.noteOff (64);
+        r.block (512);
+        CHECK (r.arp.patternLength() == 2, "rule 5: HOLD keeps the chord after the keys are released");
+        r.pedal (true);
+        r.publish (s);                                   // Hold off, pedal still down
+        r.block (512);
+        CHECK (r.arp.latchIsActive(), "rule 5: pedal and HOLD OR together (dropping one keeps the latch)");
+        r.pedal (false);
+        r.block (512);
+        CHECK (! r.arp.latchIsActive() && r.arp.patternLength() == 0,
+               "rule 5: with both off and no keys down, the latch and the pattern end");
+        CHECK (r.arp.soundingCount() == 0, "no stuck notes after the latch is dropped");
+    }
+
+    // ---- RULE 6: transport stop stops the latch and flushes IN THE SAME BLOCK.
+    {
+        Runner r; r.arp.prepare (48000.0); r.publish (s); r.block (64);
+        r.noteOn (60); r.noteOn (64);
+        r.pedal (true);
+        r.noteOff (60); r.noteOff (64);
+        r.run (6, 4096);        // far enough in that a step is actually sounding
+        r.ev.clear();
+        r.head.playing = false;
+        r.block (512);
+        CHECK (r.arp.soundingCount() == 0 && r.countOff() > 0,
+               "rule 6: transport stop flushes note-offs in the same block and drops the latch");
+        CHECK (r.arp.patternLength() == 0, "rule 6: the latched chord is released on transport stop");
+    }
+}
+
+static void testArpTransportAndPattern()
+{
+    using namespace arptest;
+    std::printf ("\n== Arp transport edges and pattern continuity (research 3.2 / 3.7) ==\n");
+    const double spq = 48000.0 * 60.0 / 120.0;         // 24000 samples per quarter
+    ArpSettings s;
+    s.enabled = 1; s.sync = 1; s.division = 3;         // 1/8 = 0.5 quarter
+    s.mode = (int) ArpMode::up; s.gate = 50.0f;
+
+    // ---- the pattern lands ON THE BEAT, not where the key went down
+    {
+        Runner r; r.arp.prepare (48000.0); r.publish (s); r.block (64);
+        r.ev.clear(); r.t = 0;
+        r.head.ppq = 0.30;                              // mid-way between grid points
+        r.noteOn (60);
+        r.run (4, 4096);
+        auto o = r.onsets();
+        // first onset should be at ppq 0.5 -> (0.5-0.30) quarters after the block start
+        const double expect = (0.5 - 0.30) * spq;
+        CHECK (! o.empty() && std::abs ((double) o[0] - expect) <= 2.0,
+               "a phrase starts on the next grid step, not at the key-down sample");
+    }
+
+    auto everyOnsetOnGrid = [&] (const Runner& r, double blockStartPpq)
+    {
+        auto o = r.onsets();
+        if (o.empty()) return false;
+        for (auto x : o)
+        {
+            const double ppq = blockStartPpq + (double) x / spq;
+            if (std::abs (ppq / 0.5 - std::round (ppq / 0.5)) > 1.0e-3) return false;
+        }
+        return true;
+    };
+
+    // ---- a locate re-aligns with no repair, and flushes the sounding step
+    {
+        Runner r;
+        auto g = s; g.gate = 90.0f;                     // so a note IS sounding at the jump
+        r.arp.prepare (48000.0); r.publish (g); r.block (64);
+        r.t = 0; r.head.ppq = 0.0;
+        r.noteOn (60); r.noteOn (64); r.noteOn (67);
+        r.run (5, 4096);                                // 20480 samples -> steps at 0 and 12000
+        const int idxBefore = r.arp.currentStepIndex();
+        CHECK (idxBefore == 2, "two steps of a three-note pattern have fired");
+        r.ev.clear(); r.t = 0;
+        r.head.ppq = 8.25;                              // LOCATE
+        r.block (64);                                   // too short to contain a step
+        CHECK (r.countOff() > 0, "a locate flushes the sounding arp note (trap 12)");
+        CHECK (r.arp.currentStepIndex() == idxBefore,
+               "a locate does NOT restart the pattern index (research 3.2 / trap 8)");
+        const double p0 = r.head.ppq;
+        r.ev.clear(); r.t = 0;
+        r.run (3, 4096);
+        CHECK (everyOnsetOnGrid (r, p0), "after a locate every onset is still exactly on the division grid");
+    }
+
+    // ---- a loop wrap (backwards jump) behaves identically
+    {
+        Runner r; r.arp.prepare (48000.0); r.publish (s); r.block (64);
+        r.t = 0; r.head.ppq = 4.0;
+        r.noteOn (60);
+        r.run (4, 4096);
+        r.head.ppq = 0.0;                               // LOOP WRAP
+        const double p0 = r.head.ppq;
+        r.ev.clear(); r.t = 0;
+        r.run (3, 4096);
+        CHECK (everyOnsetOnGrid (r, p0), "a loop wrap resolves with no repair - the schedule is stateless in ppq");
+    }
+
+    // ---- a tempo change is absorbed because scheduling is in the ppq domain
+    {
+        Runner r; r.arp.prepare (48000.0); r.publish (s); r.block (64);
+        r.t = 0; r.head.ppq = 0.0;
+        r.noteOn (60);
+        r.run (3, 8192);
+        r.head.bpm = 60.0;                              // half tempo
+        r.ev.clear(); r.t = 0;
+        r.run (12, 8192);
+        auto o = r.onsets();
+        bool doubled = o.size() >= 3;
+        for (size_t i = 1; i < o.size() && doubled; ++i)
+            doubled = std::abs ((double) (o[i] - o[i - 1]) - 24000.0) <= 4.0;
+        CHECK (doubled, "tempo 120 -> 60 doubles the step in samples (1/8 = 24000 @ 48k)");
+    }
+
+    // ---- notes added and removed MID-PATTERN: clamp the index, never restart
+    {
+        Runner r; r.arp.prepare (48000.0); r.publish (s); r.block (64);
+        r.t = 0; r.head.ppq = 0.0;
+        r.noteOn (60); r.noteOn (64); r.noteOn (67);
+        r.run (2, 12000);                                // two steps fired
+        const int idx = r.arp.currentStepIndex();
+        CHECK (idx == 2, "two steps fired -> the index sits at 2");
+        r.noteOn (72);
+        CHECK (r.arp.patternLength() == 4 && r.arp.currentStepIndex() == 2,
+               "adding a note mid-pattern re-derives the pattern and KEEPS the index (trap 8)");
+        r.noteOff (72); r.noteOff (67);
+        CHECK (r.arp.patternLength() == 2 && r.arp.currentStepIndex() == 0,
+               "removing notes clamps the index into the shorter cycle instead of running off the end");
+        CHECK (r.arp.patternNoteAt (0) == 60 && r.arp.patternNoteAt (1) == 64,
+               "the surviving notes are re-sorted in place");
+    }
+
+    // ---- free-run: no transport at all (standalone) starts at the first note
+    {
+        Runner r;
+        auto f = s; f.sync = 0; f.rateHz = 10.0f;        // 4800 samples per step
+        r.arp.prepare (48000.0);
+        r.publish (f);
+        r.head.playing = false;
+        r.block (64);
+        r.ev.clear(); r.t = 0;
+        r.noteOn (60);
+        r.run (4, 4096);
+        auto o = r.onsets();
+        bool spaced = o.size() >= 3 && o[0] == 0;
+        for (size_t i = 1; i < o.size() && spaced; ++i)
+            spaced = std::abs ((double) (o[i] - o[i - 1]) - 4800.0) <= 2.0;
+        CHECK (spaced, "standalone / stopped: free-run starts at the first note and holds the rate");
+    }
+
+    // ---- velocity modes
+    {
+        Runner r;
+        auto v = s; v.velMode = (int) ArpVelMode::fixed; v.fixedVel = 77;
+        r.arp.prepare (48000.0); r.publish (v); r.block (64);
+        r.t = 0; r.head.ppq = 0.0;
+        r.noteOn (60, 33);
+        r.run (2, 12000);
+        bool allFixed = ! r.ev.empty();
+        for (auto& e : r.ev) if (e.on) allFixed = allFixed && e.vel == 77;
+        CHECK (allFixed, "velocity FIXED overrides the played velocity");
+
+        Runner r2;
+        auto a = s; a.velMode = (int) ArpVelMode::accent; a.fixedVel = 100; a.accentMask = 0x1;
+        r2.arp.prepare (48000.0); r2.publish (a); r2.block (64);
+        r2.t = 0; r2.head.ppq = 0.0;
+        r2.noteOn (60, 33);
+        r2.run (4, 12000);
+        std::vector<int> vels;
+        for (auto& e : r2.ev) if (e.on) vels.push_back (e.vel);
+        CHECK (vels.size() >= 4 && vels[0] == 100 && vels[1] < 100 && vels[2] < 100 && vels[3] < 100,
+               "velocity ACCENT hits step 1 of each 4 and softens the rest");
+    }
+
+    // ---- per-note slot mask survives into the generated notes
+    {
+        Runner r; r.arp.prepare (48000.0); r.publish (s); r.block (64);
+        r.t = 0; r.head.ppq = 0.0;
+        r.noteOn (60, 100, 0x04);                        // slot C only
+        r.run (2, 12000);
+        bool masked = false, allC = true;
+        for (auto& e : r.ev) { if (e.on) masked = true; allC = allC && e.mask == 0x04; }
+        CHECK (masked && allC,
+               "a generated note carries the SOURCE key's slot mask, so per-slot enable routes it");
+    }
+}
+
 static void testModStateRoundTrip()
 {
     std::printf ("\n== Modulation state serialization (versioned) ==\n");
@@ -1061,6 +1557,54 @@ static void testModStateRoundTrip()
            "a pre-modulation state loads as a clean default (nothing breaks)");
 }
 
+static void testArpStateRoundTrip()
+{
+    std::printf ("\n== Arp state serialization (mod block v1 -> v2) ==\n");
+    ModState a;
+    a.arp.enabled = 1;
+    a.arp.slotMask = 0x04;                    // slot C only
+    a.arp.mode = (int) ArpMode::downUp;
+    a.arp.inclusive = 1;
+    a.arp.sync = 0;
+    a.arp.rateHz = 9.5f;
+    a.arp.division = 13;                      // 1/16t
+    a.arp.gate = 33.0f;
+    a.arp.octaves = 3;
+    a.arp.octDir = (int) ArpOctDir::both;
+    a.arp.swing = 50.0f;
+    a.arp.hold = 1;
+    a.arp.velMode = (int) ArpVelMode::accent;
+    a.arp.fixedVel = 111;
+    a.arp.accentMask = 0x5;
+
+    ModState b;
+    b.fromVar (juce::JSON::parse (juce::JSON::toString (a.toVar())));
+    CHECK (b.arp.enabled == 1 && b.arp.slotMask == 0x04 && b.arp.mode == (int) ArpMode::downUp
+           && b.arp.inclusive == 1 && b.arp.sync == 0 && b.arp.division == 13,
+           "arp routing / mode / turnaround / sync survive a round trip");
+    CHECK (std::abs (b.arp.rateHz - 9.5f) < 1e-4f && std::abs (b.arp.gate - 33.0f) < 1e-4f
+           && std::abs (b.arp.swing - 50.0f) < 1e-4f,
+           "arp rate, gate and swing survive a round trip");
+    CHECK (b.arp.octaves == 3 && b.arp.octDir == (int) ArpOctDir::both && b.arp.hold == 1
+           && b.arp.velMode == (int) ArpVelMode::accent && b.arp.fixedVel == 111 && b.arp.accentMask == 0x5,
+           "arp octaves, hold, velocity mode and accent pattern survive a round trip");
+    CHECK ((int) juce::JSON::parse (juce::JSON::toString (a.toVar())).getProperty ("version", 0) == 2
+           && ModState::kVersion == 2, "the mod block is now version 2");
+
+    // A PHASE 1 state has a "mod" block but no "arp" property inside it. It must
+    // load with the arpeggiator OFF — which is exactly how that state behaved.
+    auto v1 = juce::JSON::parse (R"({"version":1,"rowCount":8,"lfos":[],"rows":[
+        {"source":"lfo1","dest":"slot0.engine.bark","min":0.0,"max":1.0,
+         "curve":1.0,"depth":0.5,"invert":false,"enabled":true}]})");
+    ModState old;
+    old.fromVar (v1);
+    CHECK (old.arp.enabled == 0 && old.rows[0].source == ModSource::lfo1
+           && old.rows[0].destPath == "slot0.engine.bark",
+           "a version-1 mod block still loads, keeps its rows, and has the arp off");
+    CHECK (old.arp.mode == (int) ArpMode::up && old.arp.inclusive == 0 && old.arp.octaves == 1,
+           "the phase-2 defaults are Up, EXCLUSIVE turnaround, 1 octave");
+}
+
 //==============================================================================
 int main()
 {
@@ -1084,6 +1628,12 @@ int main()
     testLfoFadeAndRandom();
     testMatrixSummingAndControlRate();
     testModStateRoundTrip();
+    // MODULATION PHASE 2 — arpeggiator
+    testArpNoteOrdering();
+    testArpSwingAndGate();
+    testArpSustainRules();
+    testArpTransportAndPattern();
+    testArpStateRoundTrip();
     std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL TESTS PASSED" : "TESTS FAILED",
                  failures, failures == 1 ? "" : "s");
     return failures == 0 ? 0 : 1;

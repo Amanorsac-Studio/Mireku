@@ -1090,9 +1090,9 @@ public:
         btns_[0].setClickingTogglesState (true);
         btns_[0].onClick = std::move (onKeyboard);
 
-        // MODULATION PHASE 1 — MOD MATRIX and LFO are live now, opening as
-        // overlays in the same treatment as the macro editor and the settings
-        // window (spec §F). ARP stays a disabled placeholder: it is phase 2.
+        // MODULATION PHASE 1 — MOD MATRIX and LFO open as overlays in the same
+        // treatment as the macro editor and the settings window (spec §F).
+        // PHASE 2 — ARP joins them; nothing about the arrangement changed.
         btns_[1].onClick = [this]
         {
             if (auto* h = OverlayHost::find (this))
@@ -1104,7 +1104,11 @@ public:
             if (auto* h = OverlayHost::find (this))
                 h->showOverlay (std::make_unique<LfoPanel> (proc_), LfoPanel::kWidth, LfoPanel::kHeight);
         };
-        btns_[3].setEnabled (false);        // ARP — phase 2, deliberately inert
+        btns_[3].onClick = [this]
+        {
+            if (auto* h = OverlayHost::find (this))
+                h->showOverlay (std::make_unique<ArpPanel> (proc_), ArpPanel::kWidth, ArpPanel::kHeight);
+        };
     }
 
     void refresh() { repaint(); }

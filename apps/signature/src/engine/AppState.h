@@ -6,6 +6,7 @@
 #include "FxDsp.h"
 #include "Library.h"
 #include "Modulation.h"
+#include "Arp.h"
 
 namespace jm {
 
@@ -231,17 +232,40 @@ struct MatrixRow
 
 struct ModState
 {
-    static constexpr int kVersion = 1;
+    // v1 = phase 1 (LFOs + matrix). v2 = phase 2, which appends ONE property,
+    // "arp". A v1 state simply has no "arp" and loads with the arpeggiator off,
+    // which is exactly how that state behaved when it was written.
+    static constexpr int kVersion = 2;
 
     std::array<LfoSettings, kNumLfos> lfos {};
     std::array<MatrixRow, kMaxMatrixRows> rows {};
     int rowCount = kDefaultMatrixRows;
+    ArpSettings arp {};              // MODULATION PHASE 2
 
     juce::var toVar() const
     {
         auto* o = new juce::DynamicObject();
         o->setProperty ("version", kVersion);
         o->setProperty ("rowCount", rowCount);
+        {
+            auto* a = new juce::DynamicObject();
+            a->setProperty ("enabled", arp.enabled != 0);
+            a->setProperty ("slotMask", arp.slotMask);
+            a->setProperty ("mode", arp.mode);
+            a->setProperty ("sync", arp.sync != 0);
+            a->setProperty ("division", arp.division);
+            a->setProperty ("rateHz", arp.rateHz);
+            a->setProperty ("gate", arp.gate);
+            a->setProperty ("octaves", arp.octaves);
+            a->setProperty ("octDir", arp.octDir);
+            a->setProperty ("swing", arp.swing);
+            a->setProperty ("hold", arp.hold != 0);
+            a->setProperty ("velMode", arp.velMode);
+            a->setProperty ("fixedVel", arp.fixedVel);
+            a->setProperty ("accentMask", arp.accentMask);
+            a->setProperty ("inclusive", arp.inclusive != 0);
+            o->setProperty ("arp", juce::var (a));
+        }
         juce::Array<juce::var> ls;
         for (auto& l : lfos)
         {
@@ -283,6 +307,26 @@ struct ModState
         *this = ModState {};
         if (! v.isObject()) return;
         rowCount = juce::jlimit (1, kMaxMatrixRows, (int) v.getProperty ("rowCount", kDefaultMatrixRows));
+        // PHASE 2, appended: absent in a v1 state, which therefore loads with the
+        // arp off — the behaviour that state was saved with.
+        if (auto av = v.getProperty ("arp", juce::var()); av.isObject())
+        {
+            arp.enabled  = (bool) av.getProperty ("enabled", false) ? 1 : 0;
+            arp.slotMask = juce::jlimit (0, 0x0F, (int) av.getProperty ("slotMask", 0x0F));
+            arp.mode     = juce::jlimit (0, kNumArpModes - 1, (int) av.getProperty ("mode", 0));
+            arp.sync     = (bool) av.getProperty ("sync", true) ? 1 : 0;
+            arp.division = juce::jlimit (0, numDivisions() - 1, (int) av.getProperty ("division", 3));
+            arp.rateHz   = juce::jlimit (kArpRateMin, kArpRateMax, (float) (double) av.getProperty ("rateHz", 6.0));
+            arp.gate     = juce::jlimit (1.0f, 100.0f, (float) (double) av.getProperty ("gate", 50.0));
+            arp.octaves  = juce::jlimit (1, 4, (int) av.getProperty ("octaves", 1));
+            arp.octDir   = juce::jlimit (0, 2, (int) av.getProperty ("octDir", 0));
+            arp.swing    = juce::jlimit (0.0f, kArpSwingMax, (float) (double) av.getProperty ("swing", 0.0));
+            arp.hold     = (bool) av.getProperty ("hold", false) ? 1 : 0;
+            arp.velMode  = juce::jlimit (0, 2, (int) av.getProperty ("velMode", 0));
+            arp.fixedVel = juce::jlimit (1, 127, (int) av.getProperty ("fixedVel", 100));
+            arp.accentMask = juce::jlimit (0, 0x0F, (int) av.getProperty ("accentMask", 1));
+            arp.inclusive = (bool) av.getProperty ("inclusive", false) ? 1 : 0;
+        }
         if (auto* ls = v.getProperty ("lfos", juce::var()).getArray())
             for (int i = 0; i < juce::jmin (kNumLfos, ls->size()); ++i)
             {

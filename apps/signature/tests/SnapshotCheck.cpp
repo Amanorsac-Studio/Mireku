@@ -1132,7 +1132,7 @@ int main()
         ed->setSize (Theme::M::designW, Theme::M::designH);
         ed->setVisible (true);
 
-        // the bottom-bar plates are live now (ARP is deliberately still not)
+        // all four bottom-bar plates are live now — PHASE 2 lit the last one
         auto* bar = findOne<BottomBar> (*ed);
         std::vector<ux::PlateButton*> bb;
         if (bar != nullptr) findAll<ux::PlateButton> (*bar, bb);
@@ -1140,8 +1140,8 @@ int main()
         if (bb.size() == 4)
         {
             CHECK (bb[1]->isEnabled() && bb[2]->isEnabled(),
-                   "MOD MATRIX and LFO are live buttons now (they were disabled placeholders)");
-            CHECK (! bb[3]->isEnabled(), "ARP stays a disabled placeholder (it is phase 2)");
+                   "MOD MATRIX and LFO are live buttons (they were disabled placeholders)");
+            CHECK (bb[3]->isEnabled(), "ARP is live now too — the last placeholder is gone");
         }
 
         // a modulated knob advertises its span to the LookAndFeel
@@ -1208,6 +1208,240 @@ int main()
         for (auto& r : proc.state.mod.rows) r = MatrixRow {};
         for (auto& l : proc.state.mod.lfos) l = LfoSettings {};
         proc.publishModulation();
+        for (auto& e : proc.engines) e.allNotesOff (false);
+    }
+
+    //==========================================================================
+    // MODULATION PHASE 2 — the arpeggiator, through the REAL processor.
+    // Ordering, swing, gate and the latch rules are proved against the pure
+    // engine in EngineTests; what can only be proved HERE is the wiring: the
+    // routing fork, the pedal fork, sub-block MIDI timing, state and the panel.
+    //==========================================================================
+    std::printf ("\n== ARP (1) sub-block MIDI splitting (research §3.7 / trap 13) ==\n");
+    {
+        for (int i = 0; i < 4; ++i)
+            if (auto* p = proc.apvts.getParameter ("slotEnable" + juce::String (i)))
+                p->setValueNotifyingHost (i == 0 ? 1.0f : 0.0f);
+        proc.state.mod.arp = ArpSettings {};
+        proc.publishArp();
+        for (auto& e : proc.engines) e.allNotesOff (false);
+
+        // A note stamped at sample 400 of a 512-sample block. Before phase 2,
+        // handleMidiAtBlockStart() threw every timestamp away and applied the
+        // whole buffer at sample 0, so the note started 8.3 ms early.
+        //
+        // Measured on the VOICE, not the output, because the slot and master FX
+        // racks still carry tails from the previous section: after the block the
+        // voice has advanced by (512 - stamp) samples, so the ratio of the two
+        // playback positions is the timestamp, exactly.
+        juce::AudioBuffer<float> buf (2, 512);
+        auto renderAt = [&] (int stamp)
+        {
+            for (auto& e : proc.engines) e.allNotesOff (false);
+            juce::MidiBuffer mb;
+            mb.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 110), stamp);
+            buf.clear();
+            proc.processBlock (buf, mb);
+            const int v = proc.engines[0].firstActiveVoice();
+            return v >= 0 ? proc.engines[0].voicePosition (v) : -1.0;
+        };
+        const double p0 = renderAt (0);
+        const double p400 = renderAt (400);
+        std::printf ("  voice advance: stamped at 0 -> %.1f, stamped at 400 -> %.1f (ratio %.3f, want %.3f)\n",
+                     p0, p400, p0 > 0.0 ? p400 / p0 : -1.0, 112.0 / 512.0);
+        CHECK (p0 > 1.0 && p400 > 1.0, "both stampings start a voice");
+        CHECK (p0 > 1.0 && std::abs (p400 / p0 - 112.0 / 512.0) < 0.02,
+               "a note stamped at sample 400 starts THERE, not at the block start (trap 13)");
+        for (auto& e : proc.engines) e.allNotesOff (false);
+    }
+
+    std::printf ("\n== ARP (2) per-slot enable: arpeggiated into C, as played into A ==\n");
+    {
+        for (int i = 0; i < 4; ++i)
+            if (auto* p = proc.apvts.getParameter ("slotEnable" + juce::String (i)))
+                p->setValueNotifyingHost (1.0f);
+        for (auto& e : proc.engines) e.allNotesOff (false);
+
+        auto& a = proc.state.mod.arp;
+        a = ArpSettings {};
+        a.enabled = 1;
+        a.slotMask = 0x04;                    // slot C only
+        a.sync = 1; a.division = 3;           // 1/8
+        a.gate = 50.0f;
+        a.mode = (int) ArpMode::up;
+        proc.publishArp();
+
+        juce::AudioBuffer<float> buf (2, 512);
+        juce::MidiBuffer mb;
+        for (int n : { 60, 64, 67 }) mb.addEvent (juce::MidiMessage::noteOn (1, n, (juce::uint8) 100), 0);
+        buf.clear();
+        proc.processBlock (buf, mb);
+        mb.clear();
+
+        std::printf ("  voices A=%d B=%d C=%d D=%d, arp pattern %d\n",
+                     proc.engines[0].activeVoices(), proc.engines[1].activeVoices(),
+                     proc.engines[2].activeVoices(), proc.engines[3].activeVoices(),
+                     proc.arp.patternLength());
+        CHECK (proc.engines[0].activeVoices() > 0 && proc.engines[1].activeVoices() > 0
+               && proc.engines[3].activeVoices() > 0,
+               "slots with the arp OFF receive the whole chord as played");
+        CHECK (proc.arp.patternLength() == 3,
+               "the same three keys became a three-step arp pattern for slot C");
+        CHECK (proc.engines[2].activeVoices() <= 1,
+               "slot C is NOT playing the chord — the arp consumed those notes");
+
+        // run on until the arp has actually produced a note into slot C
+        for (int i = 0; i < 60; ++i) { buf.clear(); proc.processBlock (buf, mb); }
+        std::printf ("  after 60 blocks: C voices %d\n", proc.engines[2].activeVoices());
+        CHECK (proc.engines[2].activeVoices() > 0, "slot C is sounding arpeggiated steps");
+
+        // ---- rule 1: CC64 is consumed by the arp for slot C and forwarded to
+        //      the others, whose §5.4 behaviour is untouched.
+        mb.addEvent (juce::MidiMessage::controllerEvent (1, 64, 127), 0);
+        buf.clear(); proc.processBlock (buf, mb); mb.clear();
+        CHECK (proc.engines[0].sustainDown() && proc.engines[1].sustainDown()
+               && proc.engines[3].sustainDown(),
+               "rule 1: CC64 still reaches the slots the arp is OFF on (§5.4 unchanged)");
+        CHECK (! proc.engines[2].sustainDown(),
+               "rule 1: CC64 is CONSUMED by the arp and never sustains the arp-driven slot");
+        CHECK (proc.arp.latchIsActive(), "rule 1: the pedal latched the arp instead");
+
+        // releasing the keys leaves the arp latched but releases the other slots
+        for (int n : { 60, 64, 67 }) mb.addEvent (juce::MidiMessage::noteOff (1, n), 0);
+        buf.clear(); proc.processBlock (buf, mb); mb.clear();
+        CHECK (proc.arp.patternLength() == 3, "the latched arp chord survives the key release");
+
+        mb.addEvent (juce::MidiMessage::controllerEvent (1, 64, 0), 0);
+        buf.clear(); proc.processBlock (buf, mb); mb.clear();
+        for (int i = 0; i < 8; ++i) { buf.clear(); proc.processBlock (buf, mb); }
+        CHECK (proc.arp.patternLength() == 0 && proc.arp.soundingCount() == 0,
+               "pedal up with no keys held stops the pattern and leaves no stuck note");
+
+        proc.state.mod.arp = ArpSettings {};
+        proc.publishArp();
+        for (auto& e : proc.engines) e.allNotesOff (false);
+    }
+
+    std::printf ("\n== ARP (3) normal-play sustain (§5.4) is unchanged with the arp off ==\n");
+    {
+        proc.state.mod.arp = ArpSettings {};
+        proc.publishArp();
+        for (auto& e : proc.engines) e.allNotesOff (false);
+        juce::AudioBuffer<float> buf (2, 256);
+        juce::MidiBuffer mb;
+        mb.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+        mb.addEvent (juce::MidiMessage::controllerEvent (1, 64, 127), 8);
+        buf.clear(); proc.processBlock (buf, mb); mb.clear();
+        CHECK (proc.engines[0].sustainDown(), "arp off: CC64 reaches every routed slot as before");
+        mb.addEvent (juce::MidiMessage::noteOff (1, 60), 0);
+        buf.clear(); proc.processBlock (buf, mb); mb.clear();
+        CHECK (proc.engines[0].sustainedVoices() > 0,
+               "arp off: a note-off under the pedal is DEFERRED, exactly as §5.4 specifies");
+        mb.addEvent (juce::MidiMessage::controllerEvent (1, 64, 0), 0);
+        buf.clear(); proc.processBlock (buf, mb); mb.clear();
+        CHECK (proc.engines[0].sustainedVoices() == 0 && proc.engines[0].releasingVoices() > 0,
+               "arp off: lifting the pedal releases the deferred voices");
+        for (auto& e : proc.engines) e.allNotesOff (false);
+    }
+
+    std::printf ("\n== ARP (4) arp state, presets and modulation destinations ==\n");
+    {
+        auto& a = proc.state.mod.arp;
+        a.enabled = 1; a.mode = (int) ArpMode::upDown; a.inclusive = 1;
+        a.swing = 50.0f; a.gate = 42.0f; a.octaves = 3; a.octDir = (int) ArpOctDir::both;
+        a.slotMask = 0x0A; a.velMode = (int) ArpVelMode::accent; a.accentMask = 0x9;
+        proc.publishArp();
+
+        juce::MemoryBlock mb;
+        proc.getStateInformation (mb);
+        proc.state.mod = ModState {};
+        proc.publishModulation();
+        proc.setStateInformation (mb.getData(), (int) mb.getSize());
+        CHECK (proc.state.mod.arp.enabled == 1 && proc.state.mod.arp.mode == (int) ArpMode::upDown
+               && proc.state.mod.arp.inclusive == 1 && proc.state.mod.arp.slotMask == 0x0A
+               && std::abs (proc.state.mod.arp.swing - 50.0f) < 1e-3f
+               && std::abs (proc.state.mod.arp.gate - 42.0f) < 1e-3f
+               && proc.state.mod.arp.octaves == 3 && proc.state.mod.arp.accentMask == 0x9,
+               "arp settings survive a plugin state round trip");
+
+        auto slotPreset = proc.slotPresetToVar (0, "arpProbe");
+        CHECK (! slotPreset.hasProperty ("mod") && ! slotPreset.hasProperty ("arp"),
+               "a slot/.jmi-schema preset carries NO arp (spec decision 4)");
+        proc.savePerformancePreset ("ArpProbe");
+        auto pf = JMSignatureProcessor::performancePresetDir().getChildFile ("ArpProbe.json");
+        const auto pv = pf.existsAsFile() ? juce::JSON::parse (pf.loadFileAsString()) : juce::var();
+        CHECK (pf.existsAsFile()
+               && pv.getProperty ("mod", juce::var()).hasProperty ("arp"),
+               "a performance preset DOES carry the arp");
+        pf.deleteFile();
+
+        // arp.rate and arp.gate are matrix destinations
+        CHECK (proc.isModulatableDest ("arp.rate") && proc.isModulatableDest ("arp.gate"),
+               "arp RATE and GATE are valid modulation destinations");
+        CHECK (! proc.isModulatableDest ("arp.mode") && ! proc.isModulatableDest ("arp.octaves"),
+               "structural arp controls are deliberately NOT modulation destinations");
+        CHECK (proc.modDestinationPaths().contains ("arp.gate"),
+               "the row editor's destination menu offers them");
+        {
+            proc.state.mod.rows[0].source = ModSource::macro1;
+            proc.state.mod.rows[0].destPath = "arp.gate";
+            proc.state.mod.rows[0].depth = 1.0f;
+            proc.state.mod.rows[0].enabled = true;
+            proc.state.mod.arp = ArpSettings {};
+            proc.state.mod.arp.enabled = 1;
+            proc.state.mod.arp.gate = 10.0f;
+            proc.publishModulation();
+            if (auto* m1 = proc.apvts.getParameter ("macro1")) m1->setValueNotifyingHost (1.0f);
+            juce::AudioBuffer<float> b (2, 512);
+            juce::MidiBuffer empty;
+            for (int i = 0; i < 4; ++i) { b.clear(); proc.processBlock (b, empty); }
+            std::printf ("  gate 10%% + macro at full through the matrix -> %.1f%%\n", proc.arp.gateNow());
+            CHECK (proc.arp.gateNow() > 90.0f,
+                   "a matrix row sweeps the arp GATE as an OFFSET on the stored setting");
+            CHECK (std::abs (proc.state.mod.arp.gate - 10.0f) < 1e-4f,
+                   "...and the stored setting is never written (base + offset, trap 1)");
+            if (auto* m1 = proc.apvts.getParameter ("macro1")) m1->setValueNotifyingHost (0.0f);
+        }
+
+        proc.state.mod = ModState {};
+        proc.publishModulation();
+    }
+
+    std::printf ("\n== ARP (5) the ARP panel ==\n");
+    {
+        auto& a = proc.state.mod.arp;
+        a = ArpSettings {};
+        a.enabled = 1; a.slotMask = 0x0F;
+        a.mode = (int) ArpMode::upDown; a.inclusive = 0;
+        a.division = 3; a.gate = 62.0f; a.swing = 50.0f;
+        a.octaves = 2; a.octDir = (int) ArpOctDir::up;
+        a.velMode = (int) ArpVelMode::accent; a.accentMask = 0x5; a.fixedVel = 104;
+        proc.publishArp();
+
+        auto* ed = dynamic_cast<JMSignatureEditor*> (proc.createEditor());
+        ed->setSize (Theme::M::designW, Theme::M::designH);
+        ed->setVisible (true);
+        if (auto* host = OverlayHost::find (findOne<HeaderBar> (*ed)))
+        {
+            host->showOverlay (std::make_unique<ArpPanel> (proc), ArpPanel::kWidth, ArpPanel::kHeight);
+            auto* ap = findOne<ArpPanel> (*ed);
+            CHECK (ap != nullptr, "the ARP panel opens as an overlay from the bottom bar");
+            std::vector<PlainKnob*> ak;
+            if (ap != nullptr) findAll<PlainKnob> (*ap, ak);
+            CHECK ((int) ak.size() == 4, "the ARP panel exposes RATE, GATE, SWING and the velocity LEVEL");
+            std::vector<juce::ComboBox*> boxes;
+            if (ap != nullptr) findAll<juce::ComboBox> (*ap, boxes);
+            bool styled = ! boxes.empty();
+            for (auto* b : boxes)
+                if (dynamic_cast<JmLookAndFeel*> (&b->getLookAndFeel()) == nullptr) styled = false;
+            CHECK ((int) boxes.size() == 6, "MODE, TURNAROUND, DIVISION, OCT, OCT DIR and VELOCITY are menus");
+            CHECK (styled, "every control in the ARP panel is drawn by JmLookAndFeel (no JUCE chrome)");
+            savePng (*ed, "arp-panel.png");
+            host->closeOverlay();
+        }
+        delete ed;
+        proc.state.mod.arp = ArpSettings {};
+        proc.publishArp();
         for (auto& e : proc.engines) e.allNotesOff (false);
     }
 

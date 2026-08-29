@@ -125,6 +125,18 @@ public:
     ModEngine mod;
     TransportClock transport;
 
+    //====================================================== MODULATION PHASE 2
+    // ONE GLOBAL ARPEGGIATOR with per-slot enable (spec §E / decision 2). It
+    // consumes the held notes for the slots it is enabled on and generates
+    // timestamped note-ons/offs into the sub-block-split render path; slots with
+    // the arp off receive the very same keys as played, including the unchanged
+    // §5.4 sustain behaviour. See engine/Arp.h.
+    ArpEngine arp;
+
+    /// Message thread: publish `state.mod.arp` to the audio thread. Call after
+    /// ANY edit to an arp control.
+    void publishArp();
+
     /// Message thread: rebuild the resolved routing table from `state.macros` +
     /// `state.mod` and publish it to the audio thread. Call after ANY edit to a
     /// macro link, a matrix row or an LFO setting.
@@ -172,7 +184,14 @@ private:
     /// paths carry FX unit INDICES, so a rack edit must not leave a row pointing
     /// at the wrong unit.
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
-    void handleMidiAtBlockStart (const juce::MidiBuffer& midi);
+    /// Devices we opened ourselves + the on-screen keyboard: these arrive
+    /// asynchronously and carry no timestamp, so they legitimately apply at
+    /// offset 0 (research §4.2). The HOST buffer's events keep their timestamps
+    /// and are delivered by the sub-block loop in processBlock.
+    void drainRoutedQueueAtBlockStart();
+    /// PHASE 2 — one arp-generated note on/off into the slots its source key was
+    /// routed to. Audio thread.
+    void applyArpEvent (const ArpEvent& e);
     /// One control block of audio: the modulation matrix is evaluated, then the
     /// slots, their racks and the master rack render this chunk.
     void renderChunk (juce::AudioBuffer<float>& buffer, int startSample, int numSamples);
@@ -182,7 +201,11 @@ private:
     /// One entry point for every MIDI source (host buffer, routed devices, the
     /// on-screen keyboard/wheels). `mask` is the 4-bit slot mask this message is
     /// routed to; note-ons, note-offs, sustain, CCs and bend all honour it.
-    void handleRoutedMessage (const juce::MidiMessage& m, juce::uint8 mask);
+    /// `offset` is the sample position inside the current block at which the
+    /// message takes effect — PHASE 2 made this real (it used to be block start
+    /// for everything). The arp needs it so a phrase started while the transport
+    /// is stopped free-runs from the exact sample the key went down.
+    void handleRoutedMessage (const juce::MidiMessage& m, juce::uint8 mask, int offset);
     void enforceSolo (int enabledSlot);
 
     struct CcEvent { int cc; int value; };

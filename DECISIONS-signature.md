@@ -3,6 +3,216 @@
 Judgment calls made while building the JUCE plugin, per JM-BUILD-SPEC.md §5.
 Owner: JM Signature build agent.
 
+## Modulation Phase 2 — Arpeggiator (2026-08-28)
+
+Implements `docs/JM-MODULATION-SPEC.html` §E following `docs/MODULATION-RESEARCH.md`
+§3 (and §4.2). One global arp with per-slot enable, classic arp, not a step
+sequencer. New file: `src/engine/Arp.h`; new panel `ArpPanel` in `src/ui/ModPanels.h`.
+Phase 1 is untouched except for two additive hooks (a new destination kind and an
+offset accessor).
+
+### Sub-block MIDI splitting — the structural change, and what it fixes
+- **What was wrong.** `handleMidiAtBlockStart()` iterated the host buffer and
+  **discarded every timestamp**: the whole block was applied at sample 0
+  (research §3.7 / trap 13). Arp steps would have quantised to the block
+  boundary — 5.3 ms at 256 samples, 21 ms at 1024 — and ordinary play carried
+  the same error.
+- **What it is now.** `processBlock` walks the block, splitting at **every host
+  MIDI timestamp and every arp event**, with **JUCE's own 32-sample minimum
+  subdivision** (`juce::Synthesiser::setMinimumRenderingSubdivisionSize`'s
+  default, non-strict: an event inside the first 32 samples of a sub-block is
+  applied at its start). Phase 1's 64-sample control block is the third boundary
+  source, so the three compose: `chunk = min(64 when the matrix is live, next
+  MIDI event, next arp event)`. `handleRoutedMessage()` gained an `offset`
+  parameter; `handleMidiAtBlockStart()` is gone, replaced by
+  `drainRoutedQueueAtBlockStart()`.
+- **Ordinary play changed, deliberately and for the better**: a note stamped at
+  sample 400 of a 512-sample block now starts *there*. Asserted exactly in
+  `SnapshotCheck` by measuring the voice's playback advance — 512.0 samples when
+  stamped at 0, 112.0 when stamped at 400, ratio 0.219 = 112/512. **Nothing
+  depended on block-start application**: the two things that could have (the
+  §5.4 sustain-pedal deferral and the LFO first-note retrigger edge) are both
+  order-driven, not offset-driven, and are asserted unchanged.
+- **What deliberately still applies at offset 0**: the `RoutedMidiQueue` events
+  (standalone MIDI devices, the on-screen keyboard and wheels). They cross from
+  device/message threads through a lock-free FIFO of 5-byte PODs and carry no
+  timestamp; offset 0 is the honest answer (research §4.2). They are drained
+  **after** `arp.beginBlock()` so a key played there starts its phrase inside
+  the current block's schedule.
+
+### Step scheduling and the transport
+- **Step positions are derived from ppq**, never counted in samples:
+  `ppqStep = k·stepQuarters + (k odd ? swing : 0)`, converted to a sample offset
+  through `samplesPerQuarter`. While the transport rolls the grid is anchored to
+  the **timeline origin**, so a phrase lands on the beat the instant the
+  transport rolls rather than where the key went down (asserted). Stopped or in
+  standalone, the anchor is the **first note** (Korg's Key Sync semantics), and
+  the rest of that block is re-scheduled from the key-down sample so a long
+  buffer does not swallow the opening steps.
+- **`TransportClock` is reused, not duplicated** — there is still exactly one
+  `getPlayHead()` reader in the plugin, in `processBlock`.
+- Transport edges tested: **start** (pattern snaps to the grid), **locate**
+  (`jumped` → note-offs flushed, `k` recomputed from the new ppq, **pattern
+  index NOT restarted**), **loop wrap** (backwards jump, identical), **stop**
+  (note-offs flushed *in the same block the stop is detected*, because some
+  hosts stop calling `processBlock` immediately afterwards; the latch drops,
+  Omnisphere's precedent), and a **tempo change** (120 → 60 doubles the step in
+  samples because scheduling is in the ppq domain, which absorbs the tempo map
+  to within one block).
+
+### The five sustain-pedal rules (research §3.6), as implemented
+1. **The arp consumes CC64 for the slots it drives.** The routing fork happens
+   after the device/channel slot mask is resolved: `arpMask = routedMask &
+   arpSlotEnable`, `directMask = routedMask & ~arpMask`. CC64 reaches
+   `SamplerEngine::sustainPedal()` only for `directMask`, so a slot with the arp
+   off keeps §5.4 **byte for byte** (asserted) and an arp-driven slot never
+   sustains its steps' release tails into mush.
+2. **CC64 ≥ 64 → latch on.** The keys physically held at that moment enter the
+   latched set; keys played while the pedal is down are **added**.
+3. **New-phrase rule.** All physical keys up + pedal down → the next note-on
+   **clears** the latched set and starts a new chord. At least one key still
+   down → the note is **added**. (Ableton's Hold rule, Sequential's "relatch"
+   and Logic's Reset/Add boundary in one rule, no extra control.)
+4. **CC64 < 64 → latch off**: fall back to the physically held keys; with none,
+   the pattern stops and every generated note-on gets its explicit note-off.
+5. **The Hold control is the same latch and ORs with the pedal** — dropping one
+   while the other is engaged keeps the latch.
+Plus rule 6, transport stop stops the latch (above). Each rule is asserted
+separately in `EngineTests`; rule 1 end to end in `SnapshotCheck`.
+
+### Note ordering
+- Seven modes; the **Up/Down turnaround is an explicit Inclusive/Exclusive
+  toggle** (Arturia's names), **defaulting to Exclusive**. Cycle lengths n / 2n /
+  2n−2, with **n = 1 and n = 2 special-cased** — `2n−2` is 0 and would divide by
+  zero (research trap 7).
+- **Octave expansion is Bitwig "Thin"**: flatten notes × octaves into one linear
+  shape *first*, then order it, so the expansion composes with the turnaround
+  (2 notes × 2 octaves Up/Down exclusive = 6 steps, asserted). Every direction
+  produces exactly `octaves` transpositions — up `0…+12(n−1)`, down `0…−12(n−1)`,
+  **both centred** `12·(i − ⌊(n−1)/2⌋)` — so the cycle length does not change
+  with direction. **[INFER: no vendor names a "both" convention.]**
+- **Notes added or removed mid-pattern re-derive the pattern and clamp the
+  index** (`stepIndex %= cycleLength`); nothing ever restarts implicitly
+  (research §3.2 / trap 8). Asserted at 3 → 4 → 2 notes.
+- Random is the **shuffled bag** (Ableton's "Random Other"), not pure random.
+
+### Swing — the ambiguity resolved in code and on screen
+The research flagged the spec's bare "0–75%" as meaning three different things.
+Resolved as: **the control displays 0–75%, and the offbeat step's position
+within its pair is `p = 0.5 + swing/300`** — 0% straight, **50% = triplet feel**
+(p = 2/3), 75% = the MPC's documented ceiling (p = 0.75). The extra delay is
+`swing/150` of a step and always < one step. The knob prints "STRAIGHT" /
+"TRIPLET" / "MAX" at those values and the panel states the formula. Asserted at
+0 / 50 / 75 to within 2 samples at 48 kHz.
+**This is a deliberate deviation from research §3.4's `delay = T·S/100`** (which
+put triplet at 33.3%): the brief chose the pair-position form so the round
+display numbers land on musically meaningful feels. Same three-way ambiguity,
+different resolution, written down once.
+
+### Gate, velocity, routing
+- Gate 1–100% of the step, `max(1, …)` samples so a note-off never lands on its
+  own note-on's sample (trap 10); at 100% the off lands on the next on and is
+  **emitted strictly before it** (NI's documented ordering) — note-offs are
+  drained ahead of note-ons at every sub-block boundary. Nothing above 100%.
+- Velocity as played / fixed / **accent**: a 4-step pattern (bitmask, default
+  step 1) keyed to the **timeline step index** so it aligns to the bar;
+  unaccented steps take 55% of the level.
+- **Per-slot enable**: each held key carries its own `arpMask`, and generated
+  notes inherit it, so a chord routed to slots A–D with the arp enabled on C is
+  arpeggiated into C **and** played as-played into A, B and D — asserted through
+  the real processor.
+- **Anti-stuck-note contract**: every generated note-on is tracked as an exact
+  `(note, slot mask)` pair and flushed explicitly on arp-off, latch release,
+  transport stop, locate/loop jump, panic and `prepareToPlay`. CC 123 is never
+  used as a substitute (the MIDI spec says it does not release notes while the
+  receiver's hold pedal is on).
+
+### Modulation destinations, concurrency, state
+- `arp.rate` and `arp.gate` are matrix destinations (`ModDestKind::arpParam`),
+  applied as **normalised offsets on top of the stored setting** — the setting
+  itself is never written (asserted: gate 10% + a macro at full sweeps to >90%
+  while `state.mod.arp.gate` stays 10). Mode, octaves and the per-slot enables
+  are structural and deliberately **not** offered: modulating them would
+  invalidate the step schedule on every control block.
+  **Deviation worth naming:** rate modulation applies to the **free-run Hz**. A
+  synced division is an integer index into an append-only table; sweeping it
+  would jump the grid and force a schedule flush per control block, which is a
+  stutter, not a musical control. The panel labels the destination "RATE (FREE)".
+- The arp reads its two offsets once per host block, so they carry the previous
+  block's last control value — the same one-block latch phase 1 uses for
+  cross-modulation.
+- Settings cross to the audio thread through the **same double-buffered POD +
+  atomic index** idiom as the routing table (research §4.1). `publishArp()` is
+  called by `publishModulation()`, so every existing publish site covers it. The
+  message thread **never** touches the audio thread's held-note set, latch or
+  sounding set; a settings change that invalidates the schedule is resolved in
+  `beginBlock`, where the note-off flush can legally happen.
+- State: `ModState` version **1 → 2**, adding one appended `arp` property. A
+  version-1 state has no `arp` and loads with the arpeggiator **off** — exactly
+  how that state behaved when it was written (asserted). Arp settings ride in
+  plugin state **and** performance presets and are **absent from slot / `.jmi`
+  presets** (spec decision 4), asserted both ways.
+
+### UI
+- The bottom-bar **ARP plate is live**; it opens `ArpPanel` as an overlay in the
+  identical `ChromePanel` treatment as LFO and MOD MATRIX. `ux::Hardware`
+  registers, `jm::styledMenu`, every colour and metric from `Theme.h`, no
+  default JUCE chrome (asserted: every combo box is drawn by `JmLookAndFeel`),
+  the approved arrangement untouched and no new navigation.
+- Layout: ARP power + per-slot A–D + HOLD on the header row; RATE / GATE / SWING
+  knobs; MODE, TURNAROUND, DIVISION, SYNC, OCT, OCT DIR; velocity mode with a
+  LEVEL knob and four accent-step plates; a live IDLE / RUNNING / LATCHED lamp.
+  The two sentences that keep the feature honest — the swing formula and the
+  pedal rule — are printed on the panel.
+
+### Deviations from the research (all deliberate, none silent)
+1. **Swing scale**: the pair-position form `p = 0.5 + swing/300` rather than
+   §3.4's `delay = T·S/100`. Same ambiguity, different resolution, per the
+   brief. Documented above and on screen.
+2. **Rate modulation is free-run only** (above).
+3. **Octave "both" is centred** — no vendor documents a convention; centring
+   keeps the cycle length independent of direction.
+4. **The arp is not offered a Retrigger control** — research §3.2 recommends
+   shipping none in v1, and "arp starts at the first note" covers the
+   stopped/standalone case.
+5. A preset load does not `hardReset()` the arp from the message thread (that
+   would race the audio thread); the discontinuity is resolved on the audio
+   thread instead, and an arp turned off by the load flushes there.
+
+### Testing
+- `tests/EngineTests.cpp` (header-only, no processor), 63 new assertions:
+  every mode's exact note order; the inclusive/exclusive turnaround and both
+  degenerate cases in both directions; octave expansion up / down / both and its
+  composition with the turnaround; swing measured against `p = 0.5 + swing/300`
+  at 0 / 50 / 75% to ±2 samples; gate at 50 / 100 / 1% including the ≥1-sample
+  floor; **the five pedal rules each asserted separately** plus transport stop;
+  beat alignment after transport start, locate and loop wrap with the index
+  proved not to restart; a tempo change; notes added and removed mid-pattern;
+  free-run from the first note; fixed and accent velocity; the per-note slot mask
+  surviving into generated notes; and the versioned state round trip including a
+  v1 mod block.
+  The block driver mirrors `processBlock`'s loop exactly (with a 1-sample
+  minimum subdivision so the tests can measure exact onsets).
+- `tests/SnapshotCheck.cpp` (the real processor): sub-block timing measured on
+  the voice (512.0 vs 112.0 samples); per-slot enable routing — the same chord
+  arpeggiated into C while A, B and D play it as played; **rule 1** (CC64
+  consumed by C, forwarded to A/B/D, arp latched instead); **§5.4 normal-play
+  sustain unchanged with the arp off** (deferred note-off under the pedal,
+  released on pedal up); arp state round trip; arp in performance presets and
+  absent from slot presets; `arp.gate` swept by the matrix as an offset with the
+  stored setting untouched; the ARP panel opening with its four knobs and six
+  menus, all drawn by `JmLookAndFeel`; and the bottom bar's fourth plate live.
+
+### Verification
+- Release build (VST3 + Standalone + both console targets): **exit 0**.
+- `ctest -C Release`: **100% passed, 2/2**.
+- `JMSignatureSnapshot`: **SELF-CHECK PASSED (0 failures)**.
+- pluginval strictness 8 `--skip-gui-tests --validate-in-process` on the VST3:
+  **SUCCESS**.
+- New snapshot `apps/signature/build/snapshots/arp-panel.png`; the whole phase-1
+  and round-2/3/4 set regenerated alongside and unchanged.
+- The standalone was **not launched**, and no relink failed this round.
+
 ## Modulation Phase 1 — LFOs + matrix (2026-08-28)
 
 Implements `docs/JM-MODULATION-SPEC.html` §C/§D following the decisions in
@@ -121,7 +331,7 @@ the ARP bottom-bar plate is deliberately still a disabled placeholder. New files
 - MOD MATRIX and LFO open from the existing bottom-bar plates as overlays in the macro
   editor's `ChromePanel` treatment. `ux::Hardware` registers, `jm::styledMenu`, all
   metrics and colours from `Theme.h`; the approved arrangement is untouched and no new
-  navigation was added. ARP stays disabled.
+  navigation was added. ARP stayed disabled here; it is live as of Phase 2.
 - **Modulated-knob display** (the one genuinely new piece of drawing, research §1.3): the
   base value stays the pointer and the value arc; the **modulation span** is drawn as a
   translucent band on the same ring beneath the value arc, in the source's own colour
@@ -154,6 +364,8 @@ the ARP bottom-bar plate is deliberately still a disabled placeholder. New files
    phase 1 does not need it — global LFOs and note-derived sources are block-accurate by
    construction. The 64-sample control block is in place and composes with it, so phase 2
    inherits the structure. Logged as the remaining delta.
+   **RESOLVED in Phase 2** — the render path is sub-block split at MIDI
+   timestamps and arp events now; see "Modulation Phase 2 — Arpeggiator".
 2. **`modSourceColour` returns an ARGB `uint32`, not a `juce::Colour`.** `Modulation.h`
    is included by the console test target, which does not link `juce_graphics`.
 3. **Neutral note sources use `#C9B27A`, not `Theme::muted`**, purely for legibility of
@@ -216,7 +428,7 @@ the ARP bottom-bar plate is deliberately still a disabled placeholder. New files
 ## Engine
 - **Voice stealing:** free voice → quietest voice already in release → oldest voice. 64 voices shared per slot engine (4 engines = up to 256 total).
 - **Velocity crossfade:** equal-power over a ±8-velocity window centred on each layer boundary; gains below 1e-4 are dropped (so the overlap edges collapse to a single voice). Unit-tested.
-- **MIDI timing:** MIDI events are applied at block start (not sample-accurate splitting). At typical host block sizes (≤512 samples ≈ 11 ms) this is inaudible for a sampled instrument; noted as a possible refinement.
+- **MIDI timing:** ~~MIDI events are applied at block start (not sample-accurate splitting).~~ **Superseded by Modulation Phase 2**: the render path is split at every host MIDI timestamp (and every arp event) with JUCE's 32-sample minimum subdivision, so a note starts on the sample the host stamped it.
 - **Transpose + held notes:** changing transpose while notes are held can orphan a note-off mapping (standard synth caveat); all-notes-off/sustain logic still clears everything.
 - ~~Pitch bend is intentionally not implemented for v1 (sampled worlds; not in the spec).~~
   **Superseded by client review round 4 (item 2)**: pitch bend is implemented as a smoothed
@@ -248,7 +460,7 @@ the ARP bottom-bar plate is deliberately still a disabled placeholder. New files
 ## UI
 - All colors/fonts/metrics live in `src/Theme.h`; drawing in `JmLookAndFeel` + panel `paint()` using only Theme tokens. Flat per-module accent tints stand in for the future kente textures; the knob face draws a placeholder engraving where adinkra SVGs will slot in.
 - Editor is resizable with fixed aspect (1380×900 reference, scaled metrics).
-- Reference-image elements that are placeholder-only in v1: Mod Matrix / LFO / Arp bottom buttons (out of spec scope), cart/settings icons, license text (static). Keyboard button shows a working on-screen keyboard.
+- Reference-image elements that are placeholder-only in v1: cart/settings icons, license text (static). Keyboard button shows a working on-screen keyboard.
 
 ## Kente visual pass (client-requested, ahead of the UX doc)
 - `src/ui/KenteTexture.h`: procedural, deterministic (seeded by style+tint), tileable cloth renderer with a per-(style,tint) image cache. Two styles: **Weave** (Ewe/Ashanti patchwork — blocks of warp stripes, weft bands, checker, zigzag, sawtooth triangles, fine hatch, plus warp micro-threads and light weft seams; block rhythm from kente/02+03) and **Flat** (bold kente/01-style geometry for the Perform slot strips). All parameters/tints in `Theme.h` (`Theme::Kente`).

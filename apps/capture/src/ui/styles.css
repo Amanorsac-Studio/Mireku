@@ -1434,3 +1434,282 @@ input.jm-well[type='number']::-webkit-inner-spin-button {
 .jm-warning-strong {
   color: var(--jm-color-gold-hot);
 }
+
+/* ================================================================== */
+/* Auto Mode — loopback verification + patch queue                     */
+/*                                                                     */
+/* CHROME / plaque register only; every colour and size comes from a   */
+/* tokens.ts variable. Gold-edged advisories, never warning-red.       */
+/* ================================================================== */
+
+/* the signal chain, drawn as hardware rather than described in prose */
+.jm-chain {
+  display: flex;
+  align-items: stretch;
+  flex-wrap: wrap;
+  gap: calc(var(--jm-size-gap-unit) * 0.75);
+  padding: calc(var(--jm-size-gap-unit) * 1.25);
+  border-radius: var(--jm-size-radius-control);
+  background: linear-gradient(180deg, var(--jm-color-chrome-well-top), var(--jm-color-chrome-well-bottom));
+  border: 1px solid var(--jm-color-gold-dark);
+  box-shadow: inset 0 2px 6px var(--jm-color-shadow-inset);
+}
+
+.jm-chain-step {
+  flex: 1 1 0;
+  min-width: calc(var(--jm-size-gap-unit) * 12);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--jm-size-gap-unit) * 0.25);
+  padding: calc(var(--jm-size-gap-unit) * 0.75);
+  border-radius: var(--jm-size-radius-cell);
+  background: linear-gradient(180deg, var(--jm-color-plaque-top), var(--jm-color-plaque-bottom));
+  border: 1px solid var(--jm-color-panel-border-soft);
+  text-align: center;
+}
+
+.jm-chain-label {
+  font-family: var(--jm-font-display);
+  text-transform: uppercase;
+  letter-spacing: var(--jm-tracking-hardware);
+  font-size: var(--jm-type-value);
+  color: var(--jm-color-gold-bright);
+}
+
+.jm-chain-sub {
+  font-family: var(--jm-font-display);
+  text-transform: uppercase;
+  letter-spacing: var(--jm-tracking-label);
+  font-size: calc(var(--jm-type-label) * 0.9);
+  color: var(--jm-color-muted);
+}
+
+.jm-chain-arrow {
+  display: flex;
+  align-items: center;
+  color: var(--jm-color-gold);
+  font-size: var(--jm-type-value);
+}
+
+/* the two devices the check depends on, stated before it runs */
+.jm-path-row {
+  gap: calc(var(--jm-size-gap-unit) * 2);
+  align-items: stretch;
+}
+
+.jm-path-cell {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--jm-size-gap-unit) * 0.4);
+}
+
+.jm-path-value {
+  font-family: var(--jm-font-display);
+  text-transform: uppercase;
+  letter-spacing: var(--jm-tracking-hardware);
+  font-size: var(--jm-type-value);
+  color: var(--jm-color-cream);
+  padding: calc(var(--jm-size-gap-unit) * 0.6) calc(var(--jm-size-gap-unit));
+  border-radius: var(--jm-size-radius-cell);
+  background: linear-gradient(180deg, var(--jm-color-chrome-well-top), var(--jm-color-chrome-well-bottom));
+  border: 1px solid var(--jm-color-panel-border-soft);
+  box-shadow: inset 0 2px 5px var(--jm-color-shadow-inset);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.jm-path-value.missing {
+  color: var(--jm-color-muted);
+  border-color: var(--jm-color-gold-dark);
+}
+
+/* measured readings (latency / peak / decay) in the numeric register */
+.jm-readouts {
+  gap: calc(var(--jm-size-gap-unit) * 2);
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.jm-readout {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(var(--jm-size-gap-unit) * 0.25);
+  min-width: calc(var(--jm-size-gap-unit) * 13);
+}
+
+.jm-readout-label {
+  font-family: var(--jm-font-display);
+  text-transform: uppercase;
+  letter-spacing: var(--jm-tracking-chrome);
+  font-size: calc(var(--jm-type-label) * 0.9);
+  color: var(--jm-color-chrome-header);
+}
+
+.jm-readout-value {
+  font-family: var(--jm-font-numeric);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--jm-type-h2);
+  color: var(--jm-color-gold-hot);
+}
+
+/* the long "what to check next" body reads as prose, not as a chip */
+.jm-warning-body {
+  font-family: var(--jm-font-body);
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: var(--jm-type-body);
+  line-height: 1.5;
+  color: var(--jm-color-cream);
+  max-width: calc(var(--jm-size-gap-unit) * 74);
+  text-align: left;
+}
+
+/* ---- patch queue ---- */
+
+.jm-queue-settings {
+  gap: calc(var(--jm-size-gap-unit) * 1.5);
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.jm-queue-field {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--jm-size-gap-unit) * 0.4);
+  min-width: calc(var(--jm-size-gap-unit) * 18);
+}
+
+.jm-queue-field.grow {
+  flex: 1;
+}
+
+.jm-queue-progress {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--jm-size-gap-unit) * 0.6);
+}
+
+.jm-queue-progress-head {
+  display: flex;
+  justify-content: space-between;
+  gap: calc(var(--jm-size-gap-unit) * 2);
+  font-family: var(--jm-font-display);
+  text-transform: uppercase;
+  letter-spacing: var(--jm-tracking-label);
+  font-size: var(--jm-type-label);
+  color: var(--jm-color-muted);
+}
+
+.jm-queue-progress-now {
+  color: var(--jm-color-gold-bright);
+}
+
+.jm-queue-bar {
+  height: calc(var(--jm-size-gap-unit) * 0.9);
+  border-radius: var(--jm-size-radius-cell);
+  background: linear-gradient(180deg, var(--jm-color-chrome-well-top), var(--jm-color-chrome-well-bottom));
+  border: 1px solid var(--jm-color-panel-border-soft);
+  box-shadow: inset 0 2px 5px var(--jm-color-shadow-inset);
+  overflow: hidden;
+}
+
+.jm-queue-bar-fill {
+  height: 100%;
+  background: linear-gradient(180deg, var(--jm-color-plate-on-top), var(--jm-color-plate-on-bottom));
+  box-shadow: 0 0 10px var(--jm-color-gold-glow);
+  transition: width 240ms ease-out;
+}
+
+.jm-queue-list {
+  gap: calc(var(--jm-size-gap-unit) * 0.75);
+}
+
+.jm-queue-row {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--jm-size-gap-unit));
+  padding: calc(var(--jm-size-gap-unit) * 0.75) calc(var(--jm-size-gap-unit));
+  border-radius: var(--jm-size-radius-control);
+  background: linear-gradient(180deg, var(--jm-color-plaque-top), var(--jm-color-plaque-bottom));
+  border: 1px solid var(--jm-color-panel-border-soft);
+}
+
+.jm-queue-row.active {
+  border-color: var(--jm-color-gold);
+  box-shadow: inset 0 2px 0 var(--jm-color-cell-edge), 0 0 18px var(--jm-color-gold-glow-soft);
+}
+
+.jm-queue-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--jm-size-gap-unit) * 0.2);
+}
+
+.jm-queue-row-name {
+  font-family: var(--jm-font-display);
+  text-transform: uppercase;
+  letter-spacing: var(--jm-tracking-hardware);
+  font-size: var(--jm-type-value);
+  color: var(--jm-color-cream);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jm-queue-row-sub {
+  font-family: var(--jm-font-display);
+  text-transform: uppercase;
+  letter-spacing: var(--jm-tracking-label);
+  font-size: calc(var(--jm-type-label) * 0.9);
+  color: var(--jm-color-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* status chips stay inside the gold/cream coaching family — a skipped or
+   failed patch instructs, it does not alarm */
+.jm-queue-chip {
+  flex-shrink: 0;
+  min-width: calc(var(--jm-size-gap-unit) * 9);
+  text-align: center;
+  font-family: var(--jm-font-display);
+  text-transform: uppercase;
+  letter-spacing: var(--jm-tracking-label);
+  font-size: calc(var(--jm-type-label) * 0.9);
+  padding: calc(var(--jm-size-gap-unit) * 0.35) calc(var(--jm-size-gap-unit) * 0.75);
+  border-radius: var(--jm-size-radius-cell);
+  border: 1px solid var(--jm-color-panel-border-soft);
+  color: var(--jm-color-muted);
+  background: var(--jm-color-black);
+}
+
+.jm-queue-chip.running {
+  color: var(--jm-color-gold-hot);
+  border-color: var(--jm-color-gold);
+  background: linear-gradient(180deg, var(--jm-color-cell-top), var(--jm-color-cell-bottom));
+}
+
+.jm-queue-chip.done {
+  color: var(--jm-color-gold-bright);
+  border-color: var(--jm-color-gold-dark);
+}
+
+.jm-queue-chip.skipped,
+.jm-queue-chip.failed {
+  color: var(--jm-color-label-idle);
+  border-color: var(--jm-color-gold-dark);
+}
+
+.jm-patch-editor {
+  min-width: calc(var(--jm-size-gap-unit) * 44);
+  gap: calc(var(--jm-size-gap-unit) * 1.5);
+}

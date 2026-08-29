@@ -34,6 +34,12 @@ import { centerVelocity } from './velocity';
 export interface MidiOut {
   noteOn(note: number, velocity: number): void;
   noteOff(note: number): void;
+  /**
+   * Raw MIDI bytes. Optional so every existing implementation of this port
+   * keeps compiling; the patch queue uses it for Bank Select + Program Change,
+   * and reports a clear error when the port cannot send raw messages.
+   */
+  send?(bytes: number[]): void;
 }
 
 /**

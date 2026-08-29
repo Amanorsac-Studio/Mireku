@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import type { Channels, World } from '@jm/jmi-format/web';
 import { midiToNoteName, noteNameToMidi } from '@jm/jmi-format/web';
 import { createSession, planFromRange, serializeSession, type SessionConfig } from '../../engine/session';
+import { createPatchQueue } from '../../engine/patchQueue';
 import { useApp } from '../../state/appStore';
 import { bridge, services } from '../../state/services';
 import { Button, Field, Input, Label, Panel, Select, useWorldCloth } from '../common';
@@ -77,6 +78,8 @@ export function SetupWizard() {
     const session = createSession(config);
     await bridge.saveSession(config.id, serializeSession(session));
     setSession(session);
+    // a brand-new session starts with an empty patch queue
+    useApp.getState().setPatchQueue(createPatchQueue());
     // the wizard's picks become the remembered app-wide selection
     // output device and monitoring are app-wide settings the wizard does not
     // ask about (they live in the Devices panel) — carry them through unchanged

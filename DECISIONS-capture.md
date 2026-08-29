@@ -943,3 +943,207 @@ guided-mode UI, `src/state/services.ts`, `src/ui/theme/tokens.ts`,
 `src/ui/common.tsx`, `src/ui/fx/FxRackView.tsx` and Signature's `FxDsp.h` were
 all left alone. The fix is confined to `src/engine/fx/*`; no UI, no preset
 format, no parameter contract changed.
+
+---
+
+## Auto Mode against a real external source — loopback verification rebuilt, patch queue added (2026-08-29)
+
+Both gaps closed here exist for the same reason: Auto Mode had only ever been
+exercised against the *simulated* instrument in tests, never against a real
+external source. The driving use case is the client's: sample **software
+instruments** (Omnisphere, Keyscape) over loopback, not just hardware synths.
+
+```
+JM Capture --MIDI out--> virtual MIDI port --> plugin host (Omnisphere etc.)
+                                                     |
+JM Capture <--audio in-- VB-Cable / BlackHole <------+
+```
+
+### 68. The loopback check was verifying the wrong path
+The helper played a test tone out of **Capture's own output** and listened for
+it on the input. That proves only that the audio cable loops back on itself. In
+the real workflow Capture's output **is not in the path at all** — the chain is
+MIDI out → host → plugin → audio in. A rig could pass that test and still
+return nothing when the run started, which is exactly the two-hour failure
+Auto Mode's other guards (§48–57) were built to avoid.
+
+The correct mechanism was already in the codebase and simply unused by the
+helper: `autoMode.ts`'s latency ping comments that it takes "a short MIDI note
+or tone", and `services.ts` already sends `midiOut.noteOn(60, 100)` for it.
+
+**`src/engine/loopbackCheck.ts`** (new, pure, Node-testable) now owns the check:
+- **Primary test** — send one MIDI note (A4, velocity 100) to the selected MIDI
+  output, listen on the selected audio input, hold 1200 ms, release, listen 900
+  ms more. Reports the **measured round-trip latency**, which is the same number
+  `AutoModeEngine` then trims from the front of every take, plus the **return
+  peak** so gain staging can be judged before committing to a long run.
+- **Secondary test** — the old audio-only tone, kept but demoted and labelled as
+  a diagnostic whose only job is splitting a broken chain in two. Its copy says
+  in as many words that Capture's output is not in the run path, so this test
+  failing while the MIDI test passes is *not* an error.
+
+### 69. Failure modes are diagnosed distinctly, never "loop failed"
+`LoopbackIssue` is a closed set, and each verdict carries a title, the readings,
+and a message that says **what to check next**:
+
+| issue | how it is detected | what the message sends the user to do |
+|---|---|---|
+| `no-midi-output` | no MIDI output selected — **nothing is sent** | open Devices, pick the virtual port the host listens to (loopMIDI / IAC) or the physical out to the synth |
+| `no-audio-input` | no audio input selected — **nothing is recorded** | open Devices, pick CABLE Output / BlackHole, or the interface input the synth is plugged into |
+| `no-return` | note *was* sent, peak below −60 dBFS | in order: is the source receiving MIDI at all? is it armed on the channel? is its audio routed to the virtual cable rather than the speakers? then run the secondary test |
+| `too-quiet` | audio returned, peak between −60 and −40 dBFS | raise plugin output, host fader/master, interface gain; aim for −12…−6 dBFS on the loudest layer |
+| `no-decay` | tail RMS (last 200 ms) within 6 dB of the probe's peak | **advisory, not a failure** — normal for a sustaining patch (set Sustaining or leave Auto-detect); if it should decay, it is a stuck note / held CC64 |
+| `probe-failed` | the capture threw, or returned an empty buffer | re-scan devices; check nothing holds the input exclusively |
+
+The two "nothing selected" verdicts are returned **before any message goes out**,
+so a misconfigured rig never gets a phantom note. `no-return` is distinguished
+from them precisely by the fact that the note *did* leave — that is what makes
+the three diagnoses different advice rather than three phrasings of one.
+
+Thresholds (`ONSET_DB`, `RETURN_FLOOR_DB`, `QUIET_DB`, `NO_DECAY_REL_DB`,
+`TAIL_WINDOW_MS`) are exported constants and overridable per call, so the rules
+are explicit rather than magic numbers buried in a component. The onset gate is
+the same −60 dBFS `measureLatencyMs()` uses, so the latency this screen reports
+and the latency the run trims are the same measurement.
+
+### 70. Patch queue — one bundle per patch
+Sampling ten Keyscape patches meant ten manually configured sessions.
+**`src/engine/patchQueue.ts`** (new, pure) adds a queue the user fills once.
+
+- **Program Change with Bank Select**, emitted in the order the MIDI spec
+  requires: **CC0 (Bank MSB) → CC32 (Bank LSB) → Program Change**. A bank sent
+  *after* the PC selects nothing until the next one — the classic way to end up
+  sampling the wrong patch. Channel 1–16 is honoured on every byte; values are
+  clamped to 7 bits rather than emitting corrupt messages. An entry may have
+  `program: null` (sample whatever is loaded) and then nothing is sent at all.
+  `MidiOut` gained an **optional** `send(bytes)` so no existing implementation of
+  the port broke; `MidiManager.send()` is the renderer's implementation.
+- **Settle delay** (default 3000 ms) after every program change, before the
+  first note. This is not cosmetic: software instruments take seconds to swap a
+  patch and sampling during the load captures silence or the *previous* patch,
+  and nothing downstream would ever notice. There is a test that proves exactly
+  that (see §73).
+- **One `.jmi` bundle per entry, named from the entry.** Each patch is a
+  genuinely different recorded sound; presets *within* a bundle are parameter
+  variations over one sample set. Patches are never merged. Each entry gets its
+  own derived session (`<baseId>__<entryId>`, `instrumentName` = the entry name)
+  so its takes, its snapshot and its bundle are entirely its own.
+- **Progress across the whole queue**, not just the current patch: done /
+  skipped / total, a percentage bar, and "Sampling 3 of 5 — Clavinet D6".
+
+### 71. Resume semantics — two levels, matching the existing single run
+- **Queue level.** Every entry carries a status. `nextQueueIndex()` returns the
+  first entry that is not `done` or `skipped`, so restarting picks up at the
+  first unfinished patch. Every transition is persisted *before* the work, so an
+  app crash resumes exactly where a deliberate cancel would have.
+- **Run level.** A cancelled entry is put back to **`pending`, never `failed`**,
+  and its session snapshot keeps the takes it already had; `AutoModeEngine.run()`
+  then resumes that session from `nextPosition()` exactly as it always did.
+- **The program change is re-sent on resume.** The host may have been touched
+  while the queue was stopped, so re-selecting the patch is the only safe
+  assumption. (Verified in test: resuming a 3-patch queue at patch 3 sends
+  program 3's PC and only patch 3's PC.)
+- Persistence follows the existing session-snapshot pattern: `PatchQueueState`
+  is an **optional field on the base `SessionState`**, written through the same
+  `bridge.saveSession` path, and restored by `services.adoptSession()` when a
+  session is resumed from Home. Ordinary single-run sessions never carry the
+  field and their path is byte-for-byte unchanged.
+
+### 72. Per-patch pitch verification, and skipping one patch instead of all
+The §48–57 first-takes pitch check runs **for every patch**, because a
+transposed or detuned patch can sit anywhere in a ten-patch queue. Inside a
+queue the alert does more than warn: it **cancels that patch's run immediately**
+rather than spending an hour on it, and asks the operator, on the gold coaching
+plaque, for one of three answers:
+
+- **Skip This Patch, Continue Queue** — entry marked `skipped` with the verdict
+  recorded as its note, nothing exported for it, queue moves to the next patch.
+- **Sample It Anyway** — that entry's session resumes from where it stopped with
+  pitch checking off for the remainder of that patch only.
+- **Stop the Queue** — everything parks as `pending`, resumable from the failing
+  patch.
+
+Outside a queue the single-run behaviour is exactly as before: a warning on the
+Auto screen, the run never stopped by the engine itself.
+
+### 73. What was extended in the simulated harness (not a second one)
+`test/simInstrument.ts` — the same virtual-time instrument `autoE2e` drives —
+gained four things, all of which the new tests need and none of which change its
+existing behaviour:
+- `send(bytes)` recording every raw message with the **virtual time it arrived**
+  (`messages`, `programs`, `banks`), plus `firstNoteOnAfter(t)`. That is what
+  makes "the settle delay is honoured" a measurable assertion rather than a
+  guess: the gap between the Program Change and the first note-on is read
+  straight off the timeline.
+- A **per-program patch table** (`patches: { 12: { transposeSemitones, levelScale } }`),
+  so a Program Change genuinely selects a different-sounding patch — which is how
+  the "patch 1 of 3 is transposed" test is built.
+- `patchLoadSec` — the source makes **no sound at all** for N seconds after a
+  program change. Notes struck inside that window are silent, exactly as a real
+  plugin mid-load would be. With `settleMs: 0` the first take comes back at
+  `-Infinity dBFS` and is filed and exported as if it were the instrument; with a
+  settle delay longer than the load it comes back above −20 dBFS. That pair is
+  the proof that the delay is load-bearing.
+- `levelScale` (global) and `ignoreNoteOff` (a stuck note that never decays),
+  which give the loopback classifier its `no-return`, `too-quiet` and `no-decay`
+  cases without any new harness.
+
+The patch/level in force is resolved **at strike time** and stored on the note
+event, so the render pass stays a pure function of the event list.
+
+### 74. Styling
+CHROME / Segment / Plate registers only, per §21–27. The queue uses the custom
+`Listbox` for the MIDI channel (**zero native `<select>` in the app still**,
+asserted in the shot harness), recessed `Input` wells for program / bank MSB /
+bank LSB / settle delay, `Segmented` for the "Send Program Change ↔ Leave Source
+As Is" and "No Bank Select ↔ Bank Select" strips, `ChromeDialog` for the patch
+editor, and `PlateButton`s throughout. New CSS (`.jm-chain*`, `.jm-path*`,
+`.jm-readout*`, `.jm-queue*`, `.jm-patch-editor`, `.jm-warning-body`) takes every
+colour and size from a `tokens.ts` variable — **no colour or size literals added
+to any component or to styles.css**. The status chips stay inside the gold/cream
+coaching family: a *skipped* or *failed* patch instructs, it never alarms — the
+no-warning-red rule holds.
+
+The loopback screen now draws the **signal chain as hardware plaques**
+(Capture → virtual MIDI → host → virtual cable → Capture) rather than describing
+it in prose, because the single most important fact about the rebuilt check is
+that Capture's own output is not one of those boxes. The MIDI-output and
+audio-input names are shown by **label**, resolved through the shared
+`useDeviceScan` hook, not as raw device ids.
+
+### 75. Verification
+- `npm run typecheck -w jm-capture` — clean.
+- `npm run build -w jm-capture` — renderer + electron main/preload, exit 0.
+- `npm run test -w jm-capture` — **167/167 passed, 12/12 files**. The 136
+  pre-existing tests are all still green; the 31 new ones are
+  `test/loopbackCheck.test.ts` (14) and `test/patchQueue.test.ts` (17), both
+  driven against the extended `SimulatedInstrument`:
+  - latency returned on success and tracking the simulated round trip;
+  - each of the six failure modes classified, including that `no-midi-output`
+    and `no-audio-input` send nothing while `no-return` demonstrably *did*;
+  - `no-decay` classified as an **advisory**, and a normal decaying patch not
+    mistaken for a stuck note;
+  - program-change bytes and their order, channel offsets, omitted banks,
+    7-bit clamping, and the same bytes observed on the wire from the runner;
+  - the settle delay honoured, and the silent-take proof of why;
+  - one bundle per entry with the right name, each validating through
+    `validateBundle` with only its own four samples in it;
+  - cancel + resume at the queue level (only the unfinished patch re-sampled,
+    its PC re-sent), and cancel mid-run parking the entry as `pending`;
+  - a pitch failure skipping exactly one patch while the queue continues, plus
+    the "sample it anyway" and "stop the queue" branches;
+  - every transition persisted.
+- Screens shot against the live Vite dev server through the same headless-Chrome
+  CDP harness §29 used (**Electron deliberately not launched**, per instruction).
+  Console clean, and the harness asserts `document.querySelectorAll('select').length === 0`
+  on every shot. New screenshots: `26-loopback-verified.png`,
+  `27-loopback-diagnosed-failure.png`, `28-patch-queue.png`,
+  `29-patch-queue-running.png`, `30-patch-editor.png`.
+
+### 76. Not touched
+The `.jmi` format, the sampler, the FX rack, capture DSP and recorded audio
+content are all unchanged. `AutoModeEngine`'s sequencing is untouched — the
+queue composes it, it does not modify it — and the single-run path
+(`services.startAuto`) behaves exactly as before for users who are not queuing;
+the only change there is that its engine construction is now shared with the
+queue so both behave identically take for take.

@@ -6,6 +6,7 @@
 
 import type { CaptureMode, Channels, SoundType, VelocityLayer, World } from '@jm/jmi-format/web';
 import { DEFAULT_VELOCITY_MAP, defaultPlanNotes, midiToNoteName, sampleFileName } from '@jm/jmi-format/web';
+import type { PatchQueueState } from './patchQueue';
 
 export interface SamplingPlan {
   /** MIDI note numbers to sample, ascending */
@@ -71,6 +72,13 @@ export interface SessionState {
   /** zones auto-reduced to 1 RR by the smart-RR null test, keyed `${note}_${layer}` */
   smartRrReduced: Record<string, true>;
   sessionNotes: string[];
+  /**
+   * Multi-patch sampling queue (§3.4). Lives on the *base* session created by
+   * the wizard; each entry's takes go into their own derived session, so a
+   * queue resumes at both levels. Absent for ordinary single-run sessions,
+   * whose path is completely unchanged.
+   */
+  patchQueue?: PatchQueueState;
   updatedAt: string;
 }
 

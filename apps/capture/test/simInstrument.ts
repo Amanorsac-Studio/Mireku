@@ -11,6 +11,25 @@ interface NoteEvent {
   type: 'on' | 'off';
   note: number;
   velocity: number;
+  /** transpose in force when this note was struck (patch-dependent) */
+  transpose: number;
+  /** level scale in force when this note was struck */
+  level: number;
+  /** the source was still loading a patch — it makes no sound at all */
+  muted: boolean;
+}
+
+/** What a program number sounds like, for patch-queue tests. */
+export interface SimPatch {
+  transposeSemitones?: number;
+  /** multiplies the rendered amplitude (0 = silent source) */
+  levelScale?: number;
+}
+
+/** A raw MIDI message the instrument received, with the virtual time it arrived. */
+export interface SimMessage {
+  tSec: number;
+  bytes: number[];
 }
 
 export interface SimOptions {
@@ -24,6 +43,21 @@ export interface SimOptions {
   latencySec?: number;
   /** the rig is transposed: every returned note sounds this many semitones off */
   transposeSemitones?: number;
+  /** global amplitude scale — 0 models a source that returns nothing at all */
+  levelScale?: number;
+  /**
+   * Per-program patch table. A Program Change selects one of these, exactly as
+   * a plugin host would; unlisted programs fall back to the global options.
+   */
+  patches?: Record<number, SimPatch>;
+  /**
+   * How long the source takes to LOAD a patch after a program change. Notes
+   * struck inside that window make no sound — which is precisely the failure
+   * the queue's settle delay exists to prevent, so tests can prove it.
+   */
+  patchLoadSec?: number;
+  /** a stuck note: the source ignores note-off and never decays */
+  ignoreNoteOff?: boolean;
 }
 
 export class SimulatedInstrument implements MidiOut, CapturePort, ClockPort {
@@ -43,8 +77,45 @@ export class SimulatedInstrument implements MidiOut, CapturePort, ClockPort {
       channels: opts.channels ?? 2,
       latencySec: opts.latencySec ?? 0,
       transposeSemitones: opts.transposeSemitones ?? 0,
+      levelScale: opts.levelScale ?? 1,
+      patches: opts.patches ?? {},
+      patchLoadSec: opts.patchLoadSec ?? 0,
+      ignoreNoteOff: opts.ignoreNoteOff ?? false,
     };
     this.sampleRate = this.opts.sampleRate;
+  }
+
+  /* ---- raw MIDI: Bank Select + Program Change (patch queue) ---- */
+
+  /** Every raw message received, in order, with the virtual time it arrived. */
+  readonly messages: SimMessage[] = [];
+  /** Program numbers selected, in order. */
+  readonly programs: number[] = [];
+  private bankMsb: number | null = null;
+  private bankLsb: number | null = null;
+  /** bank in force when each program change landed */
+  readonly banks: { msb: number | null; lsb: number | null }[] = [];
+  private patch: SimPatch | null = null;
+  private patchReadyAt = 0;
+
+  send(bytes: number[]): void {
+    this.messages.push({ tSec: this.tSec, bytes: [...bytes] });
+    const status = bytes[0] & 0xf0;
+    if (status === 0xb0 && bytes[1] === 0) this.bankMsb = bytes[2];
+    else if (status === 0xb0 && bytes[1] === 32) this.bankLsb = bytes[2];
+    else if (status === 0xc0) {
+      this.programs.push(bytes[1]);
+      this.banks.push({ msb: this.bankMsb, lsb: this.bankLsb });
+      this.patch = this.opts.patches[bytes[1]] ?? null;
+      // the source goes quiet while it loads the patch
+      this.patchReadyAt = this.tSec + this.opts.patchLoadSec;
+    }
+  }
+
+  /** Virtual time of the first note-on after the given time, or null. */
+  firstNoteOnAfter(tSec: number): number | null {
+    const ev = this.events.find((e) => e.type === 'on' && e.tSec >= tSec);
+    return ev ? ev.tSec : null;
   }
 
   private random(): number {
@@ -54,11 +125,22 @@ export class SimulatedInstrument implements MidiOut, CapturePort, ClockPort {
   }
 
   noteOn(note: number, velocity: number): void {
-    this.events.push({ tSec: this.tSec, type: 'on', note, velocity });
+    // The patch in force is resolved at strike time, so a note played during a
+    // patch load is silent exactly the way the real source would be.
+    this.events.push({
+      tSec: this.tSec,
+      type: 'on',
+      note,
+      velocity,
+      transpose: this.patch?.transposeSemitones ?? this.opts.transposeSemitones,
+      level: (this.patch?.levelScale ?? 1) * this.opts.levelScale,
+      muted: this.tSec < this.patchReadyAt,
+    });
   }
 
   noteOff(note: number): void {
-    this.events.push({ tSec: this.tSec, type: 'off', note, velocity: 0 });
+    if (this.opts.ignoreNoteOff) return;
+    this.events.push({ tSec: this.tSec, type: 'off', note, velocity: 0, transpose: 0, level: 0, muted: false });
   }
 
   record(seconds: number): Promise<Float32Array[]> {
@@ -103,9 +185,10 @@ export class SimulatedInstrument implements MidiOut, CapturePort, ClockPort {
       }
       const detune = this.opts.jitter ? 1 + (this.random() - 0.5) * 0.006 : 1;
       const gainJit = this.opts.jitter ? 1 + (this.random() - 0.5) * 0.12 : 1;
-      const sounding = ev.note + this.opts.transposeSemitones;
+      if (ev.muted || ev.level === 0) continue;
+      const sounding = ev.note + ev.transpose;
       const freq = 440 * Math.pow(2, (sounding - 69) / 12) * detune;
-      const amp = (ev.velocity / 127) * 0.8 * gainJit;
+      const amp = (ev.velocity / 127) * 0.8 * gainJit * ev.level;
       const noteStart = ev.tSec + lat;
 
       for (let i = 0; i < n; i++) {

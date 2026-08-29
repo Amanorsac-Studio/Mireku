@@ -1,91 +1,202 @@
 import { useState } from 'react';
-import { audioIo } from '../../engine/audioIo';
-import { linToDb } from '../../engine/dsp/level';
+import type { LoopbackVerification } from '../../engine/loopbackCheck';
 import { useApp } from '../../state/appStore';
 import { services } from '../../state/services';
-import { Button, Panel } from '../common';
+import { Button, Label, Panel } from '../common';
 import { GoldDivider } from '../hardware';
+import { useDeviceScan } from '../settings/useDeviceScan';
 
 /**
- * Auto Mode loopback setup helper (§3.4): per-OS routing instructions for
- * sampling VSTs, plus a test-tone routine that verifies the loop before the
- * run starts.
+ * Auto Mode loopback setup helper (§3.4).
+ *
+ * The check verifies the path a run ACTUALLY uses — MIDI out → source → audio
+ * in — and reports the measured round-trip latency, which is the same number
+ * Auto Mode then trims from the front of every take. Capture's own output is
+ * not in that path at all, so the old test-tone routine has been demoted to a
+ * secondary diagnostic whose only job is isolating which half of a broken
+ * chain is at fault.
  */
 export function LoopbackHelper() {
   const session = useApp((s) => s.session);
+  const devices = useApp((s) => s.devices);
   const setScreen = useApp((s) => s.setScreen);
-  const [result, setResult] = useState<string | null>(null);
-  const [testing, setTesting] = useState(false);
+  const [primary, setPrimary] = useState<LoopbackVerification | null>(null);
+  const [secondary, setSecondary] = useState<LoopbackVerification | null>(null);
+  const [busy, setBusy] = useState<'midi' | 'tone' | null>(null);
+  const scan = useDeviceScan();
   const isMac = navigator.platform.toLowerCase().includes('mac');
 
-  const runTest = async () => {
-    if (!session) return;
-    setTesting(true);
-    setResult(null);
+  const runMidiTest = async () => {
+    setBusy('midi');
+    setPrimary(null);
     try {
-      // Point the audible bus at the chosen output device before the tone is
-      // played: the loop test must go out of exactly the device the rest of the
-      // app auditions through, which for a VST loop is the virtual cable.
-      await services.ensureAudio();
-      await audioIo.openInput(session.config.audioInputId, session.config.audioInputChannels);
-      audioIo.startRecording();
-      audioIo.playTestTone(1);
-      await new Promise((r) => setTimeout(r, 1400));
-      const captured = audioIo.stopRecording();
-      let peak = 0;
-      for (const ch of captured) for (let i = 0; i < ch.length; i++) peak = Math.max(peak, Math.abs(ch[i]));
-      const db = linToDb(peak);
-      if (db > -40) setResult(`Loop verified — test tone returned at ${db.toFixed(1)} dBFS.`);
-      else setResult(`No return signal detected (peak ${db === -Infinity ? '−∞' : db.toFixed(1)} dBFS). Check the routing below.`);
+      setPrimary(await services.verifyLoopback(session));
     } catch (e) {
-      setResult(`Audio input failed: ${(e as Error).message}`);
+      setPrimary(probeFailed(e as Error));
     } finally {
-      setTesting(false);
+      setBusy(null);
     }
   };
 
+  const runToneTest = async () => {
+    setBusy('tone');
+    setSecondary(null);
+    try {
+      setSecondary(await services.verifyAudioCableOnly(session));
+    } catch (e) {
+      setSecondary(probeFailed(e as Error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // Show the device NAMES, not their opaque ids: the point of this strip is
+  // that the user can see at a glance which two ends the test will use.
+  const midiId = devices.midiOutputId ?? session?.config.midiOutputId ?? null;
+  const audioId = devices.audioInputId ?? session?.config.audioInputId ?? null;
+  const midiName = midiId ? (scan.midiOutputs.find((d) => d.id === midiId)?.name ?? midiId) : null;
+  const audioName = audioId ? (scan.audioInputs.find((d) => d.id === audioId)?.label ?? audioId) : null;
+
   return (
-    <div className="jm-col" style={{ maxWidth: '720px', margin: '0 auto' }}>
-      <Panel screws>
+    <div className="jm-col" style={{ maxWidth: '760px', margin: '0 auto' }}>
+      <Panel variant="recessed" screws>
         <div className="jm-col">
-          <div className="jm-title">Auto Mode Setup — Audio Loopback</div>
+          <div className="jm-title">Auto Mode Setup — Signal Path</div>
           <GoldDivider />
-          <div className="jm-value">
-            Hardware synth: connect its MIDI in to the selected MIDI output, and its audio outputs to your interface inputs. Then run
-            the test below.
+          {/* The chain, drawn as the hardware register rather than prose, so
+              it is obvious that Capture's own OUTPUT is not part of it. */}
+          <div className="jm-chain">
+            <div className="jm-chain-step">
+              <div className="jm-chain-label">JM Capture</div>
+              <div className="jm-chain-sub">MIDI out</div>
+            </div>
+            <div className="jm-chain-arrow">→</div>
+            <div className="jm-chain-step">
+              <div className="jm-chain-label">Virtual MIDI port</div>
+              <div className="jm-chain-sub">{isMac ? 'IAC Driver' : 'loopMIDI'}</div>
+            </div>
+            <div className="jm-chain-arrow">→</div>
+            <div className="jm-chain-step">
+              <div className="jm-chain-label">Plugin host</div>
+              <div className="jm-chain-sub">Omnisphere · Keyscape · hardware synth</div>
+            </div>
+            <div className="jm-chain-arrow">→</div>
+            <div className="jm-chain-step">
+              <div className="jm-chain-label">Virtual audio cable</div>
+              <div className="jm-chain-sub">{isMac ? 'BlackHole' : 'VB-Cable'}</div>
+            </div>
+            <div className="jm-chain-arrow">→</div>
+            <div className="jm-chain-step">
+              <div className="jm-chain-label">JM Capture</div>
+              <div className="jm-chain-sub">audio in</div>
+            </div>
           </div>
           {isMac ? (
             <div className="jm-value">
-              Sampling a VST on macOS: install <b>BlackHole</b> (2ch). In your DAW, set the master output to BlackHole; in JM Capture,
-              choose BlackHole as the audio input device. Create a virtual MIDI port (IAC Driver in Audio MIDI Setup), select it as the
-              MIDI output here, and set the DAW track to receive from it.
+              macOS: install <b>BlackHole</b> (2ch) and create an IAC Driver port in Audio MIDI Setup. In the host, receive MIDI from
+              the IAC port and send audio to BlackHole; in JM Capture, pick the IAC port as the MIDI output and BlackHole as the audio
+              input.
             </div>
           ) : (
             <div className="jm-value">
-              Sampling a VST on Windows: install <b>VB-Cable</b>. In your DAW or plugin host, set the audio output to CABLE Input; in
-              JM Capture, choose CABLE Output as the audio input device. Install <b>loopMIDI</b> for a virtual MIDI port, select it as
-              the MIDI output here, and set the host to receive MIDI from it.
+              Windows: install <b>VB-Cable</b> and <b>loopMIDI</b>. In the host, receive MIDI from the loopMIDI port and send audio to
+              CABLE Input; in JM Capture, pick the loopMIDI port as the MIDI output and CABLE Output as the audio input.
             </div>
           )}
+          <div className="jm-value">
+            Hardware synth: connect its MIDI in to the selected MIDI output and its audio outputs to your interface inputs — the same
+            test below applies unchanged.
+          </div>
         </div>
       </Panel>
+
       <Panel screws>
         <div className="jm-col">
-          <div className="jm-title">Verify the Loop</div>
+          <div className="jm-title">Verify the Real Path</div>
           <GoldDivider />
           <div className="jm-value">
-            Plays a 1 kHz test tone through the output device selected in Devices (the gear in the header) and checks that it returns on the selected input. (For a VST loop, route
-            the tone through the same cable device or simply hit a note in your host while the test runs.)
+            Sends one MIDI note to the selected output, listens on the selected input, and reports the round-trip latency Auto Mode
+            will use to trim take starts — plus the returning level, so gain staging can be judged before committing to a long run.
+          </div>
+          <div className="jm-row jm-path-row">
+            <div className="jm-path-cell">
+              <Label>MIDI output</Label>
+              <div className={`jm-path-value${midiName ? '' : ' missing'}`}>{midiName ?? 'none selected'}</div>
+            </div>
+            <div className="jm-path-cell">
+              <Label>Audio input</Label>
+              <div className={`jm-path-value${audioName ? '' : ' missing'}`}>{audioName ?? 'none selected'}</div>
+            </div>
           </div>
           <div className="jm-row">
-            <Button primary onClick={() => void runTest()} disabled={testing}>
-              {testing ? 'Testing…' : 'Play Test Tone & Verify'}
+            <Button primary onClick={() => void runMidiTest()} disabled={busy !== null}>
+              {busy === 'midi' ? 'Testing…' : 'Send MIDI Note & Verify'}
             </Button>
             <Button onClick={() => setScreen('auto')}>Continue to Auto Capture</Button>
           </div>
-          {result && <div className="jm-warning">{result}</div>}
+          {primary && <VerificationReport result={primary} />}
         </div>
       </Panel>
+
+      <Panel>
+        <div className="jm-col">
+          <div className="jm-title">Secondary Diagnostic — Audio Cable Only</div>
+          <GoldDivider />
+          <div className="jm-value">
+            Plays a 1 kHz tone out of Capture's own output and listens for it on the input. This is <b>not</b> the Auto Mode path —
+            during a real run Capture's output is not in the chain. Use it only to split a broken chain in two: if the tone returns
+            but the MIDI test above does not, the audio side is wired and the fault is on the MIDI side or in the source.
+          </div>
+          <div className="jm-row">
+            <Button onClick={() => void runToneTest()} disabled={busy !== null}>
+              {busy === 'tone' ? 'Testing…' : 'Play Test Tone'}
+            </Button>
+          </div>
+          {secondary && <VerificationReport result={secondary} />}
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+/** Opening a device threw — still a distinct, actionable verdict, not a crash. */
+function probeFailed(e: Error): LoopbackVerification {
+  return {
+    status: 'failed',
+    issue: 'probe-failed',
+    latencyMs: null,
+    peakDb: -Infinity,
+    tailRelDb: null,
+    title: 'The test could not run',
+    message: `Opening the selected device failed: ${e.message}. Re-scan in the Devices panel, confirm nothing else holds the input exclusively, and try again.`,
+  };
+}
+
+/** One verdict, with its readings. Gold-edged advisory — never warning-red. */
+function VerificationReport({ result }: { result: LoopbackVerification }) {
+  return (
+    <div className={`jm-warning stack${result.status === 'ok' ? '' : ' prominent'}`}>
+      <div className="jm-warning-title">{result.title}</div>
+      {(result.latencyMs !== null || result.peakDb !== -Infinity) && (
+        <div className="jm-row jm-readouts">
+          <Readout label="Round-trip latency" value={result.latencyMs === null ? '—' : `${result.latencyMs.toFixed(1)} ms`} />
+          <Readout label="Return peak" value={result.peakDb === -Infinity ? '−∞ dBFS' : `${result.peakDb.toFixed(1)} dBFS`} />
+          <Readout
+            label="Tail vs peak"
+            value={result.tailRelDb === null || result.tailRelDb === -Infinity ? '—' : `${result.tailRelDb.toFixed(1)} dB`}
+          />
+        </div>
+      )}
+      <div className="jm-warning-body">{result.message}</div>
+    </div>
+  );
+}
+
+function Readout({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="jm-readout">
+      <div className="jm-readout-label">{label}</div>
+      <div className="jm-readout-value">{value}</div>
     </div>
   );
 }

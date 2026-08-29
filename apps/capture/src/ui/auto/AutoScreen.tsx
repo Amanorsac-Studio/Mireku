@@ -6,6 +6,7 @@ import { Button, Label, Panel } from '../common';
 import { GoldDivider, Screws } from '../hardware';
 import { LedMeter } from '../guided/LedMeter';
 import { ProgressMap } from '../guided/ProgressMap';
+import { PatchQueuePanel } from './PatchQueuePanel';
 
 export function AutoScreen() {
   const session = useApp((s) => s.session);
@@ -119,6 +120,7 @@ export function AutoScreen() {
           )}
         </div>
       </Panel>
+      <PatchQueuePanel />
       <Panel variant="recessed" screws>
         <ProgressMap
           session={session}

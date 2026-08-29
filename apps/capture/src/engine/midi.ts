@@ -105,6 +105,15 @@ export class MidiManager {
   sendNoteOff(note: number): void {
     this.output?.send([0x80, note, 0]);
   }
+
+  /**
+   * Raw MIDI bytes out of the selected output. The patch queue's Bank Select
+   * (CC0 / CC32) and Program Change go through here; keeping it generic means
+   * no per-message method has to be added for every future control.
+   */
+  send(bytes: number[]): void {
+    this.output?.send(bytes);
+  }
 }
 
 export const midi = new MidiManager();

@@ -1,5 +1,5 @@
 import { useApp } from '../../state/appStore';
-import { bridge } from '../../state/services';
+import { bridge, services } from '../../state/services';
 import { deserializeSession, sessionStats } from '../../engine/session';
 import { Button, Label, Panel } from '../common';
 import { Flourish, GoldDivider } from '../hardware';
@@ -9,12 +9,12 @@ import { IconMore, IconRight, IconStar } from '../assets/icons';
 export function HomeScreen() {
   const saved = useApp((s) => s.savedSessions);
   const setScreen = useApp((s) => s.setScreen);
-  const setSession = useApp((s) => s.setSession);
   const setSavedSessions = useApp((s) => s.setSavedSessions);
 
   const resume = (json: string) => {
     const session = deserializeSession(json);
-    setSession(session);
+    // adopt, not just set: a session may carry a patch queue to resume
+    services.adoptSession(session);
     setScreen(session.config.captureMode === 'guided' ? 'guided' : 'auto');
   };
 

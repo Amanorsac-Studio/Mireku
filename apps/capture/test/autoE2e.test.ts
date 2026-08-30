@@ -23,10 +23,10 @@ import { SimulatedInstrument } from './simInstrument';
 
 // 44100: the .jmi schema only allows standard rates for exported bundles
 const SR = 44100;
-const tmpRoot = join(tmpdir(), `jm-capture-e2e-${Date.now()}`);
+const tmpRoot = process.env.JM_E2E_KEEP ?? join(tmpdir(), `jm-capture-e2e-${Date.now()}`);
 
 afterAll(() => {
-  rmSync(tmpRoot, { recursive: true, force: true });
+  if (!process.env.JM_E2E_KEEP) rmSync(tmpRoot, { recursive: true, force: true });
 });
 
 function makeConfig(overrides: Partial<SessionConfig> = {}): SessionConfig {

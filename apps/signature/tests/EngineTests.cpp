@@ -38,7 +38,7 @@ static void testFxRegistry()
     auto rack = buildDefaultRack (0);
     CHECK (rack.size() == 5 && rack[0].type == FxType::epPreamp && rack[4].type == FxType::plateReverb,
            "rhodes default rack 5->2->3->8->10");
-    auto srack = buildDefaultRack (3);
+    auto srack = buildDefaultRack (3, false);
     CHECK (srack.back().type == FxType::hallShimmer && srack.back().params.at ("shimmer") == 30.0f,
            "strings default rack shimmer=30 override");
     CHECK (worldEngineControls (1).size() == 6 && juce::String (worldEngineControls (1)[0].id) == "chorusMode",
@@ -402,7 +402,9 @@ static void testFxRackDsp()
 
     FxRackDsp rack;
     rack.prepare (48000.0, 512);
-    rack.setState (buildDefaultRack (0));
+    // ACTIVE units: the shipped default is bypassed (R7 item 1), which would
+    // make this stability check pass on a dry signal and prove nothing.
+    rack.setState (buildDefaultRack (0, false));
     juce::AudioBuffer<float> buf (2, 512);
     for (int i = 0; i < 512; ++i) { buf.setSample (0, i, 0.25f); buf.setSample (1, i, -0.25f); }
     for (int blk = 0; blk < 10; ++blk) rack.process (buf, 120.0);
@@ -418,7 +420,7 @@ static void testFxRackDsp()
 static void testPresetJsonRoundTrip()
 {
     std::printf ("\n== Preset JSON round-trip (portable with fx-params.ts) ==\n");
-    auto rack = buildDefaultRack (1);                  // MKS: has enum (chorus mode) + floats
+    auto rack = buildDefaultRack (1, false);           // MKS: has enum (chorus mode) + floats
     rack[0].params["mode"] = 2.0f;                     // I+II
     rack[0].bypassed = true;
     auto v = rackToVar (rack);
@@ -1611,9 +1613,179 @@ static void testArpStateRoundTrip()
 #include "Round5Streaming.inc"
 
 //==============================================================================
+//==============================================================================
+// CLIENT REVIEW ROUND 7 — FX defaults, removal and reorder.
+static void testFxDefaultsAreOff()
+{
+    std::printf ("\n== R7 (1) FX are off by default ==\n");
+    CHECK (kDefaultUnitBypassed, "the shared default is BYPASSED (mirrors fx-params.ts)");
+    for (int w = 0; w < 4; ++w)
+    {
+        auto rack = buildDefaultRack (w);
+        bool present = ! rack.empty(), allOff = true;
+        for (auto& u : rack) allOff &= u.bypassed;
+        char msg[96];
+        std::snprintf (msg, sizeof (msg), "world %d default rack: %d units, all bypassed", w, (int) rack.size());
+        CHECK (present && allOff, msg);
+    }
+    // the units are still THERE — bypassed, not deleted
+    CHECK (buildDefaultRack (0).size() == 5, "rhodes still ships its five units, ready to switch on");
+    CHECK (buildDefaultRack (3).back().params.at ("shimmer") == 30.0f,
+           "the world's parameter overrides are untouched by the default flip");
+
+    // an AppState built from scratch (no saved state anywhere) is dry, and the
+    // master rack stays empty as it always was
+    AppState st;
+    bool dry = true;
+    for (auto& s : st.slots) for (auto& u : s.rack) dry &= u.bypassed;
+    CHECK (dry, "a fresh AppState loads every slot rack bypassed");
+    CHECK (st.masterRack.empty(), "the master rack is still empty by default");
+
+    // ...and the DEFAULT never overrides an EXPLICIT saved state
+    auto explicitOn = buildDefaultRack (1, false);
+    explicitOn[1].bypassed = true;                       // one unit deliberately off
+    auto back = rackFromVar (juce::JSON::parse (juce::JSON::toString (rackToVar (explicitOn))));
+    bool same = back.size() == explicitOn.size();
+    for (size_t i = 0; i < back.size() && same; ++i) same = back[i].bypassed == explicitOn[i].bypassed;
+    CHECK (same, "a saved rack's per-unit bypass survives verbatim (false stays false)");
+    CHECK (! back[0].bypassed && back[1].bypassed,
+           "a preset written under the OLD default still loads with its FX ON");
+}
+
+static void testFxRackStructuralEdits()
+{
+    std::printf ("\n== R7 (2/3) remove + reorder ==\n");
+    auto rack = buildDefaultRack (0, false);             // 5 units, active
+    const auto original = rack;
+
+    // --- removal
+    auto removed = rack;
+    removed.erase (removed.begin() + 1);                 // tremolo out
+    CHECK (removed.size() == 4 && removed[1].type == original[2].type,
+           "removing a unit closes the gap: the rest keep their order");
+    auto rt = rackFromVar (juce::JSON::parse (juce::JSON::toString (rackToVar (removed))));
+    CHECK (rt.size() == 4 && rt[0].type == original[0].type && rt[3].type == original[4].type,
+           "removal round-trips through preset JSON");
+    // the freed slot is genuinely free
+    removed.push_back (defaultUnitState (FxType::flanger, false));
+    CHECK ((int) removed.size() == 5 && (int) removed.size() <= FxRackDsp::kMaxSlots,
+           "the freed slot can be filled again");
+
+    // --- reorder: exactly the splice the drop performs
+    auto moved = original;
+    auto unit = moved[0];
+    moved.erase (moved.begin());
+    moved.insert (moved.begin() + 3, unit);              // dropped into gap 4
+    CHECK (moved[3].type == original[0].type && moved[0].type == original[1].type,
+           "reorder puts the dragged unit in the gap it was dropped in");
+    auto mrt = rackFromVar (juce::JSON::parse (juce::JSON::toString (rackToVar (moved))));
+    bool orderKept = mrt.size() == moved.size();
+    for (size_t i = 0; i < mrt.size() && orderKept; ++i)
+        orderKept = mrt[i].type == moved[i].type && mrt[i].bypassed == moved[i].bypassed;
+    CHECK (orderKept, "the new ORDER (and each unit's bypass) round-trips through preset JSON");
+
+    // and through the whole slot record, which is what plugin state stores
+    AppState st;
+    st.slots[0].rack = moved;
+    AppState st2;
+    st2.slotFromVar (0, st.slotToVar (0));
+    bool slotOk = st2.slots[0].rack.size() == moved.size();
+    for (size_t i = 0; i < moved.size() && slotOk; ++i) slotOk = st2.slots[0].rack[i].type == moved[i].type;
+    CHECK (slotOk, "the order persists through the slot state a plugin/performance preset saves");
+}
+
+/// The reorder must not step the output. Measured, not asserted: the same rack
+/// renders a steady tone twice — once undisturbed in each of the two orders,
+/// once with the reorder applied live through FxRackDsp's two-step — and the
+/// worst sample-to-sample step across the change is compared with the worst the
+/// signal itself produces in either order.
+static void testReorderIsClickless()
+{
+    std::printf ("\n== R7 (3) reordering is clickless ==\n");
+    const double sr = 48000.0;
+    const int block = 128;
+    const int blocks = 400;                              // ~1.07 s
+
+    FxRackState orderA { defaultUnitState (FxType::epPreamp,  false),
+                         defaultUnitState (FxType::vintageEq, false),
+                         defaultUnitState (FxType::compressor, false) };
+    FxRackState orderB { orderA[1], orderA[2], orderA[0] };   // unit 0 moved to the end
+
+    // `switchAt` < 0 renders `st` untouched; otherwise the restructure is
+    // applied at that block, exactly as the message thread would: hand over to
+    // dry, then (after the mix has faded) swap and ramp back.
+    auto render = [&] (const FxRackState& st, const FxRackState* to, int switchAt)
+    {
+        FxRackDsp rack;
+        rack.prepare (sr, block);
+        rack.setState (st);
+        std::vector<float> out;
+        out.reserve ((size_t) (blocks * block));
+        juce::AudioBuffer<float> buf (2, block);
+        int n = 0;
+        // 20 ms of smoothing at 48 kHz / 128-sample blocks = 7.5 blocks
+        const int handOver = switchAt + 10;
+        for (int b = 0; b < blocks; ++b)
+        {
+            if (to != nullptr && b == switchAt) rack.beginRestructure();
+            if (to != nullptr && b == handOver) rack.setState (*to, true);
+            for (int i = 0; i < block; ++i, ++n)
+            {
+                const float v = 0.4f * std::sin (2.0 * juce::MathConstants<double>::pi * 220.0 * n / sr);
+                buf.setSample (0, i, v);
+                buf.setSample (1, i, v);
+            }
+            rack.process (buf, 120.0);
+            for (int i = 0; i < block; ++i) out.push_back (buf.getSample (0, i));
+        }
+        return out;
+    };
+
+    auto worstStep = [] (const std::vector<float>& d, int from, int to)
+    {
+        float worst = 0.0f;
+        for (int i = from + 1; i < to && i < (int) d.size(); ++i)
+            worst = juce::jmax (worst, std::abs (d[(size_t) i] - d[(size_t) i - 1]));
+        return worst;
+    };
+    auto rms = [] (const std::vector<float>& d, int from, int to)
+    {
+        double s = 0;
+        for (int i = from; i < to && i < (int) d.size(); ++i) s += (double) d[(size_t) i] * d[(size_t) i];
+        return std::sqrt (s / juce::jmax (1, to - from));
+    };
+
+    const int switchAt = 150;                            // block 150 = 0.4 s
+    const auto a = render (orderA, nullptr, -1);
+    const auto b = render (orderB, nullptr, -1);
+    const auto x = render (orderA, &orderB, switchAt);
+
+    bool finite = true;
+    for (float v : x) finite &= std::isfinite (v);
+    CHECK (finite, "no NaN / Inf anywhere in the reordered render");
+
+    const int from = (switchAt - 20) * block;            // well before the hand-over
+    const int to   = (switchAt + 60) * block;            // well after the ramp back
+    const float reference = juce::jmax (worstStep (a, from, to), worstStep (b, from, to));
+    const float measured = worstStep (x, from, to);
+    std::printf ("  worst per-sample step across the reorder: %.6f  (steady-state reference %.6f)\n",
+                 measured, reference);
+    CHECK (measured <= reference * 1.25f + 1.0e-6f,
+           "the reorder introduces no step beyond the signal's own slope");
+
+    // audio keeps flowing: the hand-over is to the DRY path, not to silence
+    const double during = rms (x, switchAt * block, (switchAt + 10) * block);
+    const double steady = rms (x, (switchAt - 40) * block, (switchAt - 5) * block);
+    std::printf ("  RMS during the hand-over %.4f vs steady %.4f\n", during, steady);
+    CHECK (during > steady * 0.3, "the rack passes dry during the change — it never drops audio");
+}
+
 int main()
 {
     std::printf ("JM Signature engine tests\n=========================\n");
+    testFxDefaultsAreOff();
+    testFxRackStructuralEdits();
+    testReorderIsClickless();
     testFxRegistry();
     testMasterLimiter();
     testMacroLinkRoundTrip();

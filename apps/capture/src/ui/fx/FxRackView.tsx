@@ -33,7 +33,20 @@ export function FxRackView() {
   const tempo = useApp((s) => s.tempo);
   const setTempo = useApp((s) => s.setTempo);
   const [adding, setAdding] = useState(false);
-  const dragFrom = useRef<number | null>(null);
+  /**
+   * CLIENT REVIEW ROUND 7 (item 3) — drag to reorder, spec §4.
+   *
+   * `from` is the unit being dragged, `to` is the INSERTION POINT in
+   * 0..units.length (the gap the unit would land in), which is what the gold
+   * insertion rule is drawn at. Both are null when no reorder drag is running.
+   *
+   * The drag is armed from the unit's grab handle only, never from the unit
+   * body: a knob is dragged with pointer events, and HTML5 drag on an ancestor
+   * would steal the gesture the moment the pointer moved. Handle → reorder,
+   * anywhere else → the control under the cursor.
+   */
+  const [dragState, setDragState] = useState<{ from: number; to: number } | null>(null);
+  const unitEls = useRef<(HTMLDivElement | null)[]>([]);
 
   const rack = services.rack;
   if (!rack)
@@ -44,6 +57,21 @@ export function FxRackView() {
     );
 
   const units = rack.slots;
+
+  /**
+   * Land the dragged unit on the insertion point. `to` counts gaps, so once the
+   * unit is spliced out everything after it shifts down by one — hence the
+   * `to - 1`. Dropping back into its own gap is a no-op, not a rebuild.
+   */
+  function commitDrag(): void {
+    const d = dragState;
+    setDragState(null);
+    if (!rack || d == null) return;
+    const target = d.to > d.from ? d.to - 1 : d.to;
+    if (target === d.from) return;
+    rack.moveUnit(d.from, target);
+    bump();
+  }
 
   return (
     <Panel>
@@ -93,33 +121,86 @@ export function FxRackView() {
         {/* the ears sit on the frame, not on the scrolling strip */}
         <div className="jm-rack-frame">
           <RackCorners />
-          <div className="jm-rack">
+          <div
+            className="jm-rack"
+            onDragOver={(e) => {
+              // the strip's own gutter: dropping past the last unit appends
+              if (dragState == null) return;
+              e.preventDefault();
+              if (dragState.to !== units.length) setDragState({ ...dragState, to: units.length });
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              commitDrag();
+            }}
+          >
+          {dragState != null && (
+            <div
+              className="jm-fx-drop-rule"
+              style={{ '--jm-fx-drop-index': dragState.to } as React.CSSProperties}
+            />
+          )}
           {units.map((unit, i) => {
             const plate = FX_PLATE[fxPanel[unit.type as keyof typeof fxPanel]];
             const bypassed = unit.isBypassed();
             const gold = fxGoldOverlay[unit.type] ?? 0;
+            const dragging = dragState?.from === i;
             return (
               <div
                 key={`${unit.type}-${i}`}
-                className={`jm-fx-unit${bypassed ? ' bypassed' : ''}${gold ? ' gold-wash' : ''}`}
+                ref={(el) => {
+                  unitEls.current[i] = el;
+                }}
+                className={
+                  'jm-fx-unit' +
+                  (bypassed ? ' bypassed' : '') +
+                  (gold ? ' gold-wash' : '') +
+                  (dragging ? ' dragging' : '')
+                }
                 style={
                   {
                     '--jm-fx-plate': `url(${plate})`,
                     '--jm-fx-gold': gold,
                   } as React.CSSProperties
                 }
-                draggable
-                onDragStart={() => (dragFrom.current = i)}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={() => {
-                  if (dragFrom.current !== null && dragFrom.current !== i) {
-                    rack.moveUnit(dragFrom.current, i);
-                    bump();
-                  }
-                  dragFrom.current = null;
+                onDragOver={(e) => {
+                  if (dragState == null) return;
+                  e.preventDefault();
+                  e.stopPropagation(); // the strip's gutter handler must not win
+                  const box = e.currentTarget.getBoundingClientRect();
+                  const to = e.clientX < box.left + box.width / 2 ? i : i + 1;
+                  if (to !== dragState.to) setDragState({ ...dragState, to });
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  commitDrag();
                 }}
               >
                 <div className="jm-fx-head">
+                  {/* the grab affordance: the ONLY place a reorder drag starts */}
+                  <span
+                    className="jm-fx-grip"
+                    title="Drag to reorder"
+                    aria-label="Drag to reorder"
+                    role="button"
+                    draggable
+                    onDragStart={(e) => {
+                      e.dataTransfer.effectAllowed = 'move';
+                      // some browsers cancel a drag with no payload
+                      e.dataTransfer.setData('text/plain', String(i));
+                      const el = unitEls.current[i];
+                      // the ghost IS the unit, at the grab point, so what the
+                      // player drags looks like the thing they grabbed
+                      if (el) e.dataTransfer.setDragImage(el, 28, 18);
+                      setDragState({ from: i, to: i });
+                    }}
+                    onDragEnd={() => setDragState(null)}
+                  >
+                    <i />
+                    <i />
+                    <i />
+                  </span>
                   <PowerButton
                     on={!bypassed}
                     size={16}
@@ -132,13 +213,17 @@ export function FxRackView() {
                   <div className="jm-fx-name">{FX_REGISTRY[unit.type].name}</div>
                   <button
                     className="jm-fx-x"
-                    title="Remove unit"
+                    title={`Remove ${FX_REGISTRY[unit.type].name}`}
+                    aria-label={`Remove ${FX_REGISTRY[unit.type].name}`}
                     onClick={() => {
                       rack.removeUnit(i);
+                      setDragState(null);
                       bump();
                     }}
                   >
-                    ✕
+                    <svg viewBox="0 0 12 12" aria-hidden="true" focusable="false">
+                      <path d="M2.5 2.5 L9.5 9.5 M9.5 2.5 L2.5 9.5" />
+                    </svg>
                   </button>
                 </div>
 

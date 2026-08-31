@@ -1352,3 +1352,99 @@ required. Enabling `.X8L` should be one line plus a real file to test against.
 edit. Capture's recording paths (Guided, Auto, the patch queue, the FX rack,
 the sampler, export) are untouched; the import path shares only
 `bundleFolderName` and the `sampleFileName` convention with export.
+
+## Client review round 7 — FX rack: off by default, removable, reorderable (2026-08-31)
+
+The same three reports as Signature; the shared half lives in `packages/jmi-format`
+(`DEFAULT_UNIT_BYPASSED`, `buildDefaultRack(world, { bypassed })`, `defaultUnitState`),
+so neither app can drift from the other.
+
+### 88. FX off by default — and what that means for bundles already on disk
+`buildDefaultRack` now returns the world's rack **present but bypassed**. Because
+`bypassed` is a *required* property of every saved rack unit, every load path reads the
+explicit value and none consults the default: a preset written under the old default
+(`"bypassed": false`) still loads with its FX on, unchanged. That is deliberate — a preset
+must mean what it says — and it is exactly why the client's already-imported bundles need
+a separate answer:
+
+- **New imports and new exports are dry.** `x7lConvert.importPresets` now writes
+  `Default.json` (the world's rack, bypassed) **and** `With FX.json` (the same rack,
+  active), so the voicing is one click rather than six switches. Export does the same: the
+  old `Dry.json` would have become a duplicate of the new `Default.json`, so the pair is
+  now `Default` (dry) + `With FX` (voiced).
+- **Bundles already imported keep their FX on** until their presets are rewritten. The
+  remedy is a new CLI verb: `npx jmi fx-off "<bundle>.jmi"` sets every unit of every preset
+  in that bundle to bypassed, writes a `.bak` beside each file it touches, and re-validates
+  the bundle. `jmi fx-on` is the exact inverse. Implemented in `src/fx-bypass.ts`
+  (`setBundleFxBypassed`) so it is testable and not welded to the CLI.
+  **Nothing in the client's library was rewritten** — his files are his to change.
+
+### 89. Removal made obvious
+The `✕` existed but was a bare glyph that read as decoration. It is now a bordered,
+hit-target-sized chip in the plate language (`.jm-fx-x`, chrome-well gradient, plaque
+hairline, gold on hover), carrying a drawn SVG cross and an `aria-label`. Every colour,
+radius and metric comes from `tokens.ts`; no literals in the component.
+
+### 90. Drag to reorder — and why the whole unit stopped being draggable
+The unit used to carry `draggable` on its root. That fights the knobs, which drag with
+pointer events: any drag begun on a knob would have been stolen by HTML5 drag. Reordering
+now arms only from a dedicated **grab handle** (`.jm-fx-grip`, three rails, `cursor: grab`)
+in the unit's head. The drag ghost is the unit itself via `setDragImage`, the source unit
+dims (`.dragging`), and the insertion point is a gold rule with end caps.
+
+That rule is a child of the **rack**, not of a unit: a bypassed unit carries a
+`grayscale()` filter, and anything drawn inside it — a pseudo-element included — is
+desaturated with it, which turned the gold rule grey exactly when the rack is at its most
+default. It is positioned from `--jm-fx-drop-index` (a gap count) through the existing
+unit-width and gutter tokens.
+
+### 91. Clickless structural edits in Web Audio
+Rewiring a Web Audio graph mid-stream is a step discontinuity — the junction being
+disconnected is almost never carrying zero. `FxRack` therefore wraps every structural edit
+(add / remove / reorder) in `restructure()`:
+
+1. the **model** changes immediately, so `slots` — what the UI renders — is right the
+   moment the player lets go;
+2. the rack crossfades from the chain to a straight **dry feed of its own input** over
+   `RESTRUCTURE_FADE_S` (12 ms). The gates sit *after* the units, so the chain keeps
+   receiving signal and its tails keep running;
+3. the graph is rewired only once the chain's output is silent, and a removed unit is
+   disposed there rather than at the call site (`dispose()` disconnects, which is the very
+   edit the crossfade exists to hide);
+4. the chain is held muted for `RESTRUCTURE_SETTLE_S` (30 ms) before fading back.
+
+Step 4 was **found by measurement, not designed in**: rewiring steps an *internal*
+junction, so the unit that suddenly sees a different input rings — biquads, shaper,
+compressor envelope. Fading straight back in simply faded that ringing in, and the measured
+worst step was 0.704 against a 0.147 reference. Letting the transient die inside the muted
+chain first brought it to **0.123**, i.e. *below* the signal's own steady-state slope.
+
+Two further details the measurement forced: the ramp start is taken from the **known**
+previous gate state, not from `AudioParam.value` (which is the value last *set*, not the
+value the automation has reached — re-anchoring on it mid-ramp is itself a step); and a
+second edit while the first is still crossfading rides along with the in-flight rewire
+instead of starting a second fade. `scheduleRestructure` is injectable so an
+`OfflineAudioContext` can drive the deferred half deterministically through `suspend()`.
+
+### 92. Test evidence (2026-08-31)
+- `npm run build -w @jm/jmi-format` — clean; `npm run test -w @jm/jmi-format` — **21/21**
+  (14 new: default racks bypassed in all four worlds, the `bypassed` schema requirement,
+  a legacy `bypassed:false` preset validating and still meaning false, and `fx-off` /
+  `fx-on` on a real bundle folder incl. the `.bak`).
+- `npm run typecheck -w jm-capture` — clean.
+- `npm run test -w jm-capture` — **208/208, 14 files** (the 193 that existed plus 15 new in
+  `test/fxRackEdit.test.ts`). `test/fxHarness.ts` now loads its rack with
+  `{ bypassed: false }` and says why: the FX-stability renders are about the DSP, and a
+  bypassed rack would have made every one of those assertions pass on a dry signal.
+- `npm run build -w jm-capture` — renderer + electron main/preload, exit 0.
+- Screens shot against the live Vite dev server (**Electron deliberately not launched**,
+  per instruction) through a throwaway harness that mounts the real `FxRackView` over a
+  real `FxRack`; the harness was deleted after shooting. New screenshots:
+  `apps/capture/screenshots/27-fx-rack-off-by-default.png` (every unit greyed, grip +
+  power + name + remove chip in each head) and `28-fx-reorder-drag.png` (source unit
+  dimmed, gold insertion rule in the target gap).
+
+### 93. Not touched
+No `.jmi` schema, parameter id, range or registry-unit-list change. Recording (Guided,
+Auto, the patch queue), the sampler and the WAV writer are untouched; the FX change is
+confined to the rack's structure handling and its view.

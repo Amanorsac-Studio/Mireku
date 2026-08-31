@@ -202,6 +202,61 @@ private:
     float fontH_ = 0.0f;
 };
 
+//====================================================== CLIENT REVIEW R7 (2/3)
+/// The drag GRIP: three recessed rails, the universal "pick this up" mark, in
+/// the plate register (dark groove + gold-dark highlight). Drawn rather than
+/// built as a component so it costs nothing and never eats a mouse event — the
+/// panel that owns it decides what its header does with the drag.
+inline void drawGrip (juce::Graphics& g, juce::Rectangle<float> r, bool hot)
+{
+    g.setColour (juce::Colour (0xff0A0908).withAlpha (0.72f));      // recessed pad
+    g.fillRoundedRectangle (r.expanded (2.0f, 1.0f), 3.0f);
+    g.setColour ((hot ? Theme::gold : Theme::goldDark).withAlpha (0.75f));
+    g.drawRoundedRectangle (r.expanded (2.0f, 1.0f), 3.0f, 1.0f);
+    const float gap = juce::jmax (2.0f, r.getHeight() / 5.0f);
+    for (int i = 0; i < 3; ++i)
+    {
+        auto line = juce::Rectangle<float> (r.getX() + 1.0f, r.getY() + gap * (float) (i * 2),
+                                            r.getWidth() - 2.0f, 1.5f);
+        g.setColour (juce::Colours::black.withAlpha (0.65f));
+        g.fillRect (line.translated (0.0f, 1.0f));
+        g.setColour (hot ? Theme::goldHi : Theme::cream.withAlpha (0.62f));
+        g.fillRect (line);
+    }
+}
+
+/// A small square chip carrying a drawn glyph — the destructive "remove this
+/// unit" control on an FX panel. Same recessed plate language as BYPASS, sized
+/// as a real hit target, and it takes the warning colour on hover so a
+/// destructive action announces itself before it is taken.
+class RemoveChipButton : public juce::Button
+{
+public:
+    RemoveChipButton() : juce::Button ("remove") {}
+
+    void paintButton (juce::Graphics& g, bool hover, bool down) override
+    {
+        auto r = getLocalBounds().toFloat().reduced (1.0f);
+        if (down) r = r.translated (0.0f, 1.0f);
+        juce::ColourGradient body (juce::Colour (0xff17140F), r.getX(), r.getY(),
+                                   juce::Colour (0xff090807), r.getX(), r.getBottom(), false);
+        g.setGradientFill (body);
+        g.fillRoundedRectangle (r, 4.0f);
+        const auto edge = hover ? Theme::warnRed : Theme::goldDark.withAlpha (0.85f);
+        g.setColour (edge);
+        g.drawRoundedRectangle (r.reduced (0.5f), 4.0f, 1.0f);
+        auto x = r.reduced (r.getWidth() * 0.3f);
+        g.setColour (hover ? Theme::warnRed : Theme::muted);
+        g.drawLine (x.getX(), x.getY(), x.getRight(), x.getBottom(), 1.6f);
+        g.drawLine (x.getRight(), x.getY(), x.getX(), x.getBottom(), 1.6f);
+        if (hasKeyboardFocus (false))
+        {
+            g.setColour (HwState::focus);
+            g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (1.0f), 4.0f, 2.0f);
+        }
+    }
+};
+
 /// Container that paints the recessed plaque behind a row of TabCellButtons.
 class SegmentStrip : public juce::Component
 {

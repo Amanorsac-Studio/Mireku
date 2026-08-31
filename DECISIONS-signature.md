@@ -1385,3 +1385,108 @@ is a one-line change to `ModelPagePanel::paint`.
 - `ctest`: EngineTests 100% passed (58 checks).
 - pluginval 1.3.5 strictness 8 (full run incl. editor tests): **SUCCESS**, twice consecutively. The very first full-GUI run reported one FAILURE with no named failing test; subsequent runs (and the `--skip-gui-tests` run) all pass — treated as a first-run flake (likely editor-open timing during cold bundle preload) and worth a re-check in CI.
 - Standalone launches and stays alive (12 s smoke, then killed).
+
+## Client review round 7 — FX rack: off by default, removable, reorderable (2026-08-31)
+
+Client: *"Master effects and effects on the modules should be off by default… also
+there's no way to delete effects from rack… and reorder them."* Three changes, one
+of them in the shared format package so the two apps cannot drift.
+
+### 88. FX off by default — a DEFAULT, never an override
+`buildDefaultRack` (FxDsp.h) now builds every unit **present but bypassed**, mirroring
+`DEFAULT_UNIT_BYPASSED` in `packages/jmi-format/src/fx-params.ts`; the C++ side carries
+`kDefaultUnitBypassed` and a `defaultUnitState (type, bypassed)` helper so the flag lives
+in exactly two places that reference each other by name.
+
+The units are **not removed** — the world's documented rack is still there, in its
+documented order with its documented parameters, so the player can see what the
+instrument offers and switch it on. Only the sound changed: an instrument loads dry.
+
+**Why this cannot disturb a saved preset.** `bypassed` is a *required* property of every
+rack unit in `schema/preset.schema.json`, so no valid preset is silent about it. Every
+load path reads the explicit value verbatim and none of them consults the default:
+`rackFromVar` (plugin state, performance presets), `rackFromJmiPreset` (.jmi presets),
+Capture's `FxRack.load`. A preset written before this change — `"bypassed": false` on
+every unit — therefore still loads with its FX **on**, byte for byte the behaviour it had.
+Pinned by tests in all three packages, including a mixed rack whose per-unit flags must
+survive `false,true,true,false,true` intact.
+
+Scope of the default: it applies wherever a rack is *constructed from defaults* — the four
+slot racks in a fresh `AppState`, a bundle loaded without a preset (`PluginProcessor.cpp`),
+`Perform.h`'s world switch. Signature's **master rack is empty by default** and always was,
+so it is dry for free; what the master menu must not do is build itself a default rack that
+is on, and it does not. A unit the player **adds or replaces by hand** arrives **active** —
+that is an explicit act, not a default, and a unit that added itself silent would read as
+broken.
+
+### 89. Removal: a control on the unit, not a menu entry
+Removal existed (kebab → "Remove"), which is why the client could not find it. Each FX
+panel now carries a `ux::RemoveChipButton` — the same recessed plate register as BYPASS,
+sitting beside it, 18×18 at the unit's native scale, taking `Theme::warnRed` on hover so a
+destructive control announces itself. The kebab moved down beside it and keeps every route
+it had. Both routes funnel through one `commitStructural()`, so they cannot drift.
+
+That also fixed a latent **use-after-free**: the old menu handler called `onRackEdit()` —
+which rebuilds the strip and deletes the panel — and then touched `proc_` through the dead
+`this`. `commitStructural` copies the callback out and calls it last, with nothing after it.
+
+### 90. Drag to reorder (spec §4), and how it stays clickless
+- **Gesture.** The unit's **header strip** is the handle, marked with a drawn `ux::drawGrip`
+  and a dragging-hand cursor. Knobs are child components and consume their own mouse
+  events, so a drag begun on a knob never reaches the panel and stays a knob drag; the
+  panel arms only from the header, past a 6 px threshold.
+- **Ghost.** `fxdrag::makeGhost` snapshots the unit's own faceplate, translucent, at half
+  size through `juce::ScaledImage` — the player drags a picture of the thing they grabbed.
+- **Indicator.** `FxRackStrip` is the `DragAndDropTarget` (the panels are not, so every
+  drag-move lands on the strip). It computes the insertion **gap** from the pointer against
+  the unit centres and paints a gold rule with end caps in that gap. Payload
+  (`jm.fx.move|<rack>|<index>`) carries the rack prefix, so a unit can only be dropped back
+  into the rack it came from — asserted for macro-link drags and cross-rack drags.
+- **Real-time safety.** Reordering is *audible*, so it is a two-step message-thread
+  operation and the audio thread gains nothing new:
+  `FxRackDsp::beginRestructure()` ramps every slot's wet/dry mix to 0 over the same 20 ms
+  smoothing the BYPASS button already uses — the rack keeps running the units and keeps
+  passing **dry**, so audio never stops and delay/reverb tails stay fed. 25 ms later
+  `setState (next, rampIn=true)` swaps the slots *while every one of them is fully dry* and
+  ramps the un-bypassed ones back to wet. No allocation, no lock and no file I/O on the
+  audio thread; the audio thread still only takes the try-lock it always took. The deferred
+  step is guarded by a `std::weak_ptr` lifetime token so a 25 ms timer can never outlive the
+  processor.
+- **Measured, not asserted by eye** (`EngineTests`, `R7 (3)`): the same rack renders a
+  220 Hz tone in each of the two orders undisturbed, and once with the reorder applied
+  live. Worst per-sample step across the change **0.022485** against a steady-state
+  reference of **0.022591** — i.e. the change is *smoother* than the signal's own slope.
+  RMS during the hand-over 0.3495 vs 0.4500 steady: it goes dry, it does not go silent.
+- **Persistence** is unchanged because order was always positional: `rackToVar` /
+  `rackFromVar`, `slotToVar` / `slotFromVar` and the .jmi preset array all carry it.
+  Asserted through preset JSON and through the slot record plugin/performance presets save.
+
+### 91. Known consequence, unchanged from before
+Macro links and modulation-matrix rows address FX parameters positionally
+(`slot0.fx2.mix`), so reordering or removing a unit re-points them — exactly as the
+pre-existing "Move left / Move right" menu items always did. Not touched this round;
+naming links by unit identity is a separate change to the saved state.
+
+### 92. Not touched
+No `.jmi` schema, parameter id, range or registry change; `FxParams.h`'s unit list and
+indices are untouched, as its warning requires. No DSP behaviour, modulation or sampler
+change.
+
+### 93. Build / test evidence (2026-08-31)
+- Release build (Ninja, MSVC): **exit 0**, VST3 + Standalone + both console targets. One
+  relink hit `LNK1104` because the client's standalone was running; the "JM Signature"
+  process (PID 31860) was terminated and the build completed — noted as required.
+- `ctest -C Release`: **100% passed, 2/2** (EngineTests 2.21 s, UiSelfCheck 15.03 s).
+- `JMSignatureTests`: **ALL TESTS PASSED (0 failures)**, including the three new R7 blocks.
+- `JMSignatureSnapshot`: **SELF-CHECK PASSED (0 failures)**, including a live click on a
+  remove chip (rack 5 → 4, and the DSP rack follows) and a live drop that reorders.
+- New snapshots in `apps/signature/build/snapshots/`: `round7-fx-remove-control.png`,
+  `round7-fx-rack-strip.png` (the strip alone, legibly) and `round7-fx-reorder-drag.png`
+  (ghost, cursor and insertion rule). The whole earlier set regenerated unchanged.
+- **pluginval could not be run this round: the binary is no longer present on this
+  machine** (searched `C:\`, the user profile, `C:\SDKs`, `C:\JUCE`, `C:\work`,
+  `C:\DAW VST`). Downloading it was not done without the user's go-ahead. Nothing in this
+  round adds a parameter, changes the parameter layout, or touches `processBlock`'s
+  real-time contract, so the previous strictness-8 result should still stand — but it
+  needs re-running once the binary is back.
+- The standalone was **not launched**.

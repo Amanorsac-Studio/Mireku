@@ -458,6 +458,48 @@ inline juce::Image makeGhost (const juce::String& caption)
 
 } // namespace macrodrag
 
+//====================================================== CLIENT REVIEW R7 (3)
+/// Drag-and-drop payload for "drag an FX unit to a new position in the rack".
+/// Format: "jm.fx.move|<rack prefix>|<slot index>".
+///
+/// The rack prefix ("slot0".."slot3", "master") is carried so a unit can only
+/// ever be dropped back into the rack it came from — the racks are separate
+/// signal chains and the parameter paths are per rack.
+namespace fxdrag {
+
+inline juce::var makePayload (const juce::String& rackPrefix, int index)
+{
+    return juce::var ("jm.fx.move|" + rackPrefix + "|" + juce::String (index));
+}
+inline bool isPayload (const juce::var& v)
+{
+    return v.isString() && v.toString().startsWith ("jm.fx.move|");
+}
+inline juce::String rackOf (const juce::var& v)
+{
+    return juce::StringArray::fromTokens (v.toString(), "|", "")[1];
+}
+inline int indexOf (const juce::var& v)
+{
+    auto t = juce::StringArray::fromTokens (v.toString(), "|", "");
+    return t.size() > 2 ? t[2].getIntValue() : -1;
+}
+
+/// How much smaller than life the drag ghost is drawn (ScaledImage scale).
+inline constexpr float kGhostScale = 2.0f;
+
+/// The drag ghost: the unit's own faceplate, translucent, drawn at half size by
+/// the ScaledImage above. Dragging a picture of the thing you grabbed is the
+/// whole point of the affordance, and it costs one snapshot at drag start.
+inline juce::Image makeGhost (juce::Component& unit)
+{
+    auto img = unit.createComponentSnapshot (unit.getLocalBounds(), false, 1.0f);
+    img.multiplyAllAlphas (0.85f);
+    return img;
+}
+
+} // namespace fxdrag
+
 //==============================================================================
 inline juce::String formatParamValue (const ParamSpec& spec, float value)
 {

@@ -1754,6 +1754,136 @@ int main()
                          1000.0 * (bs + bs + measuredDelay) / sr);
     }
 
+    //========================================================================
+    // CLIENT REVIEW ROUND 7 — the FX rack: a visible remove control on every
+    // unit, and drag-to-reorder with a live insertion indicator.
+    //========================================================================
+    std::printf ("\n== R7 (2/3) FX rack: remove control + drag to reorder ==\n");
+    {
+        proc.state.currentPage = 0;
+        // the rack under test is the one the strip shows for page 0
+        proc.state.slots[0].rack = buildDefaultRack (0, false);
+
+        auto* ed = dynamic_cast<JMSignatureEditor*> (proc.createEditor());
+        ed->setSize (Theme::M::designW, Theme::M::designH);
+        ed->setVisible (true);
+
+        auto* strip = findOne<FxRackStrip> (*ed);
+        CHECK (strip != nullptr, "FX rack strip present");
+
+        std::vector<FxUnitPanel*> units;
+        findAll<FxUnitPanel> (*ed, units);
+        std::printf ("  units on the strip: %d\n", (int) units.size());
+        CHECK (units.size() >= 3, "enough units on the strip to reorder");
+
+        // ---- item 2: removal is a control ON the unit, not a menu entry
+        std::vector<ux::RemoveChipButton*> chips;
+        findAll<ux::RemoveChipButton> (*ed, chips);
+        std::printf ("  remove chips found: %d\n", (int) chips.size());
+        CHECK (chips.size() == units.size(), "every rack unit carries a visible remove control");
+        bool onScreen = ! chips.empty();
+        for (auto* c : chips)
+            onScreen &= c->isVisible() && c->getWidth() >= 14 && c->getHeight() >= 14
+                        && ed->getLocalArea (c, c->getLocalBounds()).getWidth() > 0;
+        CHECK (onScreen, "the remove control is visible and a real hit target");
+        // the mouse actually reaches it (nothing paints over it)
+        if (! chips.empty())
+        {
+            auto c = ed->getLocalPoint (chips[0], chips[0]->getLocalBounds().getCentre());
+            CHECK (ed->getComponentAt (c) == chips[0], "the remove control receives the mouse at its centre");
+        }
+        savePng (*ed, "round7-fx-remove-control.png");
+        savePng (*strip, "round7-fx-rack-strip.png");   // the strip alone, legibly
+
+        // ---- item 3: the drag payload, the target, and the insertion indicator
+        auto payload = fxdrag::makePayload (units[0]->rackPrefix(), units[0]->rackIndex());
+        CHECK (fxdrag::isPayload (payload) && fxdrag::indexOf (payload) == units[0]->rackIndex(),
+               "the reorder payload round-trips the unit's rack position");
+        juce::DragAndDropTarget::SourceDetails onUnit3 (
+            payload, units[0], strip->getLocalPoint (units[2], units[2]->getLocalBounds().getCentre()));
+        CHECK (strip->isInterestedInDragSource (onUnit3), "the rack strip accepts a reorder drag from its own rack");
+        juce::DragAndDropTarget::SourceDetails foreign (
+            macrodrag::makePayload ("slot0.fx0.mix", "MIX"), units[0], onUnit3.localPosition);
+        CHECK (! strip->isInterestedInDragSource (foreign), "it rejects a macro-link drag");
+        juce::DragAndDropTarget::SourceDetails otherRack (
+            fxdrag::makePayload ("master", 0), units[0], onUnit3.localPosition);
+        CHECK (! strip->isInterestedInDragSource (otherRack), "it rejects a unit dragged from another rack");
+
+        // the indicator: drive a drag-move over the third unit and shoot it,
+        // compositing the ghost the container would draw under the cursor
+        strip->itemDragEnter (onUnit3);
+        {
+            auto img = ed->createComponentSnapshot (ed->getLocalBounds(), false, 1.0f);
+            auto ghost = fxdrag::makeGhost (*units[0]);
+            auto at = ed->getLocalPoint (strip, onUnit3.localPosition);
+            {   // the Graphics must go out of scope before the image is read back
+                juce::Graphics g (img);
+                g.setOpacity (0.85f);
+                g.drawImage (ghost, juce::Rectangle<float> ((float) at.x - 40.0f, (float) at.y - 30.0f,
+                                                            (float) ghost.getWidth() / fxdrag::kGhostScale,
+                                                            (float) ghost.getHeight() / fxdrag::kGhostScale));
+                // and the cursor, so the shot reads as a drag in progress
+                juce::Path arrow;
+                arrow.startNewSubPath ((float) at.x, (float) at.y);
+                arrow.lineTo ((float) at.x, (float) at.y + 17.0f);
+                arrow.lineTo ((float) at.x + 5.0f, (float) at.y + 12.5f);
+                arrow.lineTo ((float) at.x + 12.0f, (float) at.y + 12.0f);
+                arrow.closeSubPath();
+                g.setOpacity (1.0f);
+                g.setColour (juce::Colours::white);
+                g.fillPath (arrow);
+                g.setColour (juce::Colours::black);
+                g.strokePath (arrow, juce::PathStrokeType (1.0f));
+            }
+            saveImage (img, "round7-fx-reorder-drag.png");
+        }
+
+        // ---- and the drop actually reorders the rack, in the model and the DSP
+        const auto before = proc.state.slots[0].rack;
+        strip->itemDropped (onUnit3);
+        const auto& after = proc.state.slots[0].rack;
+        std::printf ("  before: ");
+        for (auto& u : before) std::printf ("%s ", fxSpec (u.type).typeId);
+        std::printf ("\n  after : ");
+        for (auto& u : after) std::printf ("%s ", fxSpec (u.type).typeId);
+        std::printf ("\n");
+        CHECK (after.size() == before.size(), "a reorder never adds or loses a unit");
+        CHECK (after[0].type != before[0].type && after[1].type == before[0].type,
+               "the dragged unit landed in the gap the indicator pointed at");
+        // ...and the order that lands is the order that gets saved
+        auto rt = rackFromVar (juce::JSON::parse (juce::JSON::toString (rackToVar (after))));
+        bool kept = rt.size() == after.size();
+        for (size_t i = 0; i < rt.size() && kept; ++i) kept = rt[i].type == after[i].type;
+        CHECK (kept, "the dropped order round-trips through saved state");
+
+        strip->itemDragExit (onUnit3);
+
+        // ---- and the remove control actually removes, from the rack AND the DSP
+        {
+            std::vector<ux::RemoveChipButton*> live;
+            findAll<ux::RemoveChipButton> (*ed, live);
+            const auto sizeBefore = proc.state.slots[0].rack.size();
+            const auto goneType = proc.state.slots[0].rack[1].type;
+            live[1]->onClick();          // what the mouse does, without the queue
+            // ...then let the clickless two-step's 25 ms timer run
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (80);
+            const auto& r = proc.state.slots[0].rack;
+            std::printf ("  rack size %d -> %d after clicking one remove chip\n",
+                         (int) sizeBefore, (int) r.size());
+            CHECK (r.size() == sizeBefore - 1, "clicking the remove chip takes exactly one unit out");
+            bool stillThere = false;
+            for (auto& u : r) stillThere |= u.type == goneType;
+            CHECK (! stillThere, "the removed unit is the one whose chip was clicked");
+            // the DSP follows (the two-step restructure has had its 25 ms)
+            CHECK (proc.slotRacks[0].numUnits() == (int) r.size(),
+                   "the DSP rack matches the model after a removal");
+        }
+
+        delete ed;
+        proc.state.slots[0].rack = buildDefaultRack (0);
+        proc.slotRacks[0].setState (proc.state.slots[0].rack);
+    }
+
     juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
     std::printf ("\nworst measured hero offset: (%d,%d) px\n", worstDx, worstDy);
     std::printf ("%s (%d failure%s)\n", failures == 0 ? "SELF-CHECK PASSED" : "SELF-CHECK FAILED",

@@ -185,10 +185,47 @@ export function defaultParams(type: FxType): Record<string, number | string | bo
   return out;
 }
 
-export function buildDefaultRack(world: World): FxUnitState[] {
+/**
+ * CLIENT REVIEW ROUND 7 (item 1) — "Master effects and effects on the modules
+ * should be off by default."
+ *
+ * A default rack is now built PRESENT BUT BYPASSED: every unit the world calls
+ * for is still in the rack, in its documented order, with its documented
+ * parameters, so the player can see what is available and switch it on — but
+ * the instrument sounds dry the moment it loads.
+ *
+ * This is a *default*, and nothing else. `bypassed` is a REQUIRED property of
+ * every rack unit in `schema/preset.schema.json`, so every preset ever written
+ * — by Capture, by the placeholder generator, by James's own bundles — carries
+ * an explicit value, and every load path (this package's parsers, Capture's
+ * `FxRack.load`, Signature's `rackFromVar` / `rackFromJmiPreset`) reads that
+ * explicit value verbatim. A preset that says `bypassed: false` therefore still
+ * loads with its unit ACTIVE, exactly as it did before this change. The only
+ * behaviour that moved is what you get when there is no saved state to read.
+ *
+ * The same constant governs Signature's master rack (`FxDsp.h`
+ * `kDefaultUnitBypassed`), so the two apps cannot drift apart.
+ */
+export const DEFAULT_UNIT_BYPASSED = true;
+
+/** One rack unit at its registry defaults. `bypassed` follows the default above. */
+export function defaultUnitState(type: FxType, bypassed = DEFAULT_UNIT_BYPASSED): FxUnitState {
+  return { type, bypassed, params: defaultParams(type) };
+}
+
+/**
+ * The world's default rack.
+ *
+ * @param opts.bypassed overrides the shipped default. Pass `false` only where
+ * an ACTIVE rack is the subject under test (the offline FX-stability renders),
+ * never in product code — product code must get the shipped default so the two
+ * apps agree.
+ */
+export function buildDefaultRack(world: World, opts?: { bypassed?: boolean }): FxUnitState[] {
+  const bypassed = opts?.bypassed ?? DEFAULT_UNIT_BYPASSED;
   return DEFAULT_RACKS[world].map((type) => ({
     type,
-    bypassed: false,
+    bypassed,
     params: { ...defaultParams(type), ...(DEFAULT_RACK_OVERRIDES[world][type] ?? {}) },
   }));
 }

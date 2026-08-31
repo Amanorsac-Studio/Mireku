@@ -38,19 +38,36 @@ export interface ConvertedBundle {
   notes: string[];
 }
 
-/** A neutral starting preset, so an imported bundle has the same shape as an exported one. */
-export function importPreset(plan: X7lInstrumentPlan): Preset {
+/**
+ * A neutral starting preset, so an imported bundle has the same shape as an
+ * exported one.
+ *
+ * CLIENT REVIEW ROUND 7 (item 1): `buildDefaultRack` now returns the world's
+ * rack BYPASSED, so an imported instrument opens dry — which is what James
+ * asked for. `fxOn` writes the same preset with the rack active, so
+ * `importPresets` below can ship both and switching the world's voicing on is
+ * one click rather than six.
+ */
+export function importPreset(plan: X7lInstrumentPlan, fxOn = false): Preset {
   return {
     formatVersion: 1,
-    name: 'Default',
+    name: fxOn ? 'With FX' : 'Default',
     tags: [plan.world, 'imported'],
     engine: defaultEngineParams(plan.world),
-    fxRack: buildDefaultRack(plan.world),
+    fxRack: buildDefaultRack(plan.world, { bypassed: !fxOn }),
     ampEnvelope:
       plan.soundType === 'decaying'
         ? { attackMs: 2, decayMs: 0, sustain: 100, releaseMs: 250 }
         : { attackMs: 10, decayMs: 0, sustain: 100, releaseMs: 400 },
   };
+}
+
+/** The presets an import writes: dry first, the world's voicing beside it. */
+export function importPresets(plan: X7lInstrumentPlan): { fileName: string; preset: Preset }[] {
+  return [
+    { fileName: 'Default.json', preset: importPreset(plan) },
+    { fileName: 'With FX.json', preset: importPreset(plan, true) },
+  ];
 }
 
 export function convertInstrument(
@@ -103,10 +120,8 @@ export function convertInstrument(
     sourceFileName: opts.sourceFileName,
   });
   fs.writeFile(fs.join(bundlePath, 'instrument.json'), JSON.stringify(instrument, null, 2));
-  fs.writeFile(
-    fs.join(bundlePath, 'presets', 'Default.json'),
-    JSON.stringify(importPreset(plan), null, 2),
-  );
+  for (const { fileName, preset } of importPresets(plan))
+    fs.writeFile(fs.join(bundlePath, 'presets', fileName), JSON.stringify(preset, null, 2));
 
   return {
     instrumentName: plan.name,

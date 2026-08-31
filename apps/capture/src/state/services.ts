@@ -738,12 +738,24 @@ class Services {
     return this.rack?.serialize() ?? [];
   }
 
+  /**
+   * The two presets every exported bundle ships with.
+   *
+   * CLIENT REVIEW ROUND 7 (item 1): `buildDefaultRack` is now bypassed, so
+   * "Default" IS the dry preset and the old "Dry" would have been its
+   * duplicate. The pair is therefore Default (dry — what the instrument opens
+   * with) and "With FX" (the world's documented rack, active), so hearing the
+   * voicing is one click instead of six switches.
+   */
   defaultPresetsFor(session: SessionState): { fileName: string; preset: Preset }[] {
     return [
       { fileName: 'Default.json', preset: defaultPreset(session, 'Default') },
       {
-        fileName: 'Dry.json',
-        preset: { ...defaultPreset(session, 'Dry'), fxRack: buildDefaultRack(session.config.world).map((u) => ({ ...u, bypassed: true })) },
+        fileName: 'With FX.json',
+        preset: {
+          ...defaultPreset(session, 'With FX'),
+          fxRack: buildDefaultRack(session.config.world, { bypassed: false }),
+        },
       },
     ];
   }

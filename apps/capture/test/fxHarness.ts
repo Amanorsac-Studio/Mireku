@@ -99,7 +99,12 @@ export async function renderUnit(
 export async function renderDefaultRack(world: World, seconds = 20): Promise<Measurement> {
   const ctx = ctxFor(seconds);
   const rack = new FxRack(ctx as unknown as BaseAudioContext);
-  rack.load(buildDefaultRack(world));
+  // The subject of these renders is the DSP, not the shipped default: since
+  // client review round 7 a default rack loads bypassed (spec §4 / fx-params
+  // `DEFAULT_UNIT_BYPASSED`), which would make every stability assertion below
+  // pass trivially on a dry signal. Force the units ACTIVE so the feedback
+  // paths are the thing being measured.
+  rack.load(buildDefaultRack(world, { bypassed: false }));
   const buf = ctx.createBuffer(2, SR * 2, SR);
   for (let c = 0; c < 2; c++) {
     const d = buf.getChannelData(c);

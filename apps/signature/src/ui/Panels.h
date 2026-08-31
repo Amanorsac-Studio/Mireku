@@ -350,6 +350,14 @@ public:
         menuBtn_->onClick = [this] { showMenu(); };
         addAndMakeVisible (*menuBtn_);
 
+        // CLIENT REVIEW ROUND 7 (item 2): "there's no way to delete effects from
+        // rack". There was — buried in the kebab menu — so it might as well not
+        // have existed. Removal is now a control ON the unit, beside BYPASS,
+        // where a hardware rack would put it. The menu route still works.
+        removeBtn_.setTooltip ("Remove this unit from the rack");
+        removeBtn_.onClick = [this] { removeSelf(); };
+        addAndMakeVisible (removeBtn_);
+
         for (auto& ps : spec.params)
         {
             auto path = prefix_ + ".fx" + juce::String (idx_) + "." + ps.id;
@@ -432,7 +440,13 @@ public:
         auto S = [u] (int v) { return juce::roundToInt ((float) v * u); };
         auto head = r.withY (S (8)).withHeight (S (20));
         power_.setBounds (r.getRight() - S (28), S (9), S (20), S (20));
-        menuBtn_->setBounds (S (9), S (10), S (16), S (16));
+        // R7: the top-left corner is now the GRAB HANDLE (drawn, not a
+        // component), so the kebab moves down beside BYPASS and the new remove
+        // chip takes the matching position on the right of it.
+        gripArea_ = juce::Rectangle<int> (S (8), S (11), S (14), S (12));
+        headerArea_ = juce::Rectangle<int> (0, 0, r.getWidth(), S (34));
+        menuBtn_->setBounds (S (10), S (178), S (18), S (18));
+        removeBtn_.setBounds (r.getRight() - S (28), S (178), S (18), S (18));
         title_.setBounds (head.reduced (S (26), 0));
         bypass_.setBounds (juce::Rectangle<int> (S (84), S (26)).withCentre ({ r.getCentreX(), S (189) }));
 
@@ -466,6 +480,10 @@ public:
         g.setColour (Theme::gold.withAlpha (0.28f));
         g.drawRoundedRectangle (plaque, 4.0f, 1.0f);
 
+        // R7 (item 3): the grab handle. Anywhere on the header strip starts a
+        // reorder drag; the rails say so.
+        ux::drawGrip (g, gripArea_.toFloat(), headerHot_);
+
         if (type_ == FxType::widener && rackDsp_ != nullptr)   // correlation meter
         {
             const float corr = rackDsp_->widenerCorrelation();
@@ -481,8 +499,68 @@ public:
 
     std::function<void()> onRackEdit;   // set by FxRackStrip: rebuild after structural ops
 
+    int rackIndex() const { return idx_; }
+    const juce::String& rackPrefix() const { return prefix_; }
+
+    //=================================================== CLIENT REVIEW R7 (3)
+    // Drag to reorder, spec §4. The gesture is armed ONLY from the header
+    // strip: a knob is a child component and consumes its own mouse events, so
+    // a drag that starts on a knob never reaches this handler and stays a knob
+    // drag. Nothing about the existing controls changes.
+    void mouseMove (const juce::MouseEvent& e) override
+    {
+        const bool hot = headerArea_.contains (e.getPosition());
+        setMouseCursor (hot ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::NormalCursor);
+        if (hot != headerHot_) { headerHot_ = hot; repaint(); }
+    }
+    void mouseExit (const juce::MouseEvent&) override
+    {
+        if (headerHot_) { headerHot_ = false; repaint(); }
+    }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        dragArmed_ = headerArea_.contains (e.getPosition());
+    }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (! dragArmed_ || dragging_ || e.getDistanceFromDragStart() < 6) return;
+        if (rackState_ == nullptr || (int) rackState_->size() < 2) return;    // nothing to reorder
+        auto* c = juce::DragAndDropContainer::findParentDragContainerFor (this);
+        if (c == nullptr) return;
+        dragging_ = true;
+        c->startDragging (fxdrag::makePayload (prefix_, idx_), this,
+                          juce::ScaledImage (fxdrag::makeGhost (*this), fxdrag::kGhostScale), true);
+    }
+    void mouseUp (const juce::MouseEvent&) override { dragArmed_ = false; dragging_ = false; }
+
 private:
     void timerCallback() override { repaint(); }
+
+    /// R7 (item 2). Shared by the remove chip and the menu's "Remove" item so
+    /// the two routes cannot drift.
+    void removeSelf()
+    {
+        if (rackState_ == nullptr || idx_ >= (int) rackState_->size()) return;
+        auto next = *rackState_;
+        next.erase (next.begin() + idx_);
+        commitStructural (std::move (next));
+    }
+
+    /// The one place a structural rack edit is applied: the model changes now
+    /// (so the strip redraws immediately) and the DSP follows through the
+    /// clickless two-step in FxRackDsp::applyStructuralChange.
+    void commitStructural (FxRackState next)
+    {
+        *rackState_ = next;
+        rackDsp_->applyStructuralChange (next);
+        // onRackEdit rebuilds the strip, which DELETES this panel. Everything
+        // that touches `this` has to happen before it, and the callback is
+        // copied out first because the member itself dies with the panel.
+        auto rebuildStrip = onRackEdit;
+        proc_.stateChanged.sendChangeMessage();
+        if (rebuildStrip) rebuildStrip();
+    }
+
     void showMenu()
     {
         juce::PopupMenu m;
@@ -495,20 +573,18 @@ private:
         m.showMenuAsync (styledMenu (m, *menuBtn_), [this] (int r)
         {
             if (rackState_ == nullptr || idx_ >= (int) rackState_->size() || r == 0) return;
-            auto& rack = *rackState_;
-            if (r == 1 && idx_ > 0) std::swap (rack[(size_t) idx_], rack[(size_t) idx_ - 1]);
-            else if (r == 2 && idx_ + 1 < (int) rack.size()) std::swap (rack[(size_t) idx_], rack[(size_t) idx_ + 1]);
-            else if (r == 3) rack.erase (rack.begin() + idx_);
+            auto next = *rackState_;
+            if (r == 1 && idx_ > 0) std::swap (next[(size_t) idx_], next[(size_t) idx_ - 1]);
+            else if (r == 2 && idx_ + 1 < (int) next.size()) std::swap (next[(size_t) idx_], next[(size_t) idx_ + 1]);
+            else if (r == 3) next.erase (next.begin() + idx_);
             else if (r >= 100)
             {
-                FxUnitState u;
-                u.type = (FxType) (r - 100);
-                u.params = defaultParams (u.type);
-                rack[(size_t) idx_] = std::move (u);
+                // an explicitly REPLACED unit is a deliberate act, so it comes
+                // in active — unlike a default rack, which is built bypassed
+                next[(size_t) idx_] = defaultUnitState ((FxType) (r - 100), false);
             }
-            rackDsp_->setState (rack);
-            if (onRackEdit) onRackEdit();
-            proc_.stateChanged.sendChangeMessage();
+            else return;
+            commitStructural (std::move (next));
         });
     }
 
@@ -522,8 +598,11 @@ private:
     PowerButton power_;
     std::unique_ptr<juce::DrawableButton> menuBtn_;
     ux::PlateButton bypass_;
+    ux::RemoveChipButton removeBtn_;
     juce::OwnedArray<ParamKnob> knobs_;
     juce::OwnedArray<ParamChoiceButton> choices_;
+    juce::Rectangle<int> gripArea_, headerArea_;
+    bool headerHot_ = false, dragArmed_ = false, dragging_ = false;
 };
 
 //==============================================================================
@@ -634,14 +713,20 @@ private:
         }
         m.showMenuAsync (styledMenu (m, *menuBtn_), [this] (int r)
         {
-            auto& rack = proc_.state.masterRack;
-            if (r >= 300) { FxUnitState u; u.type = (FxType) (r - 300); u.params = defaultParams (u.type);
-                            if (! rack.empty()) rack.front() = std::move (u); }
-            else if (r >= 100) { FxUnitState u; u.type = (FxType) (r - 100); u.params = defaultParams (u.type);
-                                 rack.push_back (std::move (u)); }
-            else if (r == 2 && ! rack.empty()) rack.erase (rack.begin());
+            // R7 (item 1): the master rack is EMPTY by default and every unit it
+            // gains from here is an explicit act, so those arrive active; what
+            // it must never do is build itself a default rack that is on. It
+            // goes through the same clickless two-step as the slot racks.
+            auto next = proc_.state.masterRack;
+            if (r >= 300) { if (next.empty()) return;
+                            next.front() = defaultUnitState ((FxType) (r - 300), false); }
+            else if (r >= 100) { if ((int) next.size() >= FxRackDsp::kMaxSlots) return;
+                                 next.push_back (defaultUnitState ((FxType) (r - 100), false)); }
+            else if (r == 2 && ! next.empty()) next.erase (next.begin());
             else return;
-            proc_.masterRack.setState (rack);
+            proc_.state.masterRack = next;
+            proc_.masterRack.applyStructuralChange (next);
+            rebuild();
             proc_.stateChanged.sendChangeMessage();
         });
     }
@@ -658,7 +743,8 @@ private:
 // Bottom FX rack strip, restored to the approved arrangement: "FX RACK" title,
 // a left vertical rail of rack icons, six colour-coded units, page dots and the
 // MASTER FX column at the right.
-class FxRackStrip : public juce::Component
+class FxRackStrip : public juce::Component,
+                    public juce::DragAndDropTarget
 {
 public:
     FxRackStrip (JMSignatureProcessor& p) : proc_ (p)
@@ -700,6 +786,47 @@ public:
     {
         for (auto* pn : panels_) pn->refresh();
         master_->refresh();
+    }
+
+    //=================================================== CLIENT REVIEW R7 (3)
+    // The strip is the drop target for its own units. The FX panels are not
+    // targets themselves, so every drag-move over a unit lands here and the
+    // insertion point is computed from the pointer's x against the unit
+    // centres — the standard "which gap am I nearest" rule.
+    bool isInterestedInDragSource (const SourceDetails& d) override
+    {
+        return fxdrag::isPayload (d.description) && fxdrag::rackOf (d.description) == prefix_;
+    }
+    void itemDragEnter (const SourceDetails& d) override { itemDragMove (d); }
+    void itemDragMove (const SourceDetails& d) override
+    {
+        const int gap = gapForX (d.localPosition.x);
+        if (gap != dropGap_) { dropGap_ = gap; repaint(); }
+    }
+    void itemDragExit (const SourceDetails&) override
+    {
+        if (dropGap_ >= 0) { dropGap_ = -1; repaint(); }
+    }
+    void itemDropped (const SourceDetails& d) override
+    {
+        const int from = fxdrag::indexOf (d.description);
+        const int gap = gapForX (d.localPosition.x);
+        dropGap_ = -1;
+        repaint();
+        if (rackState_ == nullptr || from < 0 || from >= (int) rackState_->size()) return;
+        // `gap` counts gaps, so once the unit is lifted out everything after it
+        // shifts down by one; dropping into either gap adjacent to itself is a
+        // no-op rather than a needless rack rebuild.
+        const int to = gap > from ? gap - 1 : gap;
+        if (to == from) return;
+        auto next = *rackState_;
+        auto moved = next[(size_t) from];
+        next.erase (next.begin() + from);
+        next.insert (next.begin() + juce::jlimit (0, (int) next.size(), to), std::move (moved));
+        *rackState_ = next;
+        rackDsp_->applyStructuralChange (next);
+        rebuild();
+        proc_.stateChanged.sendChangeMessage();
     }
 
     void resized() override
@@ -767,9 +894,36 @@ public:
             g.fillEllipse (dcx - 40.0f + (float) i * 20.0f, (float) L::fxDotsY, active ? 8.0f : 6.0f,
                            active ? 8.0f : 6.0f);
         }
+
+        // R7 (item 3): the insertion rule — where the dragged unit will land.
+        // Drawn in the gap between units so it never covers a control.
+        if (dropGap_ >= 0)
+        {
+            const float x = (float) (L::fxUnitX + dropGap_ * L::fxUnitPitch) - 4.0f;
+            auto bar = juce::Rectangle<float> (x - 1.5f, (float) L::fxUnitY - 4.0f,
+                                               3.0f, (float) L::fxUnitH + 8.0f);
+            g.setColour (Theme::gold.withAlpha (0.35f));
+            g.fillRoundedRectangle (bar.expanded (3.0f, 0.0f), 3.0f);
+            g.setColour (Theme::goldHi);
+            g.fillRoundedRectangle (bar, 1.5f);
+            for (int end = 0; end < 2; ++end)          // the rule's end caps
+                g.fillEllipse (juce::Rectangle<float> (9.0f, 9.0f)
+                                   .withCentre ({ x, end == 0 ? bar.getY() : bar.getBottom() }));
+        }
     }
 
 private:
+    /// Insertion GAP (0..units) nearest to a pointer x in strip coordinates.
+    int gapForX (int x) const
+    {
+        using L = Theme::L;
+        const int n = panels_.size();
+        int gap = 0;
+        for (int i = 0; i < n; ++i)
+            if (x > L::fxUnitX + i * L::fxUnitPitch + L::fxUnitW / 2) gap = i + 1;
+        return juce::jlimit (0, n, gap);
+    }
+
     void showAddMenu()
     {
         juce::PopupMenu m;
@@ -778,11 +932,12 @@ private:
         {
             if (r < 100 || rackState_ == nullptr) return;
             if ((int) rackState_->size() >= FxRackDsp::kMaxSlots) return;
-            FxUnitState u;
-            u.type = (FxType) (r - 100);
-            u.params = defaultParams (u.type);
-            rackState_->push_back (std::move (u));
-            rackDsp_->setState (*rackState_);
+            // A unit the player adds by hand arrives ACTIVE: that is an explicit
+            // act, unlike the world's default rack which now loads bypassed.
+            auto next = *rackState_;
+            next.push_back (defaultUnitState ((FxType) (r - 100), false));
+            *rackState_ = next;
+            rackDsp_->applyStructuralChange (next);
             rebuild();
             proc_.stateChanged.sendChangeMessage();
         });
@@ -795,6 +950,8 @@ private:
     ux::PlateButton addBtn_;
     juce::OwnedArray<FxUnitPanel> panels_;
     std::unique_ptr<MasterFxColumn> master_;
+    /// insertion point while a reorder drag is over the strip; -1 = no drag
+    int dropGap_ = -1;
 };
 
 //==============================================================================

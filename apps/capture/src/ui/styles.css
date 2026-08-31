@@ -768,7 +768,8 @@ input.jm-well[type='number']::-webkit-inner-spin-button {
   border-image-slice: var(--jm-kit-panel-slice) fill;
   border-image-width: var(--jm-kit-panel-border);
   filter: drop-shadow(0 6px 14px var(--jm-color-shadow-drop));
-  cursor: grab;
+  /* reordering is armed from .jm-fx-grip only — see "reorder" below */
+  cursor: default;
 }
 
 /* widener is the one unit carrying a gold wash over its plate */
@@ -814,17 +815,126 @@ input.jm-well[type='number']::-webkit-inner-spin-button {
   overflow-wrap: anywhere;
 }
 
+/* CLIENT REVIEW ROUND 7 (item 2): removal was a bare glyph that read as
+   decoration. It is now an explicit recessed chip in the plate language —
+   bordered, hit-target sized, and it lights warn-red on hover so the
+   destructive action announces itself before it is taken. */
 .jm-fx-x {
-  background: transparent;
-  border: 0;
+  flex: 0 0 auto;
+  width: calc(var(--jm-size-gap-unit) * 2.5);
+  height: calc(var(--jm-size-gap-unit) * 2.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: linear-gradient(180deg, var(--jm-color-chrome-well-bottom), var(--jm-color-chrome-well-top));
+  border: 1px solid var(--jm-color-plaque-hairline);
+  border-radius: var(--jm-size-radius-cell);
   color: var(--jm-color-muted);
   cursor: pointer;
-  line-height: 1;
-  padding: 0 2px;
+}
+
+.jm-fx-x svg {
+  width: 70%;
+  height: 70%;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  fill: none;
 }
 
 .jm-fx-x:hover {
   color: var(--jm-color-gold-bright);
+  border-color: var(--jm-color-gold);
+  background: linear-gradient(180deg, var(--jm-color-cell-top), var(--jm-color-cell-bottom));
+}
+
+.jm-fx-x:active {
+  transform: translateY(1px);
+}
+
+/* ---- reorder (spec §4 "drag to reorder") -------------------------------- */
+
+/* The grab affordance. It is the ONLY drag origin in the unit, so a pointer
+   drag that starts on a knob stays a knob drag. */
+.jm-fx-grip {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  width: calc(var(--jm-size-gap-unit) * 1.5);
+  height: calc(var(--jm-size-gap-unit) * 2.5);
+  padding: 0 calc(var(--jm-size-gap-unit) * 0.25);
+  border-radius: var(--jm-size-radius-cell);
+  cursor: grab;
+}
+
+.jm-fx-grip i {
+  display: block;
+  height: 1px;
+  background: var(--jm-color-muted);
+}
+
+.jm-fx-grip:hover {
+  background: var(--jm-color-gold-glow-soft);
+}
+
+.jm-fx-grip:hover i {
+  background: var(--jm-color-gold-bright);
+}
+
+.jm-fx-grip:active {
+  cursor: grabbing;
+}
+
+/* the source unit, while its ghost is under the cursor */
+.jm-fx-unit.dragging {
+  opacity: 0.4;
+}
+
+/* The insertion rule: where the unit will land. It is a child of the RACK, not
+   of a unit — a bypassed unit carries a grayscale filter, and anything drawn
+   inside it (a pseudo-element included) is desaturated with it, which would
+   turn the gold rule grey exactly when the rack is at its most default.
+   `--jm-fx-drop-index` counts GAPS, so gap n sits half a gutter before unit n. */
+.jm-fx-drop-rule {
+  position: absolute;
+  top: calc(var(--jm-size-gap-unit) * 1.5);
+  bottom: calc(var(--jm-size-gap-unit) * 1.5);
+  left: calc(
+    var(--jm-size-gap-unit) * 6.5 + var(--jm-fx-drop-index) *
+      (var(--jm-size-fx-unit-width) + var(--jm-size-gap-unit) * 1.5) - var(--jm-size-gap-unit) * 0.75
+  );
+  width: 3px;
+  transform: translateX(-50%);
+  border-radius: 2px;
+  background: var(--jm-color-gold-bright);
+  box-shadow: 0 0 10px var(--jm-color-gold-glow);
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* end caps, so the rule reads as a hardware guide rather than a stray hairline */
+.jm-fx-drop-rule::before,
+.jm-fx-drop-rule::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  width: calc(var(--jm-size-gap-unit) * 1.25);
+  height: calc(var(--jm-size-gap-unit) * 1.25);
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: var(--jm-color-gold-bright);
+  box-shadow: 0 0 10px var(--jm-color-gold-glow);
+}
+
+.jm-fx-drop-rule::before {
+  top: 0;
+}
+
+.jm-fx-drop-rule::after {
+  top: 100%;
 }
 
 .jm-fx-foot {

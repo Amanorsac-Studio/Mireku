@@ -541,15 +541,21 @@ function round22(n) {
 
 // src/engine/import/x7lConvert.ts
 import { buildDefaultRack as buildDefaultRack2, defaultEngineParams as defaultEngineParams2 } from "@jm/jmi-format/web";
-function importPreset(plan) {
+function importPreset(plan, fxOn = false) {
   return {
     formatVersion: 1,
-    name: "Default",
+    name: fxOn ? "With FX" : "Default",
     tags: [plan.world, "imported"],
     engine: defaultEngineParams2(plan.world),
-    fxRack: buildDefaultRack2(plan.world),
+    fxRack: buildDefaultRack2(plan.world, { bypassed: !fxOn }),
     ampEnvelope: plan.soundType === "decaying" ? { attackMs: 2, decayMs: 0, sustain: 100, releaseMs: 250 } : { attackMs: 10, decayMs: 0, sustain: 100, releaseMs: 400 }
   };
+}
+function importPresets(plan) {
+  return [
+    { fileName: "Default.json", preset: importPreset(plan) },
+    { fileName: "With FX.json", preset: importPreset(plan, true) }
+  ];
 }
 function convertInstrument(bytes, lib, plan, destDir, fs, opts) {
   const bundlePath = fs.join(destDir, plan.bundleName);
@@ -588,10 +594,8 @@ function convertInstrument(bytes, lib, plan, destDir, fs, opts) {
     sourceFileName: opts.sourceFileName
   });
   fs.writeFile(fs.join(bundlePath, "instrument.json"), JSON.stringify(instrument, null, 2));
-  fs.writeFile(
-    fs.join(bundlePath, "presets", "Default.json"),
-    JSON.stringify(importPreset(plan), null, 2)
-  );
+  for (const { fileName, preset } of importPresets(plan))
+    fs.writeFile(fs.join(bundlePath, "presets", fileName), JSON.stringify(preset, null, 2));
   return {
     instrumentName: plan.name,
     bundlePath,

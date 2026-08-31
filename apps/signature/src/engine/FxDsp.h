@@ -5,7 +5,10 @@
 #pragma once
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_dsp/juce_dsp.h>
+#include <juce_events/juce_events.h>   // Timer::callAfterDelay (message thread)
 #include <atomic>
+#include <functional>
+#include <memory>
 #include "FxParams.h"
 
 namespace jm {
@@ -664,12 +667,40 @@ struct FxUnitState
 };
 using FxRackState = std::vector<FxUnitState>;
 
-inline FxRackState buildDefaultRack (int world)
+/**
+ * CLIENT REVIEW ROUND 7 (item 1) — "Master effects and effects on the modules
+ * should be off by default."
+ *
+ * The mirror of `DEFAULT_UNIT_BYPASSED` in packages/jmi-format/src/fx-params.ts;
+ * the two must agree or the same bundle would sound different in Capture and in
+ * the plugin. A rack built from the defaults is PRESENT BUT BYPASSED: the units
+ * are all there to be discovered and switched on, and the instrument is dry the
+ * moment it loads.
+ *
+ * This changes DEFAULTS ONLY. `bypassed` is a required property of every saved
+ * rack unit, so every path that reads saved state — `rackFromVar` (plugin state
+ * and performance presets), `rackFromJmiPreset` (.jmi presets) — takes the
+ * explicit value verbatim, and a preset written before this change still loads
+ * with its units active.
+ */
+inline constexpr bool kDefaultUnitBypassed = true;
+
+/** One unit at its registry defaults, following the default above. */
+inline FxUnitState defaultUnitState (FxType t, bool bypassed = kDefaultUnitBypassed)
+{
+    FxUnitState u;
+    u.type = t;
+    u.bypassed = bypassed;
+    u.params = defaultParams (t);
+    return u;
+}
+
+inline FxRackState buildDefaultRack (int world, bool bypassed = kDefaultUnitBypassed)
 {
     FxRackState out;
     for (auto t : defaultRack (world))
     {
-        FxUnitState u; u.type = t; u.params = defaultParams (t);
+        auto u = defaultUnitState (t, bypassed);
         applyDefaultRackOverrides (world, t, u.params);
         out.push_back (std::move (u));
     }
@@ -694,9 +725,58 @@ public:
             if (s.unit) { s.unit->prepare (sr, maxBlock); s.mix.reset (sr, 0.02); }
     }
 
+    //======================================================================
+    // CLIENT REVIEW ROUND 7 (items 2 + 3) — removing and REORDERING units.
+    //
+    // Reordering is audible by definition: it changes the signal chain. Doing
+    // it in one step would swap the units under a live signal and step the
+    // output by whatever the chain happened to be producing. So a structural
+    // edit is a two-step, message-thread operation, and the audio thread does
+    // nothing new at all:
+    //
+    //   beginRestructure()  ramps every live slot's wet/dry mix to 0. The
+    //                       rack is running the units exactly as before but
+    //                       passing DRY, over the same 20 ms smoothing that
+    //                       makes the BYPASS button clickless. Audio is never
+    //                       muted and the units keep being fed, so delay and
+    //                       reverb tails stay alive.
+    //   ...20 ms later...
+    //   setState (st, true) swaps the slots while every one of them is fully
+    //                       dry — the moment where the order changes carries
+    //                       no wet signal at all — and then ramps each
+    //                       un-bypassed slot back to wet over the same 20 ms.
+    //
+    // Both steps run on the message thread and allocate nothing on the audio
+    // thread; the audio thread's only involvement is the try-lock it already
+    // took, exactly as before.
+    static constexpr int kRestructureDelayMs = 25;   // > the 20 ms mix smoothing
+
+    /// Step 1: hand the rack over to its dry path, clicklessly.
+    void beginRestructure()
+    {
+        const juce::SpinLock::ScopedLockType sl (lock_);
+        for (auto& s : slots_) s.mix.setTargetValue (0.0f);
+    }
+
+    /// Steps 1 + 2, scheduled. MESSAGE THREAD ONLY.
+    /// `onApplied` runs after the new state is live (UI refresh, etc.).
+    void applyStructuralChange (const FxRackState& st, std::function<void()> onApplied = {})
+    {
+        beginRestructure();
+        juce::Timer::callAfterDelay (kRestructureDelayMs,
+                                     [this, weak = std::weak_ptr<int> (alive_), st, onApplied]
+                                     {
+                                         if (weak.expired()) return;   // rack outlived by the timer
+                                         setState (st, true);
+                                         if (onApplied) onApplied();
+                                     });
+    }
+
     /// Rebuild from state (message thread). Keeps existing unit instances when
     /// the type at a slot index is unchanged, so tails survive param tweaks.
-    void setState (const FxRackState& st)
+    /// `rampIn`: come back from the dry hand-over above rather than jumping to
+    /// the new mix values (see applyStructuralChange).
+    void setState (const FxRackState& st, bool rampIn = false)
     {
         std::vector<Slot> next ((size_t) juce::jmin ((int) st.size(), kMaxSlots));
         {
@@ -719,7 +799,14 @@ public:
             }
             for (auto& [id, v] : u.params) next[i].unit->setParam (id, v);
             next[i].mix.reset (sr_ > 0 ? sr_ : 48000.0, 0.02);
-            next[i].mix.setCurrentAndTargetValue (u.bypassed ? 0.0f : 1.0f);
+            if (rampIn)
+            {
+                // the rack is sitting dry after beginRestructure(): come back up
+                next[i].mix.setCurrentAndTargetValue (0.0f);
+                next[i].mix.setTargetValue (u.bypassed ? 0.0f : 1.0f);
+            }
+            else
+                next[i].mix.setCurrentAndTargetValue (u.bypassed ? 0.0f : 1.0f);
         }
         const juce::SpinLock::ScopedLockType sl (lock_);
         slots_ = std::move (next);
@@ -813,6 +900,9 @@ private:
     std::vector<Slot> slots_;
     juce::AudioBuffer<float> dry_;
     double sr_ = 0; int maxBlock_ = 512;
+    /// lifetime token for applyStructuralChange's deferred second step: the
+    /// rack is owned by the processor, which a 25 ms timer must never outlive
+    std::shared_ptr<int> alive_ { std::make_shared<int> (0) };
 };
 
 } // namespace jm

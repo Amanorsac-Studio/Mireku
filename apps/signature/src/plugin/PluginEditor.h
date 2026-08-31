@@ -24,6 +24,29 @@ public:
     /// Test/diagnostic hook: the uniform scale currently applied to the root.
     float rootScale() const;
 
+    //==========================================================================
+    // CLIENT REVIEW ROUND 6 (issue 3) — "when I open the app it opens too wide
+    // and goes out of the screen".
+    //
+    // The constructor used to call setSize (1536, 1024) unconditionally, which
+    // is larger than the usable area of any 1080p display (and of a 1440p
+    // display at 150% scaling) once the taskbar and the window frame are taken
+    // off. These two helpers compute an opening size that always fits.
+    //
+    // EVERYTHING HERE IS IN JUCE LOGICAL PIXELS. `Displays::Display::userBounds`
+    // is already scale-corrected (physicalBounds / scale), and Component bounds
+    // are logical too, so a 3840x2160 display at 200% correctly reports a
+    // 1920x1080 user area and gets a 1080p-sized window — no explicit `scale`
+    // arithmetic is needed, and doing any would double-apply it.
+
+    /// The largest 3:2 size that fits `availableArea` (a display's *user* area,
+    /// i.e. taskbar already excluded) once window chrome is allowed for, capped
+    /// at the design size. Pure function — unit-tested in SnapshotCheck.cpp.
+    static juce::Point<int> preferredSizeForArea (juce::Rectangle<int> availableArea);
+
+    /// preferredSizeForArea() applied to the primary display's user area.
+    static juce::Point<int> preferredSize();
+
 private:
     void timerCallback() override;
     void changeListenerCallback (juce::ChangeBroadcaster*) override;

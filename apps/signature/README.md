@@ -28,6 +28,57 @@ FetchContent (pinned tag). Outputs land in
 `build/JMSignature_artefacts/[Release/]{VST3,Standalone}`. AU is declared and
 builds on macOS only.
 
+## Audio device support (standalone) — ASIO and WASAPI
+
+The standalone offers **five** device types on Windows:
+
+| type | typical buffer floor | notes |
+|---|---|---|
+| ASIO | whatever the interface's driver allows (8 samples on a UMC 404HD) | lowest latency; needs the manufacturer's ASIO driver installed |
+| Windows Audio (Exclusive Mode) | 144 samples ≈ 3 ms | **no third-party driver, no SDK**; locks the endpoint to this app |
+| Windows Audio (Low Latency Mode) | endpoint-defined | shared, event-driven |
+| Windows Audio | endpoint-defined and often *fixed* (480 samples = 10 ms) | Windows' default; not adjustable on many interfaces |
+| DirectSound | default **2560 samples ≈ 53 ms** | compatibility fallback only — do not use for playing |
+
+**Lowest latency.** Open the gear icon in the header → *Audio/MIDI Settings*.
+Set the device type to **ASIO** and the device to your interface's own driver
+(e.g. `UMC ASIO Driver`), then choose a buffer of 128 or 256 samples. If you
+have no ASIO driver, use **Windows Audio (Exclusive Mode)** instead — it is
+built in and needs nothing installed. On a first launch with no saved settings
+the app now selects exclusive mode at 256 samples for you; after that, your own
+choice is remembered.
+
+**Diagnostics.** `build/JMSignatureDevices_artefacts/Release/JMSignatureDevices.exe`
+prints every device type, every device under each, their sample rates, buffer
+sizes and reported latency. It is not a CTest (its output depends on the
+attached hardware) — run it and send the output when a device cannot be found.
+
+### ASIO and the Steinberg SDK
+
+`JM_ASIO` is **ON** by default and needs no download: JUCE 8.0.15 ships the ASIO
+interface headers itself (`external/JUCE/modules/juce_audio_devices/native/asio/`).
+Nothing ASIO-related is committed to this repository. Steinberg's licence terms
+for those headers still govern the resulting binary — see the ASIO SDK licence
+and Steinberg's ASIO usage/logo guidelines before distributing.
+
+To build against a different (or locally installed) ASIO SDK instead of the
+bundled headers, download the SDK from
+<https://www.steinberg.net/developers/> and point CMake at the directory that
+contains `iasiodrv.h`:
+
+```bat
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release ^
+      -DJM_ASIO_SDK_DIR="C:/SDKs/ASIOSDK/common"
+```
+
+To build with no ASIO support at all, configure with `-DJM_ASIO=OFF`. Either
+way, configure-time output states which path was taken:
+
+```
+-- JM Signature audio backends: WASAPI (shared/exclusive/low-latency) + DirectSound
+-- JM Signature ASIO support  : ASIO headers bundled with JUCE (no download required)
+```
+
 ## Runtime layout
 
 - Library folder: `~/Documents/JM Signature/Library` (change in any model

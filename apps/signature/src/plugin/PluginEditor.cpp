@@ -33,6 +33,41 @@ void JMSignatureEditor::RootComponent::resized()
                                  .withCentre (getLocalBounds().getCentre()));
 }
 
+//==============================================================================
+// CLIENT REVIEW ROUND 6 (issue 3) — opening size clamped to the display.
+juce::Point<int> JMSignatureEditor::preferredSizeForArea (juce::Rectangle<int> availableArea)
+{
+    // A native-title-bar window is TALLER than its content by the caption and
+    // borders, so the editor has to be smaller than the user area by that much
+    // or the window still overhangs. These are the Windows 100%-scale values in
+    // logical pixels (they do not grow with DPI, because logical pixels don't).
+    constexpr int kCaptionH = 32;
+    constexpr int kBorder   = 8;
+
+    const int usableW = juce::jmax (160, availableArea.getWidth()  - 2 * kBorder);
+    const int usableH = juce::jmax (120, availableArea.getHeight() - kCaptionH - 2 * kBorder);
+
+    // uniform contain, never enlarged past the design size
+    const double s = juce::jmin (1.0,
+                                 (double) usableW / (double) Theme::M::designW,
+                                 (double) usableH / (double) Theme::M::designH);
+
+    const int w = juce::jmax (160, (int) std::floor (Theme::M::designW * s));
+    // 3:2 preserved exactly, then re-clamped in case rounding pushed it over
+    const int h = juce::jlimit (120, usableH,
+                                (int) std::lround (w * (double) Theme::M::designH
+                                                     / (double) Theme::M::designW));
+    return { w, h };
+}
+
+juce::Point<int> JMSignatureEditor::preferredSize()
+{
+    const auto& displays = juce::Desktop::getInstance().getDisplays();
+    if (displays.displays.isEmpty())                     // headless / offscreen render
+        return { Theme::M::designW, Theme::M::designH };
+    return preferredSizeForArea (displays.getPrimaryDisplay()->userBounds.toNearestInt());
+}
+
 JMSignatureEditor::JMSignatureEditor (JMSignatureProcessor& p)
     : juce::AudioProcessorEditor (p), proc_ (p)
 {
@@ -82,8 +117,15 @@ JMSignatureEditor::JMSignatureEditor (JMSignatureProcessor& p)
     // is exactly what maximising should look like. The limits are widened so a
     // large display can be filled.
     setResizable (true, true);
-    setResizeLimits (Theme::M::minW, Theme::M::minH, Theme::M::maxW, Theme::M::maxH);
-    setSize (Theme::M::designW, Theme::M::designH);
+    // R6(3): the opening size is the design size CLAMPED TO THE DISPLAY, and the
+    // lower resize limit has to come down with it — a 1152x768 minimum is itself
+    // taller than the usable area of a 1366x768 laptop, so leaving it fixed would
+    // just move the overhang from "at launch" to "the first time you resize".
+    const auto opening = preferredSize();
+    setResizeLimits (juce::jmin (Theme::M::minW, opening.x),
+                     juce::jmin (Theme::M::minH, opening.y),
+                     Theme::M::maxW, Theme::M::maxH);
+    setSize (opening.x, opening.y);
     setPage (juce::jlimit (0, 4, proc_.state.currentPage));
     startTimerHz (15);
 }

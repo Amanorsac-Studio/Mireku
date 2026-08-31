@@ -25,6 +25,68 @@ endif()
 # Shared read-only format header (packages/jmi-format/cpp/jmi_format.h)
 set(JMI_FORMAT_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../../packages/jmi-format/cpp")
 
+# ------------------------------------------- Audio device backends (R6 issue 1)
+# The client could not see his Behringer UMC 404HD outside DirectSound. Two
+# separate things were wrong; this block fixes the build half of both.
+#
+#  * WASAPI: JUCE's default already builds shared, EXCLUSIVE and low-latency
+#    shared modes (juce_AudioDeviceManager.cpp::createAudioDeviceTypes), so the
+#    exclusive-mode type was there — it was never *pinned*, so the app opened
+#    whatever Windows called the default endpoint. We now state the flags
+#    explicitly (so a future JUCE default change cannot silently drop exclusive
+#    mode) and the standalone prefers exclusive mode at first launch. No SDK.
+#
+#  * ASIO: JUCE 8.0.15 SHIPS the ASIO interface headers itself
+#    (modules/juce_audio_devices/native/asio/{asio,asiosys,iasiodrv}.h), so
+#    enabling ASIO needs no download and adds nothing to THIS repository.
+#    Steinberg's licence terms for those files still apply to the binary — see
+#    README.md. If the ASIO SDK is ever unbundled from JUCE, or a different SDK
+#    version is wanted, point JM_ASIO_SDK_DIR at a local SDK's `common`
+#    directory and JUCE's external-SDK path is used instead.
+option(JM_ASIO "Compile ASIO device support into the standalone" ON)
+set(JM_ASIO_SDK_DIR "" CACHE PATH
+    "Optional: directory containing iasiodrv.h from a locally installed Steinberg ASIO SDK. \
+Leave empty to use the ASIO headers bundled with JUCE. The SDK is NOT redistributable and is \
+never committed to this repository.")
+
+# Where did JUCE come from? (add_subdirectory sets JUCE_SOURCE_DIR, FetchContent juce_SOURCE_DIR)
+set(JM_JUCE_DIR "${JUCE_SOURCE_DIR}")
+if(NOT JM_JUCE_DIR)
+    set(JM_JUCE_DIR "${juce_SOURCE_DIR}")
+endif()
+
+set(JM_AUDIO_BACKEND_DEFS
+    JUCE_WASAPI=1              # shared + EXCLUSIVE + low-latency-shared device types
+    JUCE_DIRECTSOUND=1)        # kept: it is the fallback that was working for the client
+
+set(JM_ASIO_ORIGIN "disabled")
+if(JM_ASIO AND WIN32)
+    if(JM_ASIO_SDK_DIR)
+        if(EXISTS "${JM_ASIO_SDK_DIR}/iasiodrv.h")
+            list(APPEND JM_AUDIO_BACKEND_DEFS JUCE_ASIO=1 JUCE_ASIO_USE_EXTERNAL_SDK=1)
+            set(JM_ASIO_INCLUDE_DIR "${JM_ASIO_SDK_DIR}")
+            set(JM_ASIO_ORIGIN "external SDK at ${JM_ASIO_SDK_DIR}")
+        else()
+            message(WARNING
+                "JM_ASIO_SDK_DIR is set to '${JM_ASIO_SDK_DIR}' but iasiodrv.h is not there. "
+                "Point it at the SDK's 'common' directory. Falling back to JUCE's bundled headers.")
+            set(JM_ASIO_SDK_DIR "")
+        endif()
+    endif()
+    if(NOT JM_ASIO_SDK_DIR)
+        if(EXISTS "${JM_JUCE_DIR}/modules/juce_audio_devices/native/asio/iasiodrv.h")
+            list(APPEND JM_AUDIO_BACKEND_DEFS JUCE_ASIO=1)
+            set(JM_ASIO_ORIGIN "ASIO headers bundled with JUCE (no download required)")
+        else()
+            set(JM_ASIO_ORIGIN
+                "NOT AVAILABLE — this JUCE has no bundled ASIO headers. Download the Steinberg \
+ASIO SDK and configure with -DJM_ASIO_SDK_DIR=<sdk>/common")
+        endif()
+    endif()
+endif()
+message(STATUS "JM Signature audio backends: WASAPI (shared/exclusive/low-latency) + DirectSound")
+message(STATUS "JM Signature ASIO support  : ${JM_ASIO_ORIGIN}")
+
 # ------------------------------------------------------------------ Plugin
 juce_add_plugin(JMSignature
     COMPANY_NAME              "JM Studios"
@@ -96,7 +158,13 @@ target_compile_definitions(JMSignature PUBLIC
     # Client review round 3 (B/E): we own the standalone app + window, so the
     # JUCE "Options" title-bar button is gone and all three window controls
     # (minimise / maximise / close) are available. See src/plugin/StandaloneApp.cpp.
-    JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP=1)
+    JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP=1
+    # R6(1): device backends. These must be PUBLIC/on the shared-code target —
+    # that is where JUCE compiles juce_audio_devices.
+    ${JM_AUDIO_BACKEND_DEFS})
+if(JM_ASIO_INCLUDE_DIR)
+    target_include_directories(JMSignature PUBLIC "${JM_ASIO_INCLUDE_DIR}")
+endif()
 
 # The custom standalone app lives ONLY in the Standalone target.
 if(TARGET JMSignature_Standalone)
@@ -148,6 +216,23 @@ target_link_libraries(JMSignatureSnapshot PRIVATE
     JMAssets
     juce::juce_audio_utils
     juce::juce_dsp
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags)
+
+# ------------------------------------------- Device inventory tool (R6/1)
+# Deliberately NOT a CTest: its output depends on what hardware is plugged in.
+# Run it and send the output when a device cannot be found in the app.
+juce_add_console_app(JMSignatureDevices PRODUCT_NAME "JMSignatureDevices")
+target_sources(JMSignatureDevices PRIVATE tests/DeviceCheck.cpp)
+target_compile_definitions(JMSignatureDevices PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    ${JM_AUDIO_BACKEND_DEFS})
+if(JM_ASIO_INCLUDE_DIR)
+    target_include_directories(JMSignatureDevices PRIVATE "${JM_ASIO_INCLUDE_DIR}")
+endif()
+target_link_libraries(JMSignatureDevices PRIVATE
+    juce::juce_audio_devices
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags)
 

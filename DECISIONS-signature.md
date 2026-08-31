@@ -3,6 +3,199 @@
 Judgment calls made while building the JUCE plugin, per JM-BUILD-SPEC.md §5.
 Owner: JM Signature build agent.
 
+## Client review round 6 — ASIO / device types, residual latency, oversized window (2026-08-31)
+
+Three client reports, all in the **standalone** on Windows with a Behringer UMC 404HD.
+This machine has the same interface attached, so every number below is measured here
+rather than reasoned about.
+
+### Issue 1 — "can we have ASIO support so it can detect audio interface drivers?"
+
+**What was actually wrong.** The brief's premise — that `CMakeLists.txt` has no `JUCE_ASIO`
+flag and therefore JUCE compiles "only WASAPI (shared) and DirectSound" — is half right.
+There was indeed no `JUCE_ASIO`, so ASIO was absent. But WASAPI **exclusive** mode was
+never missing: `AudioDeviceManager::createAudioDeviceTypes()` in JUCE 8 creates
+`WASAPIDeviceMode::shared`, `::exclusive` **and** `::sharedLowLatency` whenever
+`JUCE_WASAPI` is on, and it defaults to on. A new `tests/DeviceCheck.cpp` target
+(`JMSignatureDevices`, deliberately not a CTest — its output depends on attached
+hardware) was written to settle this by enumeration instead of by argument.
+
+**Device types before the change** (4):
+
+| type | UMC 404HD present? | buffer sizes offered @48 kHz |
+|---|---|---|
+| Windows Audio | yes, `OUT 1-2 (4- BEHRINGER UMC 404HD 192k)` — Windows' default | **480 only** |
+| Windows Audio (Exclusive Mode) | yes | 144 … 2048 |
+| Windows Audio (Low Latency Mode) | yes | 480 only |
+| DirectSound | yes | 64 … 6912, **default 2560** |
+
+**Device types after** (5) — ASIO added, everything else unchanged:
+
+| type | devices |
+|---|---|
+| ASIO | **`UMC ASIO Driver`** (8 · 16 · 32 · 64 · 128 · 256 · 512 · 1024 · 2048 samples, up to 192 kHz), plus `ASIO4ALL v2`, `Yamaha Steinberg USB ASIO`, `Waves SoundGrid ASIO`, `Focusrite USB/Thunderbolt ASIO`, `Ableton Push`, `Ableton Move` |
+
+So the client's interface was visible under WASAPI all along — under the endpoint name
+`OUT 1-2 (4- BEHRINGER UMC 404HD 192k)` rather than a name containing "UMC 404HD" as the
+first word. What he could not find was a *driver* he recognised, and DirectSound was where
+he stopped looking. That is a naming problem masquerading as a support problem — and it
+cost him 53 ms, because **DirectSound's default buffer here is 2560 samples**.
+
+**(a) WASAPI exclusive — the no-SDK win.** The type existed but was never *chosen*.
+`JMStandaloneWindow::chooseLowLatencyDefaults()` now switches, **on first launch only**
+(detected as "the holder has no saved `audioSetup`"), to `Windows Audio (Exclusive Mode)`
+at a 256-sample buffer, validated by checking that a device actually opened and unwound to
+the previous type if exclusive mode was refused (another app can hold the endpoint). The
+compile flags are now stated explicitly in `CMakeLists.txt` so a future JUCE default cannot
+silently drop the exclusive type. Effect for the client: 480 fixed samples (10 ms, *not
+adjustable* on this endpoint) → 256 samples (5.33 ms, adjustable down to 144).
+
+**(b) ASIO — and the SDK question resolves itself.** `JUCE 8.0.15 ships the ASIO interface
+headers` (`modules/juce_audio_devices/native/asio/{asio,asiosys,iasiodrv}.h`), so
+`JUCE_ASIO=1` needs **no download and adds nothing to this repository**. `JM_ASIO` (default
+ON) enables it and gates on those headers actually being present, so an unbundled JUCE
+degrades to a clear configure-time message rather than a compile error. `JM_ASIO_SDK_DIR`
+is still provided for pointing at a locally installed SDK, which then sets
+`JUCE_ASIO_USE_EXTERNAL_SDK=1` and adds the include path; a wrong path warns and falls back
+rather than failing the build. Configure-time output names the path taken. Steinberg's
+licence still governs the *binary*, which `README.md` says.
+
+There is also a real Steinberg **ASIO SDK 2.3 at `C:\SDKs\ASIOSDK`** on this machine
+(found by searching for `iasiodrv.h`); the external-SDK path is what `-DJM_ASIO_SDK_DIR=
+C:/SDKs/ASIOSDK/common` is for. It was *not* needed, and nothing from it was copied.
+
+**Judgment call: ASIO is compiled in but NOT auto-selected.** The ASIO type's default
+driver on a real machine is whatever registered first — here `ASIO4ALL v2`, a generic WDM
+wrapper — and five of the eight registered drivers report no sample rates at all because
+their hardware is not attached. Silently opening one of those at startup can fail, hang, or
+seize hardware the player did not ask for. ASIO is in the gear dialog's type list to be
+chosen deliberately; the automatic default is the one that cannot misfire.
+
+### Issue 2 — "there's still delay… check what else could be causing it"
+
+Measured in `tests/SnapshotCheck.cpp` (`== R6 (2) latency budget (measured) ==`).
+
+| stage | cost | irreducible? |
+|---|---|---|
+| output buffer (device) | **1 × buffer** | no — this is the whole game (see below) |
+| routed-MIDI queue → next block | 0 … 1 buffer, **0.5 buffer mean** | structural; bounded by the buffer |
+| master limiter lookahead | **96 samples = 2.00 ms** at 48 kHz, measured by impulse | **yes** |
+| host MIDI timestamps (plugin builds) | 0 | sample-accurate since Modulation Phase 2 |
+| amp-envelope attack | 2 ms (10 ms on the sustaining worlds) | it is the *sound*, not delay — onset is immediate |
+| modulation control rate | 64 samples = 1.33 ms, and only for modulation | negligible |
+| learned-CC → parameter (30 Hz timer) | ≤ 33 ms | **knobs only — no note ever touches it** |
+
+Totals at 48 kHz, `buffer + 0.5·buffer + 2 ms`:
+
+| buffer | device | typical | worst |
+|---:|---:|---:|---:|
+| 128 | 2.67 ms | **6.00 ms** | 7.33 ms |
+| 144 (WASAPI-excl. floor) | 3.00 ms | 6.50 ms | 8.00 ms |
+| 256 (new default) | 5.33 ms | **10.00 ms** | 12.67 ms |
+| 480 (old WASAPI-shared default) | 10.00 ms | 17.00 ms | 22.00 ms |
+| 2560 (DirectSound default) | 53.33 ms | **82.00 ms** | 108.67 ms |
+
+**The finding: the buffer size dominates everything else by an order of magnitude.** The
+client was at 82 ms typical because DirectSound opened at 2560 samples. Moving him to ASIO
+at 128 samples is a **13× improvement**, and after that the only fixed cost left is the
+limiter's 2 ms.
+
+Specific items the brief asked about:
+
+- **Buffer size is reachable.** The gear's dialog is JUCE's `AudioDeviceSelectorComponent`
+  constructed with `hideAdvancedOptionsWithButton = false`, so the sample-rate and buffer-size
+  combos are always visible, and low values genuinely apply — the enumeration above is the
+  driver's own list, and DeviceCheck opens each device to read it.
+- **Note-ons are not timer-driven.** Confirmed by measurement, not reading: a note-on pushed
+  into `RoutedMidiQueue` produces audio (magnitude 0.063) in the *very next* `processBlock`.
+  The 30 Hz `timerCallback` handles only *learned CC → parameter* mapping and macro base
+  tracking; notes, CC64, pitch bend, mod wheel and expression are all handled on the audio
+  thread. `drainRoutedQueueAtBlockStart()` applies untimestamped events at offset 0 of the
+  next block, which is the honest answer for a source that carries no timestamp.
+- **The limiter's lookahead: keep it, keep reporting it.** `setLatencySamples (96)` was
+  already being called in `prepareToPlay`, and the self-check now asserts that the number
+  reported equals the delay measured through the bypassed limiter — so DAW delay compensation
+  is correct. **We deliberately do NOT skip the delay line when the limiter is off.** Doing so
+  would (i) change the reported latency at runtime, which hosts handle badly, and (ii) put a
+  96-sample discontinuity into the output every time the LIMITER plate is toggled. 2 ms is
+  20 % of one old 480-sample buffer but only 0.7 % of what the DirectSound default was
+  costing; buying it back is not worth a click. Shortening the 2 ms lookahead itself would be
+  a DSP change, which round 6 is not allowed to make. Asserted both ways in the self-check.
+- **Smoothing ramps.** Master gain 20 ms, slot volume/pan 20 ms, the round-5 starvation
+  fade 5 ms (and that one only fires when audio is genuinely missing). None are in the note
+  path. The one long ramp is **expression (CC11) at 50 ms** — a deliberate volume-pedal
+  smoothing, audible as a slow *swell*, never as note delay. Left alone: it is DSP behaviour.
+
+### Issue 3 — "when I open the app it opens too wide and goes out of the screen"
+
+`PluginEditor.cpp` called `setSize (Theme::M::designW, Theme::M::designH)` — 1536×1024 —
+with no reference to the display. On this machine the primary user area is 1920×1032
+logical, so the window was 1552×1072 against 1032 px of usable height: 40 px of overhang,
+and far worse at 125 %/150 % scaling.
+
+- `JMSignatureEditor::preferredSizeForArea()` is a **pure function** of a display's *user*
+  area (taskbar already excluded) → the largest 3:2 size that fits once the caption (32 px)
+  and borders (2 × 8 px) are taken off, never larger than the design size. `preferredSize()`
+  applies it to the primary display. Being pure, it is unit-tested across seven display
+  geometries without touching the physical display.
+- **DPI is handled by not handling it.** `Displays::Display::userBounds` is already in
+  *logical* pixels (`physicalBounds / scale`), and `Component` bounds are logical too, so a
+  4K display at 200 % reports a 1920×1080 user area and gets a 1080p-sized window. Any
+  explicit multiplication by `Display::scale` would double-apply it. Verified: the 4K@200 %
+  case and the native-1080p case produce byte-identical results (1476×984).
+- **The lower resize limit had to come down with it.** `Theme::M::minH` is 768, which is
+  *taller than the usable area of a 1366×768 laptop*; leaving it fixed would only have moved
+  the overhang from launch to the first resize. `setResizeLimits` now takes
+  `min(Theme::M::minW/H, opening)`. The `Theme::M` constants themselves are untouched.
+- **Window size and position now persist**, in `JMStandaloneWindow` under
+  `jmWindowBounds` / `jmWindowFullScreen`. JUCE's `StandaloneFilterWindow` already saved
+  `windowX`/`windowY` and validated them against the connected displays but **never saved
+  the size**, which is why the oversized window came back every launch. We track the last
+  non-fullscreen bounds in `moved()`/`resized()` (so a maximised session does not persist
+  as the restore size) and, on restore, resolve the saved rectangle to the nearest display
+  *that is connected now*, clamp the size into its user area and drag the position fully
+  onto it — so a window last used on a second monitor cannot vanish when that monitor is
+  gone.
+
+Measured clamp (from `UiSelfCheck`, editor size → resulting window size):
+
+| display user area | editor | window | aspect |
+|---|---|---|---|
+| 1366×728 (laptop) | 1020×680 | 1036×728 | 1.5000 |
+| 1920×1032 (1080p) | 1476×984 | 1492×1032 | 1.5000 |
+| 1536×824 (1080p @125 %) | 1164×776 | 1180×824 | 1.5000 |
+| 1280×692 (1080p @150 %) | 966×644 | 982×692 | 1.5000 |
+| 2560×1400 (1440p) | 1536×1024 | 1552×1072 | 1.5000 |
+| 1920×1032 (4K @200 %) | 1476×984 | 1492×1032 | 1.5000 |
+| 3840×2120 (4K @100 %) | 1536×1024 | 1552×1072 | 1.5000 |
+
+### Untouched, as required
+
+DSP behaviour, UI layout, the `.jmi` format and the modulation system are unchanged. The
+round-3 custom standalone window still hides the Options button, still carries all three
+title-bar buttons and still maximises by uniform scale + letterbox (`maximiseButtonPressed`
+is unchanged; `resized()` still bypasses `StandaloneFilterWindow::resized()` and now only
+additionally records the bounds). Nothing was added to the audio thread.
+
+### Build / test evidence
+
+- Release build (Ninja, MSVC 14.51): **exit 0**. One relink hit `LNK1104` because the
+  client's standalone was running; the "JM Signature" process (PID 268) was terminated and
+  the build completed — noted here as required.
+- `ctest -C Release`: **2/2 passed** (`EngineTests` 4.42 s, `UiSelfCheck` 23.86 s).
+- pluginval **1.0.4** (the copy present on this machine) strictness 8 `--skip-gui-tests` on
+  the VST3: **SUCCESS, exit 0**.
+- The standalone was **not launched** (the client had it open).
+
+### What the client must do for the lowest latency
+
+1. Gear icon → *Audio/MIDI Settings*.
+2. **Device type: ASIO**, device: **`UMC ASIO Driver`** (not `ASIO4ALL v2`).
+3. **Buffer: 128 samples** (256 if anything crackles). → ~6 ms total.
+4. If ASIO is ever unavailable: **Windows Audio (Exclusive Mode)**, buffer 144–256.
+5. **Never DirectSound** — its default here is 2560 samples / 53 ms, which is where the
+   remaining "delay" was coming from.
+
 ## Client review round 5 — streaming defect ("crazy weirdness ... like when the processor is at high usage") (2026-08-31)
 
 The client's first real sampled instrument, `Documents/JM Signature/Library/Piano.jmi`

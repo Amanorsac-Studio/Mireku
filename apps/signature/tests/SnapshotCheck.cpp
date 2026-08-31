@@ -1626,6 +1626,134 @@ int main()
         delete ed;
     }
 
+    // ================================================ CLIENT REVIEW ROUND 6 (3)
+    // "when I open the app it opens too wide and goes out of the screen".
+    // preferredSizeForArea() is a pure function of a display's USER area (in
+    // logical pixels), so every display size and scale factor can be checked
+    // here without touching the physical display.
+    std::printf ("\n== R6 (3) opening size clamped to the display ==\n");
+    {
+        struct Case { int w, h; double scale; const char* what; };
+        // userBounds is ALREADY logical (physical / scale), so a 4K display at
+        // 200% presents a 1920x1080 user area — that is the number listed here.
+        const Case cases[] = {
+            { 1366,  728, 1.00, "1366x768 laptop, taskbar" },
+            { 1920, 1032, 1.00, "1080p, taskbar" },
+            { 1536,  824, 1.25, "1920x1080 @125% -> 1536x864 logical" },
+            { 1280,  692, 1.50, "1920x1080 @150% -> 1280x720 logical" },
+            { 2560, 1400, 1.00, "1440p, taskbar" },
+            { 1920, 1032, 2.00, "3840x2160 @200% -> 1920x1080 logical" },
+            { 3840, 2120, 1.00, "4K @100%, taskbar" },
+        };
+        bool allFit = true, allAspect = true, neverBigger = true;
+        for (auto& c : cases)
+        {
+            const auto sz = JMSignatureEditor::preferredSizeForArea ({ 0, 0, c.w, c.h });
+            // the WINDOW is the editor plus caption+borders; that is what has to fit
+            const int winW = sz.x + 16, winH = sz.y + 48;
+            const bool fits = winW <= c.w && winH <= c.h;
+            const double ar = (double) sz.x / (double) sz.y;
+            std::printf ("  %-38s user %4dx%4d -> editor %4dx%4d  window %4dx%4d  ar %.4f %s\n",
+                         c.what, c.w, c.h, sz.x, sz.y, winW, winH, ar, fits ? "" : "  <-- OVERHANG");
+            allFit &= fits;
+            allAspect &= std::abs (ar - 1.5) < 0.005;
+            neverBigger &= sz.x <= Theme::M::designW && sz.y <= Theme::M::designH;
+        }
+        CHECK (allFit, "opening window fits inside the display's user area at every size/scale");
+        CHECK (allAspect, "3:2 preserved at every clamped size");
+        CHECK (neverBigger, "never opens larger than the 1536x1024 design size");
+        // and the old behaviour is genuinely gone
+        const auto p1080 = JMSignatureEditor::preferredSizeForArea ({ 0, 0, 1920, 1032 });
+        CHECK (p1080.x < Theme::M::designW,
+               "1080p no longer gets the hardcoded 1536x1024 (the reported defect)");
+
+        const auto& displays = juce::Desktop::getInstance().getDisplays();
+        if (! displays.displays.isEmpty())
+        {
+            const auto* d = displays.getPrimaryDisplay();
+            const auto ub = d->userBounds.toNearestInt();
+            const auto here = JMSignatureEditor::preferredSize();
+            std::printf ("  THIS machine: primary user area %dx%d @scale %.2f -> opens %dx%d\n",
+                         ub.getWidth(), ub.getHeight(), d->scale, here.x, here.y);
+            CHECK (here.x + 16 <= ub.getWidth() && here.y + 48 <= ub.getHeight(),
+                   "opening window fits this machine's actual display");
+        }
+    }
+
+    // ================================================ CLIENT REVIEW ROUND 6 (2)
+    // The residual-latency budget. Everything printed here is MEASURED from the
+    // live processor, not read off the source.
+    std::printf ("\n== R6 (2) latency budget (measured) ==\n");
+    {
+        constexpr double sr = 48000.0;
+        constexpr int block = 256;
+
+        // ---- 1. the master limiter's lookahead, measured with an impulse
+        MasterLimiter lim;
+        lim.prepare (sr, block);
+        lim.setEnabled (false);                       // bypassed: pure delay line
+        juce::AudioBuffer<float> imp (2, block);
+        imp.clear();
+        imp.setSample (0, 0, 1.0f);
+        imp.setSample (1, 0, 1.0f);
+        lim.process (imp);
+        int measuredDelay = -1;
+        for (int i = 0; i < block; ++i)
+            if (imp.getSample (0, i) > 0.5f) { measuredDelay = i; break; }
+        std::printf ("  limiter lookahead      : reported %d samples, MEASURED %d samples (%.2f ms)\n",
+                     lim.latencySamples(), measuredDelay, 1000.0 * measuredDelay / sr);
+        CHECK (measuredDelay == lim.latencySamples(),
+               "limiter's measured delay equals the latency it reports");
+        CHECK (std::abs (1000.0 * measuredDelay / sr - 2.0) < 0.05,
+               "limiter lookahead is 2.00 ms");
+
+        // The delay line runs even when the limiter is OFF, by design: the
+        // reported latency must not change at runtime (see DECISIONS R6/2).
+        MasterLimiter lim2;
+        lim2.prepare (sr, block);
+        lim2.setEnabled (true);
+        juce::AudioBuffer<float> imp2 (2, block);
+        imp2.clear();
+        imp2.setSample (0, 0, 0.1f);
+        imp2.setSample (1, 0, 0.1f);
+        lim2.process (imp2);
+        int onDelay = -1;
+        for (int i = 0; i < block; ++i)
+            if (imp2.getSample (0, i) > 0.05f) { onDelay = i; break; }
+        CHECK (onDelay == measuredDelay, "limiter delay is identical on and off (click-free toggle)");
+
+        // ---- 2. what the plugin reports to a host, so a DAW compensates it
+        JMSignatureProcessor lp;
+        lp.prepareToPlay (sr, block);
+        std::printf ("  reported to the host   : %d samples (%.2f ms)\n",
+                     lp.getLatencySamples(), 1000.0 * lp.getLatencySamples() / sr);
+        CHECK (lp.getLatencySamples() == measuredDelay,
+               "processor reports exactly its real latency (DAW delay compensation is correct)");
+
+        // ---- 3. a note pushed into the routed queue must sound in the VERY
+        //        NEXT block — i.e. nothing timer-based sits in the note path.
+        {
+            juce::AudioBuffer<float> buf (2, block);
+            juce::MidiBuffer mb;
+            for (int i = 0; i < 8; ++i) { buf.clear(); mb.clear(); lp.processBlock (buf, mb); }
+            lp.routedQueue.push (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100),
+                                 kSlotMaskAll, true);
+            buf.clear(); mb.clear();
+            lp.processBlock (buf, mb);
+            const float mag = buf.getMagnitude (0, 0, block);
+            std::printf ("  queued note -> audio   : magnitude %.6f in the first block after the push\n", mag);
+            CHECK (mag > 1.0e-6f, "a queued note-on sounds in the next block (no timer in the note path)");
+        }
+
+        // ---- 4. the whole budget at the buffer sizes that matter
+        std::printf ("  budget at 48 kHz (output buffer + half-buffer queue jitter + 2 ms limiter):\n");
+        for (int bs : { 128, 144, 256, 480, 2560 })
+            std::printf ("    buffer %4d (%5.2f ms) : %6.2f ms typical, %6.2f ms worst\n",
+                         bs, 1000.0 * bs / sr,
+                         1000.0 * (bs + bs * 0.5 + measuredDelay) / sr,
+                         1000.0 * (bs + bs + measuredDelay) / sr);
+    }
+
     juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
     std::printf ("\nworst measured hero offset: (%d,%d) px\n", worstDx, worstDy);
     std::printf ("%s (%d failure%s)\n", failures == 0 ? "SELF-CHECK PASSED" : "SELF-CHECK FAILED",

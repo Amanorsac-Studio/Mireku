@@ -1147,3 +1147,208 @@ queue composes it, it does not modify it — and the single-run path
 (`services.startAuto`) behaves exactly as before for users who are not queuing;
 the only change there is that its engine construction is now shared with the
 queue so both behave identically take for take.
+
+## X7L library import — Yamaha MONTAGE `.X7L` → `.jmi`, no recording involved (2026-08-31)
+
+A second way into a `.jmi` bundle, alongside Guided and Auto capture: read a
+Yamaha MONTAGE user library and write its embedded PCM straight out as
+instruments. No audio is recorded, resampled or requantised — the client's
+186 MB library converts in about three seconds and the samples are byte-for-byte
+identical to what was in the file.
+
+### 77. The YSFC container, decoded and then *asserted*
+`src/engine/import/x7l.ts` is a pure `Uint8Array` reader (no DOM, no `node:fs`)
+so the same code runs in the renderer, in Electron main and under vitest.
+
+```
+0x00  "YAMAHA-YSFC"                 magic, NUL-padded to 16
+0x10  "4.0.5"                       version string, NUL-padded to 16
+0x40  [tag:4 ASCII][offset:u32 BE]  block table, ends at the first non-[A-Z]{4} tag
+```
+
+`E***` blocks are catalogues, `D***` blocks the payloads; four matter:
+EWFM/DWFM (key maps) and EWIM/DWIM (audio). Both block kinds are
+`[tag:4][size:u32 BE][count:u32 BE]` followed by `count` records tagged
+`Entr` / `Data` with a `u32 BE` length. A catalogue entry body starts
+`[dataLength:u32 BE][dataOffset:u32 BE][u16][id:u16 BE]` and ends in
+NUL-terminated strings; `dataOffset` is relative to the paired `D***` block and
+points at that record's `Data` tag.
+
+**DWFM record body — the key map, little-endian:**
+
+```
++0                u32 LE  keyzone count
+then count x 64-byte keyzone records:
+  +0  u8 keyRangeLo    +1  u8 keyRangeHi
+  +2  u8 velRangeLo    +3  u8 velRangeHi     (always 1 / 127 in this library)
+  +8  u8 rootNote
+  +36 u32 LE sampleRate (44100)
+  +48 u32 LE loopEnd   +52 u32 LE start
+  +56 u32 LE loopStart +60 u32 LE lengthSamples
+```
+
+**DWIM record body — the audio, big-endian headers:**
+
+```
++0                u32 BE  sub-record count
+then count x [byteLength:u32 BE][PCM: byteLength bytes]
+```
+
+PCM is 16-bit signed **little-endian, mono**.
+
+### 78. How the layout was corroborated, not assumed
+The two tables lock together, and the reader refuses the file unless they do:
+
+- The DWFM `keyzone count` and the DWIM `sub-record count` must agree
+  (24/24/24/24 then 22/22/22/22/22 in the client's file — and note the two
+  counts are stored with *opposite* endianness, which is what made the earlier
+  "0x18 / 0x16 header length" reading look plausible; they are counts).
+- For **every one of the 206 keyzones in the file**, the DWIM sub-record's
+  declared `byteLength` equals exactly `2 x lengthSamples` from the key map,
+  and the sub-record walk lands precisely on the record end with zero bytes
+  left over in all nine records. That is what proves **mono**: a stereo reading
+  needs twice the bytes and does not fit. It also corroborates the declared
+  44100 — those lengths give 1.9 s … 21 s per zone, the right order for a
+  struck EP.
+- Each keyzone's PCM starts on a clean attack ramp (`0, 0, 0, 4, 48, 256,
+  701, 1123, 1192, 1001, …`) at the computed offset — the boundaries land on
+  note onsets, not mid-waveform.
+- Key ranges tile 21…108 (A0–C8) with no gap or overlap in all nine waveforms,
+  and every `rootNote` falls inside its own range.
+- The EWIM catalogue's `dataOffset` / `dataLength` for each waveform must match
+  the record actually walked to, byte for byte.
+
+Anything that does not check out throws `X7lFormatError` naming the record and
+the drift, rather than emitting a plausible-looking bundle.
+
+### 79. Loops: declared, but deliberately not written
+Every keyzone declares `loopEnd == lengthSamples - 1` and `start == 0` — the
+Yamaha one-shot encoding. The field at +56 is a loop start and it is always
+inside the audio, but the tails measure **-84 dB to -270 dB RMS** over their
+final 5%: these samples decay to digital silence, so looping them would sustain
+nothing. The importer therefore writes `loop: null` and `soundType: "decaying"`,
+and records the reasoning in `meta.notes`. The rule in code is general, not
+hard-coded to this file: a waveform is a one-shot only when *every* zone has
+`loopEnd == length - 1` and `start == 0`; anything else carries its declared
+loop through to the bundle and marks the instrument `sustaining`.
+
+### 80. One bundle per instrument, grouped structurally
+Waveforms are grouped by a **key-map fingerprint** (the set of `lo-hi@root`
+triples), not by name — every velocity layer of one instrument shares an
+identical key map and two instruments never do. On the client's file that splits
+9 waveforms into exactly `{0,1,2,3}` and `{4,5,6,7,8}`, which independently
+agrees with both the waveform names and the EPFM performance element lists. The
+bundle name is the longest shared prefix of the member names ("MKS20", "EP2").
+Merging two instruments into one bundle is never done: a bundle is one sound,
+and presets are variations of it.
+
+### 81. Five velocity layers into four windows — nothing dropped
+`velocityMap` allows at most four layers; EP2 has five. Rather than discard a
+layer, the two **adjacent layers closest in measured peak level** share one
+velocity window as round robins. On EP2 that is `mf + f`, 4.38 dB apart (the
+other gaps are 5.67, 7.63 and 7.50 dB), so the alternation is subtle. All 110
+source samples are written. The window edges come from an even split of 1…127
+across the *source's* layer count, with the merged pair spanning both of its
+segments, so the map still tiles 1…127 with no gap. The Import screen shows the
+pairing, its level gap and the resulting map, and lets the user pick any other
+adjacent pair before converting.
+
+The source's own per-keyzone velocity ranges are `1..127` for every zone — in
+YSFC the velocity split lives at the Performance *element* level (DPFM), not in
+the waveform key banks. DPFM was probed and **not** decoded: no per-element
+velocity limits could be located with anything to check them against, so
+nothing was guessed. Layer order comes from a measurement of the audio itself
+(the keyzone nearest middle C of each waveform), which on this file agrees with
+the catalogue order; if the two ever disagree the audio wins and the bundle
+says so in `meta.notes`.
+
+### 82. `captureMode` — the shared format was NOT changed
+`meta.captureMode` admits only `"guided" | "auto"`. An import is neither.
+Adding a third value would change `packages/jmi-format` — the schema, the
+TypeScript type, Signature's C++ reader and the validator — for every consumer,
+so it was **not** changed unilaterally. Imported bundles record the closest
+legal value, `"auto"` (unattended, batch, no per-note human interaction), and
+put the truth in `meta.notes`:
+
+> Imported from the Yamaha MONTAGE library "MKS20 EP1 EP2.X7L". The source PCM
+> was copied through unchanged — 44100 Hz, 16-bit, mono, bit-perfect; nothing
+> was resampled or requantised. captureMode is recorded as "auto" because the
+> .jmi format has no value for an import; this bundle was not recorded. …
+
+**Flagged for the format owner:** if `"import"` is wanted as a first-class
+value it is a one-line schema change plus the `CaptureMode` union and a
+Signature reader check — but that is a shared-format decision, not the
+importer's to make.
+
+### 83. Bit-perfect, and proven
+Each sample file is a canonical 44-byte RIFF header (`encodeWav` is deliberately
+*not* used — it takes `Float32Array`) followed by a raw copy of the source PCM
+slice. `meta.sampleRate: 44100`, `bitDepth: 16`, `channels: "mono"`, all legal
+in the schema. Verified two ways: a unit test asserts byte equality of the
+written WAV payload with the source slice on a synthetic library, and the first
+sample of the real conversion (`MKS20.jmi/samples/G6_v1_rr1.wav`, 277,664
+payload bytes) compares identical to the source file's bytes at the offset the
+parser computed.
+
+### 84. `.X8L` (MODX) — gated off, on purpose
+MODX `.X8L` is widely believed to use the same YAMAHA-YSFC container, but no
+`.X8L` file was available to verify it against, and this importer's whole value
+is that it refuses what it cannot check. `SUPPORTED_EXTENSIONS` is `['x7l']`;
+`.x8l` / `.x7u` / `.x8u` / `.x7a` / `.x8a` are listed as *unverified* and
+rejected with a message that says exactly that. Version 4.x is likewise
+required. Enabling `.X8L` should be one line plus a real file to test against.
+
+### 85. Where it lives
+- `src/engine/import/x7l.ts` — the reader, `measureKeyzone`, `pcm16MonoWavHeader`.
+- `src/engine/import/x7lPlan.ts` — grouping, velocity windows, `instrument.json`.
+- `src/engine/import/x7lConvert.ts` — executes a plan against an **injected**
+  file system, so the real library converts under vitest exactly as it does in
+  Electron.
+- `electron/main.ts` — `import:inspect`, `import:convert` (progress via
+  `import:progress`), `dialog:chooseFile`; follows the existing `export:bundle`
+  pattern, validates every bundle with `validateBundle`, optional zip. One
+  parsed library is cached (path + mtime) so Inspect then Convert reads the
+  186 MB file once.
+- `src/ui/import/ImportScreen.tsx` — reachable from Home ("Import a Library")
+  and from the nav strip, where it sits beside Sessions because it needs no
+  capture session. Built from the existing family primitives only (`Panel`,
+  `Button`, `Toggle`, `Listbox` via `Select`, `GoldDivider`, `Flourish`,
+  `.jm-readout`, `.jm-plaque`, `.jm-queue-bar`); no native `<select>`, and no
+  colour or size literal in the component — everything through
+  `theme/tokens.ts` CSS variables.
+- One line on rights, stated once, under the Choose button.
+
+### 86. Verification
+- `npm run typecheck -w jm-capture` and `npm run build -w jm-capture` clean.
+- `npm run test -w jm-capture`: **193 passed** — the 167 that existed before,
+  plus 26 new covering parser structure, eight distinct malformed-input
+  rejections, velocity-window tiling, the key-map / audio corroboration, and a
+  full conversion of the client's real file asserting both bundles pass
+  `validateBundle` with zero errors. The real-file block skips (not fails) when
+  the library is absent, so CI stays green.
+- The client's `MKS20 EP1 EP2.X7L` (186,783,671 bytes) converted end to end in
+  ~2.7 s to `C:\Users\amano\Documents\JM Imported Bundles`:
+  - `MKS20.jmi` — world `mks`, 96 zones, 96 samples, 115.0 MB, keys A0–C8,
+    velocity 1–32 / 33–64 / 65–95 / 96–127, valid, 0 issues.
+  - `EP2.jmi` — world `rhodes-ep`, 88 zones, 110 samples, 63.1 MB, keys A0–C8,
+    velocity 1–25 / 26–51 / 52–76 / 77–127 (the last window carrying
+    `EP2 mf` + `EP2 f` as two round robins), valid, 0 issues.
+  - 206 WAV files, 186,754,090 bytes on disk — every byte of source audio.
+- Both bundles load through Signature's C++ reader (`test_jmi.exe`):
+  "loaded MKS20: 96 zones / jmi_format.h OK" and
+  "loaded EP2: 88 zones / jmi_format.h OK".
+- Screens shot against the live Vite dev server through the same headless-Chrome
+  CDP harness (**Electron deliberately not launched**, per instruction), with
+  the Electron-only bridge methods stubbed in the page — the screen's own code
+  is unmodified. Console clean,
+  `document.querySelectorAll('select').length === 0`. New:
+  `31-import-empty.png`, `32-import-library-contents.png`,
+  `33-import-velocity-mapping.png`, `34-import-velocity-merge-picker.png`,
+  `35-import-converting.png`, `36-import-complete.png`; `01-home.png` refreshed
+  for the new button.
+
+### 87. Not touched
+`packages/jmi-format` is unchanged — no schema, type, validator or C++ reader
+edit. Capture's recording paths (Guided, Auto, the patch queue, the FX rack,
+the sampler, export) are untouched; the import path shares only
+`bundleFolderName` and the `sampleFileName` convention with export.

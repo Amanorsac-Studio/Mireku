@@ -4,7 +4,7 @@ import { deserializeSession, sessionStats } from '../../engine/session';
 import { Button, Label, Panel } from '../common';
 import { Flourish, GoldDivider } from '../hardware';
 import { KIT } from '../assets/kit';
-import { IconMore, IconRight, IconStar } from '../assets/icons';
+import { IconMore, IconRight, IconStar, IconKeyboard } from '../assets/icons';
 
 export function HomeScreen() {
   const saved = useApp((s) => s.savedSessions);
@@ -35,9 +35,16 @@ export function HomeScreen() {
           </div>
           <Label>Luxury studio workstation — focus, momentum, confidence for one musician</Label>
           <Flourish width={150} style={{ marginTop: 'calc(var(--jm-size-gap-unit) * 0.5)' }} />
-          <Button primary onClick={() => setScreen('wizard')}>
-            <IconStar size={14} /> Start a New Session
-          </Button>
+          <div className="jm-row" style={{ gap: 'calc(var(--jm-size-gap-unit) * 0.75)' }}>
+            <Button primary onClick={() => setScreen('wizard')}>
+              <IconStar size={14} /> Start a New Session
+            </Button>
+            {/* The other way to get an instrument: convert a library you already
+                own, with no recording at all. */}
+            <Button onClick={() => setScreen('import')}>
+              <IconKeyboard size={14} /> Import a Library
+            </Button>
+          </div>
         </div>
       </Panel>
 

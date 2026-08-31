@@ -64,7 +64,15 @@ const memoryBridge: JmBridge = (() => {
     exportBundle: async () => {
       throw new Error('Export requires the Electron app');
     },
+    inspectLibrary: async () => {
+      throw new Error('Importing a library requires the Electron app');
+    },
+    convertLibrary: async () => {
+      throw new Error('Importing a library requires the Electron app');
+    },
+    onImportProgress: () => () => {},
     chooseDir: async () => null,
+    chooseFile: async () => null,
     showItem: async () => true,
   };
 })();

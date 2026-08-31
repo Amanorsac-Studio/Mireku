@@ -8,7 +8,15 @@ import type { SessionPosition, SessionState } from '../engine/session';
 import type { GuidedPhase } from '../engine/guided';
 import { createPatchQueue, type PatchQueueState } from '../engine/patchQueue';
 
-export type Screen = 'home' | 'wizard' | 'guided' | 'auto' | 'loopback' | 'audition' | 'export';
+export type Screen =
+  | 'home'
+  | 'wizard'
+  | 'guided'
+  | 'auto'
+  | 'loopback'
+  | 'audition'
+  | 'export'
+  | 'import';
 
 export interface VerdictFlash {
   kind: 'accepted' | 'coaching';

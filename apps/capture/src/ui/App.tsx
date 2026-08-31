@@ -8,6 +8,7 @@ import { AutoScreen } from './auto/AutoScreen';
 import { LoopbackHelper } from './auto/LoopbackHelper';
 import { AuditionScreen } from './audition/AuditionScreen';
 import { ExportScreen } from './export/ExportScreen';
+import { ImportScreen } from './import/ImportScreen';
 import { KitMeter, Segmented } from './hardware';
 import { KIT } from './assets/kit';
 import { IconGear } from './assets/icons';
@@ -44,6 +45,9 @@ export function App() {
     navOptions.push({ value: 'export', label: 'Export' });
   }
   navOptions.push({ value: 'home', label: 'Sessions' });
+  // Import is a standalone path: it needs no capture session, so it sits
+  // alongside Sessions rather than inside a session's Capture/Audition/Export run.
+  navOptions.push({ value: 'import', label: 'Import' });
 
   const navValue = navOptions.some((o) => o.value === screen) ? screen : 'home';
 
@@ -81,6 +85,7 @@ export function App() {
         {screen === 'loopback' && <LoopbackHelper />}
         {screen === 'audition' && <AuditionScreen />}
         {screen === 'export' && <ExportScreen />}
+        {screen === 'import' && <ImportScreen />}
       </div>
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
       <StatusBar />

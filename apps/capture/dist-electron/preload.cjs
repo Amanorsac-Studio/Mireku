@@ -28,7 +28,17 @@ var bridge = {
   readTake: (id, file) => import_electron.ipcRenderer.invoke("take:read", id, file),
   deleteTake: (id, file) => import_electron.ipcRenderer.invoke("take:delete", id, file),
   exportBundle: (req) => import_electron.ipcRenderer.invoke("export:bundle", req),
+  inspectLibrary: (filePath) => import_electron.ipcRenderer.invoke("import:inspect", filePath),
+  convertLibrary: (req) => import_electron.ipcRenderer.invoke("import:convert", req),
+  onImportProgress: (cb) => {
+    const listener = (_e, p) => cb(p);
+    import_electron.ipcRenderer.on("import:progress", listener);
+    return () => {
+      import_electron.ipcRenderer.off("import:progress", listener);
+    };
+  },
   chooseDir: () => import_electron.ipcRenderer.invoke("dialog:chooseDir"),
+  chooseFile: () => import_electron.ipcRenderer.invoke("dialog:chooseFile"),
   showItem: (p) => import_electron.ipcRenderer.invoke("shell:showItem", p)
 };
 import_electron.contextBridge.exposeInMainWorld("jm", bridge);

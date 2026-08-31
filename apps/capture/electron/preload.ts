@@ -25,8 +25,58 @@ export interface JmBridge {
     stats: { sampleCount: number; presetCount: number; totalBytes: number };
     totalBytes: number;
   }>;
+  /** Read a Yamaha `.X7L` library and return what is inside it (no conversion). */
+  inspectLibrary(filePath: string): Promise<ImportInspection>;
+  /** Convert the chosen instruments into `.jmi` bundles under `destDir`. */
+  convertLibrary(req: ImportConvertRequest): Promise<{ destDir: string; results: ImportBundleResult[] }>;
+  /** Subscribe to conversion progress; returns an unsubscribe function. */
+  onImportProgress(cb: (p: ImportProgress) => void): () => void;
   chooseDir(): Promise<string | null>;
+  chooseFile(): Promise<string | null>;
   showItem(path: string): Promise<boolean>;
+}
+
+export interface ImportProgress {
+  instrument: string;
+  done: number;
+  total: number;
+  overall: number;
+  grandTotal: number;
+}
+
+export interface ImportInspection {
+  filePath: string;
+  fileName: string;
+  fileSize: number;
+  version: string;
+  performances: string[];
+  /** an `X7lImportPlan` — typed structurally so the preload stays dependency-free */
+  plan: unknown;
+}
+
+export interface ImportConvertRequest {
+  filePath: string;
+  destDir: string;
+  instruments: number[];
+  merges?: Record<number, number | null>;
+  author?: string;
+  zip?: boolean;
+}
+
+export interface ImportBundleResult {
+  instrumentName: string;
+  bundlePath: string;
+  zipPath: string | null;
+  sampleCount: number;
+  zoneCount: number;
+  bytesWritten: number;
+  keyRangeLo: number;
+  keyRangeHi: number;
+  velocityMap: { layer: number; name: string; lo: number; hi: number }[];
+  notes: string[];
+  valid: boolean;
+  issues: { level: string; path: string; message: string }[];
+  stats: { sampleCount: number; presetCount: number; totalBytes: number };
 }
 
 const bridge: JmBridge = {
@@ -41,7 +91,17 @@ const bridge: JmBridge = {
   readTake: (id, file) => ipcRenderer.invoke('take:read', id, file),
   deleteTake: (id, file) => ipcRenderer.invoke('take:delete', id, file),
   exportBundle: (req) => ipcRenderer.invoke('export:bundle', req),
+  inspectLibrary: (filePath) => ipcRenderer.invoke('import:inspect', filePath),
+  convertLibrary: (req) => ipcRenderer.invoke('import:convert', req),
+  onImportProgress: (cb) => {
+    const listener = (_e: unknown, p: ImportProgress) => cb(p);
+    ipcRenderer.on('import:progress', listener);
+    return () => {
+      ipcRenderer.off('import:progress', listener);
+    };
+  },
   chooseDir: () => ipcRenderer.invoke('dialog:chooseDir'),
+  chooseFile: () => ipcRenderer.invoke('dialog:chooseFile'),
   showItem: (p) => ipcRenderer.invoke('shell:showItem', p),
 };
 

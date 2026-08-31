@@ -156,3 +156,9 @@ add_test(NAME EngineTests COMMAND JMSignatureTests)
 # Client review round 3: the UI/arrangement self-check is a real test now, not a
 # manual tool - it carries the master-section, chrome, macro and letterbox assertions.
 add_test(NAME UiSelfCheck COMMAND JMSignatureSnapshot)
+# Client review round 5: the self-check must not depend on whatever bundles the
+# developer happens to have in their own "Documents/JM Signature/Library" folder
+# — with only the client's one-world Piano.jmi there, three of the four Perform
+# slots came up empty and the routing/audio assertions failed for no good reason.
+set_tests_properties(UiSelfCheck PROPERTIES
+    ENVIRONMENT "JM_LIBRARY_DIR=${CMAKE_CURRENT_SOURCE_DIR}/../../testdata")

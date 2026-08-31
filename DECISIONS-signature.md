@@ -3,6 +3,176 @@
 Judgment calls made while building the JUCE plugin, per JM-BUILD-SPEC.md §5.
 Owner: JM Signature build agent.
 
+## Client review round 5 — streaming defect ("crazy weirdness ... like when the processor is at high usage") (2026-08-31)
+
+The client's first real sampled instrument, `Documents/JM Signature/Library/Piano.jmi`
+(313 samples, ~201 MB of 24-bit WAV, median sample 2697 ms ≈ 129 480 frames), made the
+plugin misbehave while the CPU meter read low. Three faults in the disk-streaming path,
+all in `src/engine/Library.h` and the render path of `src/engine/Sampler.h`.
+
+### Root causes (all three confirmed in the source, one measured)
+
+1. **Most notes outran the preload, and the render path punished them.**
+   `SampleData::kAttackFrames = 65536` (~1.365 s) was preloaded per sample and the rest
+   streamed. **239 of the 313 samples are longer than that**, so most notes needed streamed
+   audio after ~1.4 s. `SampleData::get()` returned `false` past what was resident and
+   `Sampler.h` answered by calling `v.release()` and multiplying `env` by `0.995` **per
+   sample** — the note was force-released and gone within ~2000 frames. This is what the
+   client heard.
+2. **A held note could never recover.** `TailLoader::request()` set `loadQueued`, and when
+   the ring was full it cleared the flag again and relied on being "retried on next
+   note-on". A held note gets no further note-on, so its tail was never requested again —
+   and once released by fault 1 the voice was dead regardless.
+3. **Priority inversion.** `TailLoader::request()` took a `juce::SpinLock` **on the audio
+   thread** which the loader thread held across `AudioFormatReader::read()`, i.e. across
+   file I/O. Whenever the loader was descheduled holding it, the audio thread spun. That is
+   precisely "dropouts that look like overload while the CPU is idle".
+
+Two further defects found while fixing those:
+
+4. **Use-after-free in eviction.** `evictIdle()` checked `voiceRefs == 0` and then called
+   `fullBuf.setSize (0, 0)`. A note-on could increment `voiceRefs` and start reading between
+   those two steps, so the audio thread could read a freed buffer.
+5. **Leaked voice references and audio-thread `free()`.** `startVoice` decremented
+   `voiceRefs` only `if (v->active && ...)`, so every voice silenced by `allNotesOff(false)`
+   leaked a reference and pinned its sample against eviction forever. And `setBundle` left
+   the old bundle's `SamplePtr`s in silent voices, so the last reference to a ~1 MB
+   `SampleData` was released — i.e. `free()`d — on the **audio thread** the next time that
+   voice was stolen.
+
+### The strategy: residency, not streaming — and why
+
+Spec §5.1 asked for disk streaming. Streaming exists to play libraries that cannot fit in
+RAM; at 200–400 MB per bundle it bought nothing and cost an entire class of concurrency
+bug. Note the arithmetic: the old design already held a 65536-frame float attack buffer for
+every sample — **217 MB for this bundle, 737 MB for the four dev bundles** — and then
+allocated the *whole* sample again on top when a tail was needed. Full residency is not
+more memory than the old design; measured, it is **less**.
+
+So the model is now:
+
+- **Every sample keeps a head**, still 65536 frames, preloaded synchronously when the
+  bundle is assigned to a slot. Unchanged from what shipped, so nothing regresses in the
+  window between "bundle assigned" and "body loaded" — including a DAW rendering faster
+  than real time.
+- **A background `SampleLoader` promotes samples to full residency**, demand first, then
+  eagerly in enrolment order, up to a byte budget.
+- **The head is handed back the moment the body lands** (`dropRedundantHead`), so
+  steady-state residency is exactly one copy of the sample and never two. If a body is ever
+  reclaimed, `retireFull` **rebuilds the head out of it first**, so every sample always has
+  its head in memory.
+- **The audio thread never blocks.** `SampleData::acquire()` / `release()` is a pair of
+  atomic RMWs taken once per voice per block; the inner sample loop touches no atomics at
+  all. Asking for missing audio is `wantsAudio.store (true, relaxed)` — one relaxed store,
+  no queue to overflow, no lock to invert. The loader **polls**; nothing is pushed to it
+  from the render path. Same law as `src/engine/MidiRouting.h`.
+- **Starvation is a recoverable hold, not a death sentence.** When a voice runs past
+  resident audio it now freezes its playback position, ramps to silence over 5 ms, and
+  re-issues the wait-free request **every block** — which is exactly what makes a *held*
+  note recover where the old note-on-only retry could not. When the audio arrives it ramps
+  back up over 5 ms and continues from the frozen position, so there is no discontinuity.
+  Only ~4 s of unbroken starvation finally reclaims the voice. With residency this path is
+  a genuine last resort rather than something every note walks into.
+- **Memory stays bounded.** `SampleLoader::kEagerBytes` = 768 MB, `kMaxResidentBytes` =
+  1 GB, process-wide (the loader is a singleton, shared by every plugin instance) and
+  tracked in `residentByteCounter()`, which `~SampleData` credits back. Past the ceiling the
+  loader reclaims the bodies of samples no voice holds and that have been idle ≥ 10 s. A
+  many-gigabyte library therefore degrades to head-plus-on-demand instead of exploding.
+
+**Reclamation is safe by construction.** `retireFull` / `dropRedundantHead` publish a
+retiring flag (seq_cst store) and then wait for `readers_` to drain (seq_cst load); every
+reader increments `readers_` (seq_cst) *before* it reads the flag. The two orderings cannot
+miss each other, so a body is never freed under a reader. The waiting is done on the loader
+thread only — the audio thread merely sees "no body this block" and starves recoverably for
+one block. `EngineTests` exercises this at maximum contention (a thread retiring and
+republishing bodies underneath a 64-voice render loop).
+
+Nothing else changed: zone selection, round-robin cycling, velocity crossfade, loop
+crossfades, CC64, pitch bend, the modulation system, the `.jmi` format and the UI are all
+untouched.
+
+### Fixed alongside
+
+- `startVoice` now releases the previous sample reference unconditionally (fault 5), and
+  `setBundle` / `allNotesOff(false)` drop voice `SamplePtr`s on the thread that owns them,
+  so no `SampleData` is ever destroyed on the audio thread.
+- `juce::Time::currentTimeMillis()` is gone from the audio thread; the loader publishes a
+  coarse clock into `coarseNowMs()` (~100 ms granularity, only ever compared against a 10 s
+  idle threshold) which the audio thread reads with a relaxed load.
+- **The UI self-check was depending on the developer's own library folder.** With only the
+  client's one-world `Piano.jmi` in `Documents/JM Signature/Library`, three of the four
+  Perform slots came up empty and twelve routing/audio assertions failed for reasons that
+  had nothing to do with the code. `Library::loadSettings` now honours a `JM_LIBRARY_DIR`
+  environment override (process-local, never written back to `settings.json`) and
+  `CMakeLists.txt` sets it for the `UiSelfCheck` test, so the self-check runs hermetically
+  against `testdata/`.
+
+### Measurements — the defect, before and after
+
+A steady 200 Hz tone, one note-on and then **never touched again**, sample longer than the
+preload, body published at frame 100000. Identical harness on both builds
+(`tests/Round5Streaming.inc`, `testHeldNoteOutrunsResidentAudio`):
+
+| window                          | **before** | **after** |
+|---------------------------------|-----------:|----------:|
+| RMS in-preload  [40k..60k]      |   0.265039 |  0.265039 |
+| RMS past-preload [70k..95k]     |   0.000000 (0.0 %) | 0.000000 (5 ms fade to silence, position frozen) |
+| RMS after body arrives [120k..200k] | **0.000000 (0.0 %)** | **0.295318 (111.4 %)** |
+| active voices at the end        |      **0** |     **1** |
+| voice released by starvation    |    **yes** |    **no** |
+
+The pre-fix build killed the note at the preload boundary and it never came back, however
+long the note was held and however quickly the tail arrived. Worst waveform step across the
+recovery seam is < 0.05 (a 200 Hz sine steps 0.013 per sample), i.e. no click.
+
+Real bundle, sustained note across the exact old boundary
+(`testRealBundleResidency`, `testdata/JM_Placeholder_Rhodes.jmi`, 360 samples):
+
+- RMS just **before** frame 65536 = 0.052835
+- RMS just **after** frame 65536 = 0.044965 — **85.1 %**, pre-fix **0.0 %**
+- RMS at frame 90000–95000 = 0.023949 (45.3 %) — ordinary sample decay, not a duck
+- voices just past the old cliff: active 1, releasing 0
+
+Same test against the **client's own bundle** (`JM_BUNDLE=…/Library/Piano.jmi`):
+before 0.012292 → after **0.010773 = 87.6 %** (pre-fix 0.0 %), voice still held.
+
+### Load time and memory — the client's Piano.jmi (313 samples, 201 MB on disk)
+
+- **Message-thread bundle load: 491.6 ms** for all 313 samples (65536-frame head preload).
+  No UI freeze; the instrument plays from the head while the bodies load behind it.
+- **Head residency straight after load: 197.0 MB.** After the background loader finishes
+  (397 promotions) and hands the redundant heads back: **266.4 MB fully resident** — the
+  expected 24-bit → float expansion of 201 MB, exactly one copy.
+- **pluginval host process peak working set, client library: 286.9 MB.**
+- Reference: `testdata/JM_Placeholder_Rhodes.jmi` (274.5 MB on disk, 360 samples) settles at
+  **365.9 MB** resident.
+- **Bounded-memory check:** pointed at the four dev bundles (1.1 GB of 24-bit WAV ≈ 1.46 GB
+  as float — deliberately more than the budget), the pluginval host peaked at **989.7 MB**
+  and passed. The ceiling held; the excess degraded to head-plus-on-demand as designed.
+- For comparison, the *old* design's attack buffers alone were 197 MB for Piano.jmi and
+  ~740 MB for the four dev bundles, **before** a single tail was loaded on top.
+
+### Polyphony under load
+
+64 voices (4 slots × 16), every voice starting head-only and every body landing mid-flight:
+**median render block 0.424 ms, 95th percentile 0.798 ms, worst 2.441 ms** against a
+10.67 ms budget at 512 frames / 48 kHz. Then, with a thread continuously retiring and
+republishing bodies underneath the render loop (112 completed reclaim cycles): **worst block
+1.555 ms, 64/64 voices still alive**, output finite throughout.
+
+### Verification after client review round 5
+
+- Full Release build (VST3 + Standalone + tests + snapshot tool): **exit 0**. The standalone
+  relinked without LNK1104 this time; the user's running instance did not have to be killed.
+- `ctest -C Release`: **100 % passed, 2/2** (EngineTests incl. the four new round-5 tests,
+  UiSelfCheck).
+- pluginval (the copy on this machine reports **1.0.4**) strictness 8 `--skip-gui-tests`:
+  **SUCCESS, exit 0** — run twice, once against the client's own library (Piano.jmi only,
+  peak 286.9 MB) and once against the four dev bundles (peak 989.7 MB).
+- Standalone deliberately not launched (the user has it open). The Release relink of
+  `JM Signature.exe` succeeded without LNK1104, so no running process had to be terminated.
+
+
 ## Modulation Phase 2 — Arpeggiator (2026-08-28)
 
 Implements `docs/JM-MODULATION-SPEC.html` §E following `docs/MODULATION-RESEARCH.md`

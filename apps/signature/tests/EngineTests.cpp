@@ -127,14 +127,14 @@ static BundlePtr makeSyntheticLoopBundle (double freq, double sr, int lenFrames,
     sd->lengthFrames = lenFrames;
     sd->fileSampleRate = sr;
     sd->loop = rr.loop;
-    sd->attack.setSize (2, lenFrames);                 // fits entirely in the preload
+    juce::AudioBuffer<float> whole (2, lenFrames);      // fits entirely in the resident head
     for (int i = 0; i < lenFrames; ++i)
     {
         const float v = 0.5f * std::sin (juce::MathConstants<double>::twoPi * freq * (double) i / sr);
-        sd->attack.setSample (0, i, v);
-        sd->attack.setSample (1, i, v);
+        whole.setSample (0, i, v);
+        whole.setSample (1, i, v);
     }
-    sd->fullReady.store (true);
+    sd->setHead (std::move (whole));
     b->samples.push_back ({ sd });
     return b;
 }
@@ -329,8 +329,10 @@ static void testRealBundle()
     CHECK ((int) b->inst.zones.size() == 120, "30 notes x 4 layers = 120 zones");
     CHECK ((int) b->inst.velocityMap.size() == 4, "4 velocity layers");
     CHECK ((int) b->inst.presets.size() == 2, "2 factory presets loaded");
-    CHECK (b->samples.size() == b->inst.zones.size(), "attack buffers preloaded for every zone");
-    CHECK (b->samples[0][0]->attack.getNumSamples() > 0, "attack preload non-empty");
+    CHECK (b->samples.size() == b->inst.zones.size(), "head buffers preloaded for every zone");
+    // Round 5: > 0 whether the sample is still head-only or the background
+    // loader has already promoted it and handed the redundant head back.
+    CHECK (b->samples[0][0]->residentFrames() > 0, "sample audio is resident straight after load");
 
     SamplerEngine eng;
     eng.setWorld (0);
@@ -1606,6 +1608,9 @@ static void testArpStateRoundTrip()
 }
 
 //==============================================================================
+#include "Round5Streaming.inc"
+
+//==============================================================================
 int main()
 {
     std::printf ("JM Signature engine tests\n=========================\n");
@@ -1634,6 +1639,11 @@ int main()
     testArpSustainRules();
     testArpTransportAndPattern();
     testArpStateRoundTrip();
+    // CLIENT REVIEW ROUND 5 — streaming defect (sample residency)
+    testHeldNoteOutrunsResidentAudio();
+    testStarvationIsBoundedWhenAudioNeverArrives();
+    testResidencyPolyphonyUnderLoad();
+    testRealBundleResidency();
     std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL TESTS PASSED" : "TESTS FAILED",
                  failures, failures == 1 ? "" : "s");
     return failures == 0 ? 0 : 1;

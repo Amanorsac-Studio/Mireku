@@ -91,6 +91,8 @@ public:
         scratch_.setSize (2, maxBlock);
         for (auto& f : voicingChain_) f.prepare (sampleRate);
         motionLfo_.setRate (0.15f, sampleRate);
+        starveRamp_ = 1.0f / (float) juce::jmax (1.0, sampleRate * 0.005);   // 5 ms in/out
+        starveLimit_ = (int) (sampleRate * 4.0);                             // 4 s hard stop
         bendSemis_.store (0.0f);
         bendCur_ = 1.0;
         allNotesOff (false);
@@ -112,7 +114,15 @@ public:
         const juce::SpinLock::ScopedLockType sl (lock_);
         bundle_ = b;
         rrCounters_ = std::move (rr);
-        for (auto& v : voices_) v.active = false;
+        // Round 5: drop the voices' SamplePtrs HERE, on the message thread. The
+        // old code left them dangling in silent voices, so the last reference to
+        // a ~1 MB SampleData was released (i.e. free()d) on the audio thread the
+        // next time that voice was stolen.
+        for (auto& v : voices_)
+        {
+            v.active = false;
+            if (v.sample != nullptr) { v.sample->voiceRefs--; v.sample = nullptr; }
+        }
         if (b != nullptr)
             ampEnv_.setDefaults (b->inst.soundType == jmi::SoundType::Sustaining);
     }
@@ -218,7 +228,11 @@ public:
     void allNotesOff (bool tail = true)
     {
         const juce::SpinLock::ScopedLockType sl (lock_);
-        for (auto& v : voices_) { if (tail && v.active) v.release(); else v.active = false; }
+        for (auto& v : voices_)
+        {
+            if (tail && v.active) v.release();
+            else { v.active = false; if (v.sample != nullptr) { v.sample->voiceRefs--; v.sample = nullptr; } }
+        }
         sustainDown_ = false;
     }
 
@@ -298,6 +312,9 @@ private:
         // FM brightness per-voice LP
         OnePoleLP lp[2];
         bool useLp = false;
+        // Round 5: starvation is a recoverable HOLD, not a death sentence.
+        float starveGain = 1.0f;                       // 5 ms ramp down / up
+        int starveSamples = 0;                         // consecutive starved frames
 
         void release() { if (! releasing) { releasing = true; phase = 3; } }
     };
@@ -314,7 +331,10 @@ private:
 
         Voice* v = findFreeVoice();
         if (v == nullptr) return;
-        if (v->active && v->sample != nullptr) v->sample->voiceRefs--;
+        // Round 5: unconditional — the old `if (v->active ...)` leaked a voiceRef
+        // for every voice silenced by allNotesOff(false), which in turn pinned
+        // sample bodies against reclamation forever.
+        if (v->sample != nullptr) v->sample->voiceRefs--;
 
         v->active = true; v->releasing = false; v->sustained = false;
         v->note = note; v->vel = vel; v->zone = zoneIdx;
@@ -325,6 +345,7 @@ private:
         v->gain = gain * (0.35f + 0.65f * velCurve);
         v->startStamp = ++stampCounter_;
         v->env = 0; v->phase = 0;
+        v->starveGain = 1.0f; v->starveSamples = 0;
 
         float atkMs = ampEnv_.attackMs.load();
         if (world_ == 2) atkMs = juce::jmax (atkMs, engineParams_[1] * 2.0f);            // FM Attack 0..200 ms
@@ -344,8 +365,11 @@ private:
         }
 
         v->sample->voiceRefs++;
-        v->sample->lastUseMs.store (juce::Time::currentTimeMillis());
-        TailLoader::instance().request (v->sample);
+        v->sample->lastUseMs.store (coarseNowMs().load (std::memory_order_relaxed), std::memory_order_relaxed);
+        // Round 5: ONE relaxed atomic store. No lock, no queue, no allocation —
+        // and it is re-issued from the render path every block a voice starves,
+        // so a held note recovers where the old note-on-only retry could not.
+        if (! v->sample->isFullyResident()) v->sample->requestAudio();
     }
 
     Voice* findFreeVoice()
@@ -367,6 +391,13 @@ private:
                       double bend = 1.0, double bendStep = 0.0)
     {
         auto& sd = *v.sample;
+        // Round 5: one wait-free acquire for the whole block. The view is a
+        // plain snapshot of raw pointers, so the inner loop touches no atomics
+        // at all, and the loader cannot free anything under us while it lives.
+        const auto view = sd.acquire();
+        const struct Guard { const SampleData& s; ~Guard() { s.release(); } } guard { sd };
+        sd.lastUseMs.store (coarseNowMs().load (std::memory_order_relaxed), std::memory_order_relaxed);
+
         const bool hasLoop = sd.loop.has_value() && sd.loop->endSample > sd.loop->startSample;
         const double loopStart = hasLoop ? (double) sd.loop->startSample : 0;
         const double loopEnd = hasLoop ? (double) sd.loop->endSample : 0;
@@ -395,7 +426,7 @@ private:
                 const auto i0 = (juce::int64) pos;
                 const float frac = (float) (pos - (double) i0);
                 float l0, r0, l1, r1;
-                if (! sd.get (i0, l0, r0) || ! sd.get (i0 + 1, l1, r1)) return false;
+                if (! view.get (i0, l0, r0) || ! view.get (i0 + 1, l1, r1)) return false;
                 l = l0 + (l1 - l0) * frac;
                 r = r0 + (r1 - r0) * frac;
                 return true;
@@ -417,11 +448,29 @@ private:
             else
                 ok = fetch (v.pos, sl, srr);
 
-            if (! ok)                                        // tail not streamed yet
+            // ----- starvation (round 5)
+            // `ok == false` means the frame is inside the sample but not yet in
+            // memory. With residency this is a true last resort — it can only
+            // happen in the first instants after a bundle is assigned, or when a
+            // library far larger than the memory budget forced a body out.
+            //
+            // The voice is HELD, not released: the position freezes, a 5 ms ramp
+            // takes it to silence, the loader is asked again (wait-free), and the
+            // note ramps back up and carries on the moment the audio arrives.
+            // Only ~4 s of unbroken starvation finally kills it.
+            if (! ok)
             {
-                v.release();
-                v.env *= 0.995f;
-                if (v.env < 1.0e-4f) { killVoice (v); return; }
+                sd.requestAudio();
+                v.starveGain -= starveRamp_;
+                if (v.starveGain < 0.0f) v.starveGain = 0.0f;
+                if (++v.starveSamples > starveLimit_) { killVoice (v); return; }
+                continue;                                    // position frozen: resumes exactly where it left off
+            }
+            if (v.starveSamples != 0 || v.starveGain < 1.0f)
+            {
+                v.starveSamples = 0;
+                v.starveGain += starveRamp_;
+                if (v.starveGain > 1.0f) v.starveGain = 1.0f;
             }
 
             if (v.useLp) { sl = v.lp[0].process (sl); srr = v.lp[1].process (srr); }
@@ -432,7 +481,7 @@ private:
                 srr = std::tanh (srr * pre) / std::sqrt (pre);
             }
 
-            const float g = v.env * v.gain;
+            const float g = v.env * v.gain * v.starveGain;
             L[i] += sl * g;
             R[i] += srr * g;
 
@@ -525,6 +574,8 @@ private:
     int world_ = 0;
     double sr_ = 48000;
     juce::int64 stampCounter_ = 0;
+    float starveRamp_ = 1.0f / 240.0f;
+    int starveLimit_ = 192000;
     juce::AudioBuffer<float> scratch_;
     std::array<ShelfFilter, 3> voicingChain_;
     OnePoleLP tiltLp_[2];

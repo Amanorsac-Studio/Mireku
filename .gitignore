@@ -10,3 +10,6 @@ testdata/*.jmi.zip
 apps/signature/build*/
 apps/signature/external/
 .vs/
+
+# validation tooling (downloaded, never committed)
+tools/pluginval/

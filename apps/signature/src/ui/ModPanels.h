@@ -175,6 +175,7 @@ public:
 
         // ---- sync
         sync_.onToggle = [this] (bool b) { settings().sync = b ? 1 : 0; commit(); refresh(); };
+        sync_.setTitle ("LFO tempo sync");
         addAndMakeVisible (sync_);
 
         // ---- rate / phase / fade (research §2.5: rate is exposed on a LOG taper,
@@ -562,6 +563,7 @@ public:
     {
         // ---- master enable + per-slot enable (spec: ONE global arp, per-slot on)
         power_.onToggle = [this] (bool b) { arp().enabled = b ? 1 : 0; commit(); refresh(); };
+        power_.setTitle ("Arpeggiator on");
         addAndMakeVisible (power_);
         for (int i = 0; i < 4; ++i)
         {
@@ -604,6 +606,7 @@ public:
         };
         addAndMakeVisible (div_);
         sync_.onToggle = [this] (bool b) { arp().sync = b ? 1 : 0; commit(); refresh(); };
+        sync_.setTitle ("Arpeggiator tempo sync");
         addAndMakeVisible (sync_);
 
         rate_ = std::make_unique<PlainKnob> ("RATE", kArpRateMin, kArpRateMax, 6.0, 0);
@@ -641,6 +644,7 @@ public:
 
         // ---- hold (the same latch the pedal drives; they OR together, rule 5)
         hold_.onToggle = [this] (bool b) { arp().hold = b ? 1 : 0; commit(); };
+        hold_.setTitle ("Arpeggiator hold");
         addAndMakeVisible (hold_);
 
         // ---- velocity

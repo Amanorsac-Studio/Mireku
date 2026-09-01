@@ -1884,6 +1884,238 @@ int main()
         proc.slotRacks[0].setState (proc.state.slots[0].rack);
     }
 
+
+    //========================================================================
+    // VALIDATION + UX STANDARDS PASS -- guide S6, "knob resolution and feel".
+    //
+    // Every gesture the guide asks for, asserted on a REAL knob inside a real
+    // editor, plus proof that the gestures rounds 3/4/7 already bound to these
+    // controls (alt-drag to assign a macro, right-click for the MIDI/macro
+    // menu, header-only FX drag-to-reorder) are untouched.
+    //========================================================================
+    std::printf ("\n== S6 knob conventions: relative drag, fine, wheel, typed entry ==\n");
+    {
+        proc.state.currentPage = 0;
+        auto* ed = dynamic_cast<JMSignatureEditor*> (proc.createEditor());
+        ed->setSize (Theme::M::designW, Theme::M::designH);
+        ed->setVisible (true);
+
+        std::vector<PathSlider*> knobs;
+        findAll<PathSlider> (*ed, knobs);
+        std::printf ("  path-bound knobs on the page: %d\n", (int) knobs.size());
+        CHECK (! knobs.empty(), "knobs found to test");
+
+        auto* s = knobs.front();
+        auto* owner = dynamic_cast<ParamKnob*> (s->getParentComponent());
+        CHECK (owner != nullptr, "the knob is a ParamKnob");
+        if (owner != nullptr)
+            std::printf ("  testing '%s' (%s)\n", owner->caption().toRawUTF8(),
+                         owner->path().toRawUTF8());
+
+        auto ev = [s] (juce::Point<float> pos, juce::ModifierKeys mods,
+                       juce::Point<float> down, int clicks, bool dragged)
+        {
+            return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), pos, mods,
+                                     1.0f, 0.0f, 0.0f, 0.0f, 0.0f, s, s,
+                                     juce::Time::getCurrentTime(), down,
+                                     juce::Time::getCurrentTime(), clicks, dragged);
+        };
+        const auto left = juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier);
+        const auto leftShift = left.withFlags (juce::ModifierKeys::shiftModifier);
+        const auto leftCmd = left.withFlags (juce::ModifierKeys::commandModifier);
+        const auto altDrag = left.withFlags (juce::ModifierKeys::altModifier);
+
+        // One vertical sweep starting at `from`; returns the value change.
+        auto sweep = [&] (juce::Point<float> from, juce::ModifierKeys mods, float dy)
+        {
+            s->setValue (0.5, juce::sendNotificationSync);
+            const double before = s->getValue();
+            s->mouseDown (ev (from, mods, from, 1, false));
+            for (int i = 1; i <= 4; ++i)
+                s->mouseDrag (ev (from.translated (0.0f, dy * (float) i / 4.0f), mods, from, 1, true));
+            const double after = s->getValue();
+            s->mouseUp (ev (from.translated (0.0f, dy), mods, from, 1, true));
+            return after - before;
+        };
+
+        // ---- RELATIVE, not absolute: the same movement from two very
+        //      different grab points must move the knob by the same amount. An
+        //      absolute (position-jump) control would snap to the cursor and
+        //      give two completely different answers.
+        const double coarseA = sweep ({ 10.0f, 60.0f }, left, -40.0f);
+        const double coarseB = sweep ({ 55.0f, 12.0f }, left, -40.0f);
+        std::printf ("  40 px sweep from (10,60): %+.4f    from (55,12): %+.4f\n", coarseA, coarseB);
+        CHECK (coarseA > 0.01 && std::abs (coarseA - coarseB) < 1.0e-6,
+               "drag is RELATIVE (delta-based): identical movement, identical change, "
+               "wherever the grab started");
+
+        // ---- fine-adjust modifier
+        const double fine = sweep ({ 30.0f, 40.0f }, leftShift, -40.0f);
+        std::printf ("  same sweep with Shift held      : %+.4f  (%.0f%% of coarse)\n",
+                     fine, 100.0 * fine / coarseA);
+        CHECK (fine > 0.0 && std::abs (fine / coarseA - (double) PathSlider::kFineFactor) < 0.02,
+               "Shift-drag is a fine adjust at the documented factor");
+
+        // ---- mouse wheel, coarse and fine
+        s->setValue (0.5, juce::sendNotificationSync);
+        const juce::MouseWheelDetails up { 0.0f, 1.0f, false, false, false };
+        s->mouseWheelMove (ev ({ 30.0f, 30.0f }, {}, { 30.0f, 30.0f }, 0, false), up);
+        const double wheelStep = s->getValue() - 0.5;
+        s->setValue (0.5, juce::sendNotificationSync);
+        s->mouseWheelMove (ev ({ 30.0f, 30.0f }, juce::ModifierKeys (juce::ModifierKeys::shiftModifier),
+                               { 30.0f, 30.0f }, 0, false), up);
+        const double wheelFine = s->getValue() - 0.5;
+        std::printf ("  one wheel notch: %+.4f   with Shift: %+.4f\n", wheelStep, wheelFine);
+        CHECK (std::abs (wheelStep - PathSlider::kWheelStep) < 1.0e-6, "a wheel notch is 2 % of range");
+        CHECK (std::abs (wheelFine - PathSlider::kWheelStep * PathSlider::kFineFactor) < 1.0e-6,
+               "Shift+wheel is the fine increment");
+
+        // ---- keyboard (accessibility): arrows, page, home
+        s->setValue (0.5, juce::sendNotificationSync);
+        s->keyPressed (juce::KeyPress (juce::KeyPress::upKey));
+        const double arrow = s->getValue() - 0.5;
+        s->setValue (0.5, juce::sendNotificationSync);
+        s->keyPressed (juce::KeyPress (juce::KeyPress::pageUpKey));
+        const double page = s->getValue() - 0.5;
+        s->keyPressed (juce::KeyPress (juce::KeyPress::homeKey));
+        const double home = s->getValue();
+        std::printf ("  arrow %+.4f   pageUp %+.4f   home -> %.4f\n", arrow, page, home);
+        CHECK (std::abs (arrow - 0.01) < 1.0e-6 && std::abs (page - 0.10) < 1.0e-6 && home == 0.0,
+               "arrow / page / home step the value from the keyboard");
+        CHECK (s->getWantsKeyboardFocus(), "the knob is keyboard-navigable (Tab reaches it)");
+
+        // ---- double-click-to-reset (round 2) still works, and the drag
+        //      accumulator is re-anchored so the next pixel does not snap back
+        s->setValue (0.9, juce::sendNotificationSync);
+        s->mouseDown (ev ({ 30.0f, 30.0f }, left, { 30.0f, 30.0f }, 2, false));
+        s->mouseDoubleClick (ev ({ 30.0f, 30.0f }, left, { 30.0f, 30.0f }, 2, false));
+        const double reset = s->getValue();
+        s->mouseDrag (ev ({ 30.0f, 29.0f }, left, { 30.0f, 30.0f }, 2, true));
+        const double afterNudge = s->getValue();
+        s->mouseUp (ev ({ 30.0f, 29.0f }, left, { 30.0f, 30.0f }, 2, true));
+        std::printf ("  double-click reset -> %.4f, then 1 px -> %.4f\n", reset, afterNudge);
+        CHECK (reset != 0.9 && std::abs (afterNudge - reset) < 0.02,
+               "double-click resets, and the next pixel of drag does not snap back");
+
+        // ---- alt-drag is STILL the macro assign gesture, not a value change
+        s->setValue (0.5, juce::sendNotificationSync);
+        s->mouseDown (ev ({ 30.0f, 30.0f }, altDrag, { 30.0f, 30.0f }, 1, false));
+        s->mouseDrag (ev ({ 30.0f, 10.0f }, altDrag, { 30.0f, 30.0f }, 1, true));
+        s->mouseUp (ev ({ 30.0f, 10.0f }, altDrag, { 30.0f, 30.0f }, 1, true));
+        std::printf ("  after a 20 px ALT-drag the value is %.4f\n", s->getValue());
+        CHECK (s->getValue() == 0.5, "alt-drag (macro assign, round 3) never moves the value");
+
+        // ---- typed value entry: Cmd/Ctrl-click, resolved on mouse UP so that
+        //      Ctrl-DRAG stays a fine adjust on Windows
+        s->setValue (0.5, juce::sendNotificationSync);
+        s->mouseDown (ev ({ 30.0f, 30.0f }, leftCmd, { 30.0f, 30.0f }, 1, false));
+        s->mouseDrag (ev ({ 30.0f, 20.0f }, leftCmd, { 30.0f, 30.0f }, 1, true));
+        s->mouseUp (ev ({ 30.0f, 20.0f }, leftCmd, { 30.0f, 30.0f }, 1, true));
+        CHECK (owner == nullptr || findOne<juce::TextEditor> (*owner) == nullptr,
+               "Ctrl/Cmd-DRAG is a fine adjust -- it does not open the value box");
+
+        s->mouseDown (ev ({ 30.0f, 30.0f }, leftCmd, { 30.0f, 30.0f }, 1, false));
+        s->mouseUp (ev ({ 30.0f, 30.0f }, leftCmd, { 30.0f, 30.0f }, 1, false));
+        auto* box = owner != nullptr ? findOne<juce::TextEditor> (*owner) : nullptr;
+        CHECK (box != nullptr && box->isVisible(), "Ctrl/Cmd-CLICK opens typed value entry");
+        if (box != nullptr)
+        {
+            std::printf ("  value box shows '%s' (%d x %d px)\n", box->getText().toRawUTF8(),
+                         box->getWidth(), box->getHeight());
+            CHECK (box->getText().isNotEmpty(), "the box opens pre-filled with the current value");
+            CHECK (box->getHeight() >= 18 && box->getWidth() >= juce::jmin (72, owner->getWidth()),
+                   "the box is big enough to read and to hit");
+            savePng (*ed, "ux-typed-entry-full.png");
+            auto region = ed->getLocalArea (owner, owner->getLocalBounds()).expanded (46, 34)
+                              .getIntersection (ed->getLocalBounds());
+            saveImage (ed->createComponentSnapshot (region, false, 3.0f), "ux-typed-entry.png");
+
+            // typing a real value commits it through the parameter router
+            box->setText ("100", false);
+            if (box->onReturnKey) box->onReturnKey();
+            std::printf ("  typed '100' -> knob at %.4f\n", s->getValue());
+            CHECK (s->getValue() > 0.9, "a typed value reaches the parameter");
+            auto* after = owner != nullptr ? findOne<juce::TextEditor> (*owner) : nullptr;
+            CHECK (after == nullptr || ! after->isVisible(), "the box closes on Return");
+        }
+
+        // ---- accessibility: the knob announces itself by name and by the
+        //      value the panel prints, not by the raw 0..1 number
+        s->setValue (0.5, juce::sendNotificationSync);
+        std::printf ("  accessible title '%s'\n", s->getTitle().toRawUTF8());
+        CHECK (s->getTitle().isNotEmpty(), "the knob carries an accessible name");
+        std::printf ("  screen reader would say: \"%s, %s\"\n",
+                     s->getTitle().toRawUTF8(), s->getTextFromValue (s->getValue()).toRawUTF8());
+        CHECK (s->getTextFromValue (s->getValue()).isNotEmpty()
+                   && s->getTextFromValue (s->getValue()) != juce::String (s->getValue()),
+               "the announced value is the panel's formatted readout, not the 0..1 number");
+
+        // ---- toggles are reachable and operable from the keyboard too
+        std::vector<PowerButton*> powers;
+        findAll<PowerButton> (*ed, powers);
+        int named = 0;
+        bool focusable = ! powers.empty();
+        for (auto* p : powers)
+        {
+            focusable &= p->getWantsKeyboardFocus();
+            if (p->getTitle().isNotEmpty()) ++named;
+        }
+        std::printf ("  power buttons: %d, keyboard-focusable, %d named\n", (int) powers.size(), named);
+        CHECK (focusable, "every power/enable button is keyboard-navigable");
+        CHECK (named == (int) powers.size(), "every power/enable button has an accessible name");
+        if (! powers.empty())
+        {
+            const bool was = powers[0]->getState();
+            powers[0]->keyPressed (juce::KeyPress (juce::KeyPress::spaceKey));
+            CHECK (powers[0]->getState() != was, "Space operates a power/enable button");
+            powers[0]->keyPressed (juce::KeyPress (juce::KeyPress::spaceKey));
+        }
+
+        //========================================================================
+        // The knob's right-click menu with its new first item, drawn through the
+        // real LookAndFeel -- menu windows are separate desktop windows and cannot
+        // be captured from a component snapshot (same technique as rounds 3 and 4).
+        //========================================================================
+        {
+            auto& lnf = juce::LookAndFeel::getDefaultLookAndFeel();
+            if (auto* pm = dynamic_cast<juce::PopupMenu::LookAndFeelMethods*> (&lnf))
+            {
+                const int mw = 470, mh = 300;
+                juce::Image img (juce::Image::ARGB, mw, mh, true);
+                {
+                juce::Graphics g (img);
+                pm->drawPopupMenuBackground (g, mw, mh);
+                int y = 10;
+                auto row = [&] (int h) { auto r = juce::Rectangle<int> (10, y, mw - 20, h); y += h; return r; };
+                pm->drawPopupMenuSectionHeader (g, row (26), "BARK");
+                pm->drawPopupMenuItem (g, row (30), false, true, true, false, false,
+                                       "Type value...", "Ctrl-click", nullptr, nullptr);
+                pm->drawPopupMenuItem (g, row (9), true, true, false, false, false, {}, {}, nullptr, nullptr);
+                pm->drawPopupMenuItem (g, row (30), false, true, false, false, false,
+                                       "Assign to Macro 1", {}, nullptr, nullptr);
+                pm->drawPopupMenuItem (g, row (30), false, true, false, false, false,
+                                       "Assign to Macro 2", {}, nullptr, nullptr);
+                pm->drawPopupMenuItem (g, row (9), true, true, false, false, false, {}, {}, nullptr, nullptr);
+                pm->drawPopupMenuSectionHeader (g, row (26), "MIDI");
+                pm->drawPopupMenuItem (g, row (30), false, true, false, false, false,
+                                       "MIDI Learn (move a CC after clicking)", {}, nullptr, nullptr);
+                }   // the Graphics must be destroyed before the image is read back
+                // composite the menu over a real editor shot -- a bare ARGB
+                // image would save as transparent (menu windows are separate
+                // desktop windows and cannot be snapshotted directly).
+                auto shot = ed->createComponentSnapshot (ed->getLocalBounds(), false, 1.0f);
+                auto kb = ed->getLocalArea (s, s->getLocalBounds());
+                { juce::Graphics gw (shot);
+                  gw.drawImageAt (img, juce::jlimit (0, ed->getWidth() - mw, kb.getCentreX()),
+                                       juce::jlimit (0, ed->getHeight() - mh, kb.getCentreY())); }
+                saveImage (shot, "ux-knob-menu.png");
+            }
+        }
+
+        delete ed;
+    }
+
+
     juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
     std::printf ("\nworst measured hero offset: (%d,%d) px\n", worstDx, worstDy);
     std::printf ("%s (%d failure%s)\n", failures == 0 ? "SELF-CHECK PASSED" : "SELF-CHECK FAILED",

@@ -91,6 +91,7 @@ public:
         scratch_.setSize (2, maxBlock);
         for (auto& f : voicingChain_) f.prepare (sampleRate);
         motionLfo_.setRate (0.15f, sampleRate);
+        for (auto& f : driveDc_) f.prepare (sampleRate);
         starveRamp_ = 1.0f / (float) juce::jmax (1.0, sampleRate * 0.005);   // 5 ms in/out
         starveLimit_ = (int) (sampleRate * 4.0);                             // 4 s hard stop
         bendSemis_.store (0.0f);
@@ -291,6 +292,23 @@ public:
 
         applyVoicing (L, R, numSamples);
 
+        // DSP standards pass — guide §2, distortion row: "add a small amount of
+        // DC-blocking after asymmetric clipping". The per-voice drive above is
+        // symmetric, but its INPUT is not: a sampled Rhodes tine has its own
+        // offset, and any offset pushed through a saturator comes out as a
+        // shifted operating point that then rides under every note. The blocker
+        // is always fed (so switching it in cannot step the signal) but only
+        // takes over while the drive stage is actually doing something.
+        {
+            const bool driveActive = (world_ == 0 && engineParams_[0].load() > 0.1f);
+            for (int i = 0; i < numSamples; ++i)
+            {
+                const float dl = driveDc_[0].process (L[i]);
+                const float dr = driveDc_[1].process (R[i]);
+                if (driveActive) { L[i] = dl; R[i] = dr; }
+            }
+        }
+
         for (int ch = 0; ch < juce::jmin (2, out.getNumChannels()); ++ch)
             out.addFrom (ch, 0, scratch_, ch, 0, numSamples);
     }
@@ -312,6 +330,13 @@ private:
         // FM brightness per-voice LP
         OnePoleLP lp[2];
         bool useLp = false;
+        // DSP standards pass: the Rhodes "Bark" drive is a per-voice tanh, i.e.
+        // a memoryless waveshaper — antiderivative-antialiased (guide §1.3).
+        // ADAA rather than oversampling here is a deliberate CPU trade: this
+        // runs on up to 64 concurrent voices, where a 2x oversampler each would
+        // roughly double the whole render cost. See src/engine/Antialias.h.
+        AdaaTanh driveShaper[2];
+        bool driveOn = false;
         // Round 5: starvation is a recoverable HOLD, not a death sentence.
         float starveGain = 1.0f;                       // 5 ms ramp down / up
         int starveSamples = 0;                         // consecutive starved frames
@@ -356,6 +381,9 @@ private:
         v->susLvl = juce::jlimit (0.0f, 1.0f, ampEnv_.sustain.load() / 100.0f);
         v->relMul = std::exp (-1.0f / ((float) sr_ * juce::jmax (1.0f, ampEnv_.releaseMs.load()) * 0.001f));
 
+        v->driveShaper[0].reset();
+        v->driveShaper[1].reset();
+        v->driveOn = false;
         v->useLp = (world_ == 2);                       // FM: velocity→brightness
         if (v->useLp)
         {
@@ -406,6 +434,18 @@ private:
 
         float drive = 0.0f;
         if (world_ == 0) drive = engineParams_[0] / 100.0f;      // Rhodes Bark drive
+        const bool driveOn = drive > 0.001f;
+        const float drivePre = 1.0f + drive * 4.0f;
+        const float driveNorm = 1.0f / std::sqrt (drivePre);
+        // The ADAA shaper carries one sample of state. If the drive was off for
+        // the previous block that state is stale, so start it from the
+        // consistent "previous sample was silence" point rather than from
+        // whatever the last driven block left behind.
+        if (driveOn != v.driveOn)
+        {
+            if (driveOn) { v.driveShaper[0].reset(); v.driveShaper[1].reset(); }
+            v.driveOn = driveOn;
+        }
 
         for (int i = 0; i < n; ++i)
         {
@@ -474,11 +514,10 @@ private:
             }
 
             if (v.useLp) { sl = v.lp[0].process (sl); srr = v.lp[1].process (srr); }
-            if (drive > 0.001f)
+            if (driveOn)
             {
-                const float pre = 1.0f + drive * 4.0f;
-                sl = std::tanh (sl * pre) / std::sqrt (pre);
-                srr = std::tanh (srr * pre) / std::sqrt (pre);
+                sl  = v.driveShaper[0].process (sl  * drivePre) * driveNorm;
+                srr = v.driveShaper[1].process (srr * drivePre) * driveNorm;
             }
 
             const float g = v.env * v.gain * v.starveGain;
@@ -577,6 +616,7 @@ private:
     float starveRamp_ = 1.0f / 240.0f;
     int starveLimit_ = 192000;
     juce::AudioBuffer<float> scratch_;
+    std::array<DcBlocker, 2> driveDc_;           // DSP standards pass (guide §2)
     std::array<ShelfFilter, 3> voicingChain_;
     OnePoleLP tiltLp_[2];
     Lfo motionLfo_;

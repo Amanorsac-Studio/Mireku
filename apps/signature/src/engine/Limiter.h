@@ -14,11 +14,36 @@
 //     PROGRAM-DEPENDENT release: two release limbs (fast 60 ms / slow 550 ms)
 //     whose minimum is used, so transients recover quickly while sustained
 //     material releases slowly and never pumps
-//   * a final ceiling clamp catches the sub-0.5 dB residue the one-pole leaves,
+//   * a final ceiling stage catches the sub-0.5 dB residue the one-pole leaves,
 //     so the output is a true brick wall
 // Everything is per-sample and allocation-free; prepare() sizes the buffers.
+//
+// DSP STANDARDS PASS (guide §1.3) — the final ceiling stage used to be a hard
+// `juce::jlimit`. A hard clip is a discontinuous derivative: the sharpest
+// nonlinearity in the whole plugin, on the master bus, downstream of
+// everything, generating harmonics that extend to infinity and therefore
+// aliasing at whatever level it engaged. It is now `jm::SoftCeiling`:
+//
+//   * identity below 90 % of the ceiling, so nothing that was passing through
+//     untouched before is coloured now — bit-exact below -1.2 dB of ceiling,
+//     which is what keeps the plugin nulling against its own bypassed path,
+//   * a C1-continuous tanh bend above that, so there is no derivative
+//     discontinuity to radiate: its harmonics fall away as 1/n^3 where a hard
+//     clip's fall away as 1/n^2,
+//   * asymptotic to the ceiling, so |out| < ceiling STRICTLY — this is still a
+//     brick wall, and the round-3 "no overshoot" assertions still hold.
+//
+// ADAA was tried here as well and REJECTED on measurement; the reasoning is in
+// Antialias.h next to `SoftCeiling`. Short version: averaging over a sample
+// period is a savage low-pass at the frequencies where aliasing matters, and
+// the variant that avoids that is not bounded — which a brick wall must be.
+//
+// Latency is unchanged: this is a memoryless shaper, and the 96-sample
+// lookahead that round 6 pinned down and reports via setLatencySamples() is
+// untouched.
 #pragma once
 #include <juce_audio_basics/juce_audio_basics.h>
+#include "Antialias.h"
 #include <cmath>
 #include <vector>
 
@@ -36,6 +61,7 @@ public:
         delay_.assign ((size_t) look_ * 2, 0.0f);                      // interleaved L/R
         win_.assign ((size_t) look_ + 1, 1.0f);
         dqIdx_.assign ((size_t) look_ + 1, 0);
+        clip_.set (juce::Decibels::decibelsToGain (kCeilingDb), 0.90f);
         reset();
 
         const double attackTau = 0.002 / 3.0;                          // lookahead / 3
@@ -49,6 +75,7 @@ public:
         std::fill (delay_.begin(), delay_.end(), 0.0f);
         std::fill (win_.begin(), win_.end(), 1.0f);
         std::fill (dqIdx_.begin(), dqIdx_.end(), 0);
+        
         dqHead_ = dqTail_ = dqCount_ = 0;
         t_ = 0;
         dPos_ = 0;
@@ -71,7 +98,6 @@ public:
         if (n == 0 || delay_.empty()) return;
         auto* L = buffer.getWritePointer (0);
         auto* R = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : L;
-        const float ceiling = juce::Decibels::decibelsToGain (kCeilingDb);
         float worst = 1.0f;
 
         for (int i = 0; i < n; ++i)
@@ -122,8 +148,8 @@ public:
 
             if (enabled_)
             {
-                L[i] = juce::jlimit (-ceiling, ceiling, dL * gEnv_);
-                R[i] = juce::jlimit (-ceiling, ceiling, dR * gEnv_);
+                L[i] = clip_.shape (dL * gEnv_);
+                R[i] = clip_.shape (dR * gEnv_);
             }
             else
             {
@@ -169,6 +195,8 @@ private:
     int dqHead_ = 0, dqTail_ = 0, dqCount_ = 0, dPos_ = 0;
     float gEnv_ = 1.0f, gFast_ = 1.0f, gSlow_ = 1.0f;
     float aAtk_ = 0.0f, aRelF_ = 0.0f, aRelS_ = 0.0f;
+    /// DSP standards pass: the brick wall, antiderivative-antialiased.
+    SoftCeiling clip_;
     bool enabled_ = true;
     std::atomic<float> gr_ { 0.0f };
 };

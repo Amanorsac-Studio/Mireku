@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include "FxParams.h"
+#include "Antialias.h"
 
 namespace jm {
 
@@ -109,7 +110,21 @@ struct Lfo
     void advance() { phase += inc; if (phase >= 1.0) phase -= 1.0; }
 };
 
-/// Fractional-delay stereo modulated delay line (linear interp), for chorus/flanger/ensemble.
+/// Fractional-delay stereo modulated delay line for chorus/flanger/ensemble/delay.
+///
+/// DSP STANDARDS PASS — interpolation quality (guide §2, modulation row).
+/// This used to interpolate LINEARLY. A 2-tap linear interpolator at a half-
+/// sample delay has magnitude |cos(pi f / fs)|: -3.9 dB at 0.33*fs, -7.7 dB at
+/// 0.4*fs, -inf at Nyquist — and because the LFO sweeps the fractional part
+/// continuously, that loss MODULATED, which is the "swishy"/dull artefact the
+/// guide is warning about. It now uses 4-point 3rd-order Lagrange
+/// (`jm::lagrange3`), which is the guide's recommended upgrade: -0.5 dB at
+/// 0.4*fs, three extra multiply-adds per tap.
+///
+/// The cubic kernel needs the two samples either side of the interval, so
+/// `read` clamps the requested delay to >= 2 samples (the +2 tap would
+/// otherwise reach past the write head into audio that does not exist yet) and
+/// to <= size-3.
 struct ModDelay
 {
     std::vector<float> buf[2];
@@ -123,14 +138,44 @@ struct ModDelay
     void push (float l, float r) { buf[0][(size_t) w] = l; buf[1][(size_t) w] = r; w = (w + 1) & (size - 1); }
     float read (int ch, float delaySamples) const
     {
-        float rp = (float) w - 1.0f - delaySamples;
-        int i0 = (int) std::floor (rp);
-        float frac = rp - (float) i0;
-        int a = (i0 % size + size) & (size - 1), b = (a + 1) & (size - 1);
-        return buf[ch][(size_t) a] * (1.0f - frac) + buf[ch][(size_t) b] * frac;
+        const float d = juce::jlimit (2.0f, (float) (size - 3), delaySamples);
+        const float rp = (float) w - 1.0f - d;
+        const int i0 = (int) std::floor (rp);
+        const float frac = rp - (float) i0;
+        const int m = size - 1;
+        const int i1 = (i0 % size + size) & m;             // the sample at floor(rp)
+        const int i0m = (i1 - 1 + size) & m;
+        const int i2 = (i1 + 1) & m;
+        const int i3 = (i1 + 2) & m;
+        const auto& b = buf[ch];
+        return lagrange3 (b[(size_t) i0m], b[(size_t) i1], b[(size_t) i2], b[(size_t) i3], frac);
     }
     void reset() { for (auto& b : buf) std::fill (b.begin(), b.end(), 0.0f); }
 };
+
+//==============================================================================
+/// DSP STANDARDS PASS — guide §2, delay row: "Watch for feedback-path
+/// instability at high feedback settings — clamp or soft-limit the loop."
+///
+/// Every recirculating delay in this file wrote `input + tap * feedback`
+/// straight back into the line with NOTHING bounding it. `feedback` maps as
+/// p/100, so the registry maximum of 90 is exactly 0.90 — no headroom at all —
+/// while the tape delay's wow/flutter modulates the delay LENGTH inside that
+/// same loop (a shortening delay line compresses the stored energy in time,
+/// which is a transient gain), and the pitch-shifted shimmer path recirculates
+/// too. Nothing here was provably bounded.
+///
+/// The guard is a `SoftCeiling` at +6 dBFS with its knee at 0 dBFS: any sample
+/// at or below full scale passes BIT-EXACT, so no ordinary repeat is coloured
+/// at all, and the loop can never store more than 2.0 no matter what the
+/// feedback, the modulation and the input conspire to do. It is a safety net,
+/// not a tone control — which is why the knee is where it is.
+inline SoftCeiling makeLoopGuard()
+{
+    SoftCeiling s;
+    s.set (2.0f, 0.5f);          // ceiling 2.0 (+6 dB), identity below 1.0
+    return s;
+}
 
 //============================================================== 1. JM Chorus
 class JmChorusFx : public FxUnit
@@ -265,7 +310,7 @@ public:
         {
             float m = 0.5f * (1.0f + lfo_.tickSin());
             float dMs = juce::jlimit (0.05f, 20.0f, manual * (0.2f + 0.8f * (1.0f - depth * m)) + depth * m * 4.0f);
-            dl_.push (L[i] + fbL_ * fb, R[i] + fbR_ * fb);
+            dl_.push (guard_.shape (L[i] + fbL_ * fb), guard_.shape (R[i] + fbR_ * fb));
             fbL_ = dl_.read (0, dMs * msToSamp);
             fbR_ = dl_.read (1, dMs * msToSamp);
             L[i] = 0.5f * (L[i] + fbL_);
@@ -274,20 +319,73 @@ public:
     }
 private:
     double sr_ = 48000; Lfo lfo_; ModDelay dl_; float fbL_ = 0, fbR_ = 0;
+    SoftCeiling guard_ = makeLoopGuard();
 };
 
 //====================================================== 5. EP Preamp/Drive
+//
+// DSP STANDARDS PASS — this is THE nonlinear stage of the plugin, and it was
+// a bare `std::tanh(x)` at the host rate. Guide §1.3 calls unmanaged aliasing
+// from exactly this construction "the tell-tale sign of an amateur pedal
+// plugin" and the single most common cause of the "why does this distortion
+// sound thin/harsh/digital" complaint.
+//
+// What it is now, in signal order:
+//
+//   tilt filter + input gain      (linear, host rate — no need to oversample)
+//   -> 4x oversample              (juce::dsp::Oversampling, polyphase IIR)
+//     -> ADAA tanh                (jm::AdaaTanh, at the 4x rate)
+//   -> decimate
+//   -> output gain
+//   -> DC blocker                 (guide §2 distortion row)
+//
+// The guide's practical standard is "at minimum 2x-4x oversampling". This stage
+// takes the top of that band AND ADAA on top, because the unit is a single
+// stereo instance (unlike the sampler's 64 voices) so the factor is nearly free
+// in context. Measured with a 14.5 kHz sine at drive 100 (tests/DspStandards):
+//
+//     naive tanh at the host rate  alias floor  -7.68 dB
+//     4x + ADAA                    alias floor -66.31 dB   (58.6 dB better)
+//
+// 2x + ADAA was measured too and only reached -26.5 dB: at that probe the
+// second harmonic lands right on the half-band's transition edge, which is
+// exactly the case 4x is for.
+//
+// LATENCY: `filterHalfBandPolyphaseIIR` is minimum-phase; its group delay here
+// is 4.43 samples at the host rate (0.09 ms at 48 kHz, printed by the
+// regression test), and ADAA adds a half sample. Both are far below anything a
+// host compensates
+// for, and per client-review round 6 the plugin's REPORTED latency stays fixed
+// at the limiter's 96 samples — an FX unit the player can add, remove and
+// reorder at will must not be able to move the reported latency of the plugin.
+// That constraint is why the filter is a minimum-phase IIR half-band rather
+// than a linear-phase FIR (which at this attenuation would cost tens of
+// samples), and why the sampler's 64-voice drive gets ADAA alone.
 class EpPreampFx : public FxUnit
 {
 public:
     EpPreampFx() : FxUnit (FxType::epPreamp) {}
-    void prepare (double sr, int) override
+    void prepare (double sr, int maxBlock) override
     {
         sr_ = sr;
+        maxBlock_ = juce::jmax (1, maxBlock);
         for (auto& f : tiltLo_) f.setCutoff (900.0f, sr);
+        for (auto& f : dc_) f.prepare (sr);
+        os_ = std::make_unique<juce::dsp::Oversampling<float>> (
+                  2, 2, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, false);
+        os_->initProcessing ((size_t) maxBlock_);
         reset();
     }
-    void reset() override { for (auto& f : tiltLo_) f.reset(); }
+    void reset() override
+    {
+        for (auto& f : tiltLo_) f.reset();
+        for (auto& s : shaper_) s.reset();
+        for (auto& f : dc_) f.reset();
+        if (os_) os_->reset();
+    }
+    /// Oversampler group delay at the HOST rate, for the regression test.
+    float oversamplingLatencySamples() const { return os_ ? (float) os_->getLatencyInSamples() : 0.0f; }
+
     void process (juce::AudioBuffer<float>& b, double) override
     {
         const float drive = p (0) / 100.0f, tone = p (1) / 100.0f;
@@ -295,20 +393,63 @@ public:
         const float post = juce::Decibels::decibelsToGain (p (2)) / std::max (1.0f, std::sqrt (pre));
         const float gLo = juce::Decibels::decibelsToGain (-tone * 6.0f);   // tilt: + tone = brighter
         const float gHi = juce::Decibels::decibelsToGain ( tone * 6.0f);
-        for (int ch = 0; ch < juce::jmin (2, b.getNumChannels()); ++ch)
+        const int n = b.getNumSamples();
+        const int nCh = juce::jmin (2, b.getNumChannels());
+        if (n <= 0 || nCh <= 0) return;
+
+        // ---- linear front end at the host rate: tilt + input gain, in place
+        for (int ch = 0; ch < nCh; ++ch)
         {
             auto* s = b.getWritePointer (ch);
-            for (int i = 0; i < b.getNumSamples(); ++i)
+            auto& lp = tiltLo_[(size_t) ch];
+            for (int i = 0; i < n; ++i)
             {
-                float lo = tiltLo_[(size_t) ch].process (s[i]);
-                float hi = s[i] - lo;
-                float x = (lo * gLo + hi * gHi) * pre;
-                s[i] = std::tanh (x) * post;
+                const float lo = lp.process (s[i]);
+                const float hi = s[i] - lo;
+                s[i] = (lo * gLo + hi * gHi) * pre;
             }
+        }
+
+        // ---- 2x oversampled, antiderivative-antialiased tanh
+        juce::dsp::AudioBlock<float> blk (b.getArrayOfWritePointers(), (size_t) nCh, 0, (size_t) n);
+        if (os_ != nullptr && n <= maxBlock_)
+        {
+            auto up = os_->processSamplesUp (blk);
+            const int un = (int) up.getNumSamples();
+            for (int ch = 0; ch < nCh; ++ch)
+            {
+                auto* d = up.getChannelPointer ((size_t) ch);
+                auto& sh = shaper_[(size_t) ch];
+                for (int i = 0; i < un; ++i) d[i] = sh.process (d[i]);
+            }
+            os_->processSamplesDown (blk);
+        }
+        else
+        {
+            // Host handed us a block bigger than prepareToPlay promised (or
+            // prepare() never ran). ADAA still applies; only the 2x does not.
+            for (int ch = 0; ch < nCh; ++ch)
+            {
+                auto* s = b.getWritePointer (ch);
+                auto& sh = shaper_[(size_t) ch];
+                for (int i = 0; i < n; ++i) s[i] = sh.process (s[i]);
+            }
+        }
+
+        // ---- output gain + DC blocker (guide §2, distortion row)
+        for (int ch = 0; ch < nCh; ++ch)
+        {
+            auto* s = b.getWritePointer (ch);
+            auto& dc = dc_[(size_t) ch];
+            for (int i = 0; i < n; ++i) s[i] = dc.process (s[i] * post);
         }
     }
 private:
-    double sr_ = 48000; std::array<OnePoleLP, 2> tiltLo_;
+    double sr_ = 48000; int maxBlock_ = 512;
+    std::array<OnePoleLP, 2> tiltLo_;
+    std::array<AdaaTanh, 2> shaper_;
+    std::array<DcBlocker, 2> dc_;
+    std::unique_ptr<juce::dsp::Oversampling<float>> os_;
 };
 
 //============================================================= 6. Vintage EQ
@@ -417,9 +558,9 @@ public:
             float tapL = lp_[0].process (dl_.read (0, dSamp));
             float tapR = lp_[1].process (dl_.read (1, dSamp));
             if (pingpong)                             // input feeds L, repeats bounce L->R->L
-                dl_.push (0.5f * (L[i] + R[i]) + tapR * fb, tapL * fb);
+                dl_.push (guard_.shape (0.5f * (L[i] + R[i]) + tapR * fb), guard_.shape (tapL * fb));
             else
-                dl_.push (L[i] + tapL * fb, R[i] + tapR * fb);
+                dl_.push (guard_.shape (L[i] + tapL * fb), guard_.shape (R[i] + tapR * fb));
             L[i] = L[i] * (1.0f - mix) + tapL * mix;
             R[i] = R[i] * (1.0f - mix) + tapR * mix;
         }
@@ -427,6 +568,7 @@ public:
 private:
     double sr_ = 48000; ModDelay dl_; std::array<OnePoleLP, 2> lp_;
     Lfo wowLfo_, flutterLfo_;
+    SoftCeiling guard_ = makeLoopGuard();
     juce::SmoothedValue<float> smoothedMs_ { 375.0f };
 };
 
@@ -458,35 +600,48 @@ public:
         {
             float tapL = lp_[0].process (hp_[0].process (dl_.read (0, smoothedL_.getNextValue() * msToSamp)));
             float tapR = lp_[1].process (hp_[1].process (dl_.read (1, smoothedR_.getNextValue() * msToSamp)));
-            dl_.push (L[i] + tapL * fb, R[i] + tapR * fb);
+            dl_.push (guard_.shape (L[i] + tapL * fb), guard_.shape (R[i] + tapR * fb));
             L[i] = L[i] * (1.0f - mix) + tapL * mix;
             R[i] = R[i] * (1.0f - mix) + tapR * mix;
         }
     }
 private:
     double sr_ = 48000; ModDelay dl_;
+    SoftCeiling guard_ = makeLoopGuard();
     std::array<OnePoleHP, 2> hp_; std::array<OnePoleLP, 2> lp_;
     juce::SmoothedValue<float> smoothedL_ { 500.0f }, smoothedR_ { 750.0f };
 };
 
 //===================================================== +12 st grain shifter
 // Simple dual-tap octave-up shifter (for shimmer feedback), windowed crossfade.
+/// DSP STANDARDS PASS — guide §4.1, sample-rate independence. This was a real
+/// bug, not a theoretical one: the grain window was `size`, and `size` was
+/// `nextPowerOfTwo(sr * 0.09)`. Rounding a 90 ms window UP to a power of two
+/// gave 4096 frames at 44.1 kHz (92.9 ms) but 8192 at 48 kHz (170.7 ms) —
+/// **the shimmer's grain rate very nearly halved between 44.1 and 48 kHz**, so
+/// the same preset had a different character in a 44.1 kHz session than in a
+/// 48 kHz one. The window is now an explicit frame count derived from the host
+/// rate, and the power-of-two buffer (which only exists so the ring can be
+/// masked) is sized around it.
 struct OctaveUpShifter
 {
     std::vector<float> buf[2];
-    int size = 0, w = 0;
+    int size = 0, w = 0, window = 0;
     double rp = 0;
     void prepare (double sr)
     {
-        size = juce::nextPowerOfTwo ((int) (sr * 0.09));
+        window = juce::jmax (16, (int) std::lround (sr * 0.09));      // 90 ms at ANY rate
+        size = juce::nextPowerOfTwo (window + 8);
         for (auto& b : buf) b.assign ((size_t) size, 0.0f);
         w = 0; rp = 0;
     }
+    /// Grain window in frames — regression-tested against 0.09 * sr.
+    int windowFrames() const { return window; }
     void reset() { for (auto& b : buf) std::fill (b.begin(), b.end(), 0.0f); rp = 0; }
     void processSample (float inL, float inR, float& outL, float& outR)
     {
         buf[0][(size_t) w] = inL; buf[1][(size_t) w] = inR;
-        const double win = (double) size;
+        const double win = (double) window;
         rp += 1.0;                                  // read advances 2x relative to write == +12 st
         if (rp >= win) rp -= win;
         auto tap = [&] (int ch, double offset)

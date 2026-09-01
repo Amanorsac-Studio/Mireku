@@ -219,6 +219,28 @@ target_link_libraries(JMSignatureSnapshot PRIVATE
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags)
 
+# ------------------------------------- Validation suite (standards §4.1 / §5)
+# The null test, the sample-rate/buffer-size matrix and the audio regression
+# harness. They exercise the PROCESSOR (not just the engine objects), so this
+# target compiles the plugin's shared code exactly as JMSignatureSnapshot does.
+juce_add_console_app(JMSignatureValidation PRODUCT_NAME "JMSignatureValidation")
+target_sources(JMSignatureValidation PRIVATE
+    tests/ValidationTests.cpp
+    src/plugin/PluginProcessor.cpp
+    src/plugin/PluginEditor.cpp)
+target_include_directories(JMSignatureValidation PRIVATE src "${JMI_FORMAT_INCLUDE}"
+    "${CMAKE_CURRENT_BINARY_DIR}/juce_binarydata_JMAssets/JuceLibraryCode")
+target_compile_definitions(JMSignatureValidation PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JM_REF_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/refs")
+target_link_libraries(JMSignatureValidation PRIVATE
+    JMAssets
+    juce::juce_audio_utils
+    juce::juce_dsp
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags)
+
 # ------------------------------------------- Device inventory tool (R6/1)
 # Deliberately NOT a CTest: its output depends on what hardware is plugged in.
 # Run it and send the output when a device cannot be found in the app.
@@ -247,3 +269,14 @@ add_test(NAME UiSelfCheck COMMAND JMSignatureSnapshot)
 # slots came up empty and the routing/audio assertions failed for no good reason.
 set_tests_properties(UiSelfCheck PROPERTIES
     ENVIRONMENT "JM_LIBRARY_DIR=${CMAKE_CURRENT_SOURCE_DIR}/../../testdata")
+
+# --------------------------------------------------- validation standards
+# Three separate CTest entries out of one binary so a failure names itself in
+# the CI log. NullTest and RateBufferMatrix instantiate the processor, so they
+# get the same fixed library folder the UI self-check uses.
+add_test(NAME NullTest          COMMAND JMSignatureValidation --null)
+add_test(NAME RateBufferMatrix  COMMAND JMSignatureValidation --matrix)
+add_test(NAME AudioRegression   COMMAND JMSignatureValidation --regression)
+set_tests_properties(NullTest RateBufferMatrix PROPERTIES
+    ENVIRONMENT "JM_LIBRARY_DIR=${CMAKE_CURRENT_SOURCE_DIR}/../../testdata")
+set_tests_properties(RateBufferMatrix PROPERTIES TIMEOUT 900)

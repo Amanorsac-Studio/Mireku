@@ -72,7 +72,14 @@ jobs:
         run: cmake --build apps/signature/build --config Release --parallel
       - name: Unit tests
         run: ctest --test-dir apps/signature/build -C Release --output-on-failure
-      - name: pluginval (VST3, strictness 8)
+      # Validation standards pass: the guide calls pluginval "the closest thing
+      # the industry has to a certification suite" and asks for the HIGHEST
+      # strictness (10) on every release build, not the 5-8 most projects stop
+      # at. Level 10 adds the long tests -- parameter fuzzing, background-thread
+      # state restoration, repeated open/close and the non-releasing processing
+      # sweep -- so the 30 s default per-test timeout is raised, and the run is
+      # repeated in a randomised order to catch order-dependent state.
+      - name: pluginval (VST3, strictness 10)
         shell: bash
         run: |
           set -e
@@ -87,7 +94,8 @@ jobs:
             PV="./pluginval.app/Contents/MacOS/pluginval"
             VST3=$(find apps/signature/build -name "*.vst3" -type d | head -n1)
           fi
-          "$PV" --strictness-level 8 --validate-in-process --skip-gui-tests --validate "$VST3"
+          "$PV" --strictness-level 10 --validate-in-process --skip-gui-tests \
+                --timeout-ms 600000 --repeat 2 --randomise --validate "$VST3"
       - name: Zip plugin artifacts
         shell: bash
         run: |

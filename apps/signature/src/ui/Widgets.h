@@ -517,17 +517,84 @@ inline juce::String formatParamValue (const ParamSpec& spec, float value)
 
 //==============================================================================
 // A slider that lets us intercept learn clicks and right-click menus.
+//
+//========================================= VALIDATION + UX STANDARDS PASS (§6)
+// The guide's knob contract, in full:
+//
+//   "default to *relative* (delta-based) mouse-drag control, not absolute
+//    position-jump, so users can make fine adjustments; support fine-adjust
+//    modifiers (Shift/Ctrl+drag) and mouse-wheel/scroll increments; always
+//    support double-click-to-reset-to-default and Ctrl/Cmd+click or right-click
+//    for manual value entry."
+//
+// Round 2 gave us double-click-to-reset. The rest lands here, and the drag is
+// re-implemented rather than configured because of the fine-adjust modifier:
+// juce::Slider derives every dragged value from `valueOnMouseDown` plus the
+// TOTAL pixel offset divided by a fixed sensitivity, so changing the
+// sensitivity part-way through a drag rescales the whole accumulated offset and
+// the knob JUMPS the moment Shift goes down. Accumulating the per-event delta
+// ourselves is what makes "grab, sweep, hold Shift, trim, let go" behave the
+// way it does on hardware — and it is relative by construction: nothing here
+// ever reads the absolute cursor position, only the movement since the last
+// event, so the knob can never snap to where the pointer happens to be.
+//
+// GESTURE MAP (verified against every gesture already bound to these controls):
+//   plain drag              value, relative
+//   Shift / Ctrl + drag     value, x0.15 speed        (new)
+//   wheel                   +/- 2 % of range          (new; JUCE's default is 15 %)
+//   Shift / Ctrl + wheel    +/- 0.3 % of range        (new)
+//   double-click            back to the default        (round 2, untouched)
+//   Cmd/Ctrl + click        typed value entry         (new — see ParamKnob)
+//   right-click             MIDI-learn / macro-assign menu (round 3/4, untouched;
+//                           the typed-entry item is added to the TOP of it)
+//   Alt + drag              drag-to-assign to a macro  (round 3, untouched)
+//   arrow keys / PgUp/PgDn  1 % / 10 % steps, Shift = 0.2 %  (new, accessibility)
+//   Home / End              minimum / maximum          (new, accessibility)
+//   Return                  typed value entry          (new, accessibility)
+//
+// Why Cmd/Ctrl-click and not right-click for typed entry: right-click is
+// already the MIDI-learn + macro-assign menu on every parameter in the plugin
+// (round 3, item F), and that menu is the discoverable route to two features
+// the product sells. It is not ours to take. The guide offers Ctrl/Cmd-click as
+// the alternative, so that is the direct route — and "Type value..." is ALSO
+// the first item of the right-click menu, so the feature is discoverable
+// without knowing the shortcut. `isCommandDown()` is Cmd on macOS and Ctrl on
+// Windows, and on macOS Ctrl-click stays the context menu because
+// `isPopupMenu()` is tested first.
+//
+// The FX drag-to-reorder gesture (round 7) cannot collide: it is armed only
+// from an FX unit's header strip, and a knob is a child component that consumes
+// its own mouse events before they reach the unit.
 struct PathSlider : juce::Slider
 {
     std::function<bool (const juce::MouseEvent&)> onSpecialMouseDown;
     std::function<void()> onStartMacroDrag;          // R3(F): alt/option-drag route
+    std::function<void()> onTypedEntry;              // §6: cmd/ctrl-click, Return
+
+    /// Pixels of travel for the whole range at normal speed, and the fine
+    /// multiplier. 200 px matches the drag feel round 2 shipped with.
+    static constexpr double kPixelsFullRange = 200.0;
+    static constexpr double kFineFactor      = 0.15;
+    static constexpr double kWheelStep       = 0.02;   // 2 % of range per notch
+
+    static bool fineHeld (const juce::ModifierKeys& m) { return m.isShiftDown() || m.isCtrlDown(); }
+
     void mouseDown (const juce::MouseEvent& e) override
     {
         armDrag_ = e.mods.isAltDown() && onStartMacroDrag != nullptr;
         if (armDrag_) return;                        // never let alt-drag move the value
         if (onSpecialMouseDown && onSpecialMouseDown (e)) return;
-        juce::Slider::mouseDown (e);
+
+        // Resolved on mouseUp, so Ctrl+DRAG is still a fine drag on Windows.
+        armType_ = onTypedEntry != nullptr && e.mods.isLeftButtonDown()
+                   && e.mods.isCommandDown() && ! e.mods.isPopupMenu();
+
+        if (! isRotary() || ! e.mods.isLeftButtonDown()) { juce::Slider::mouseDown (e); return; }
+        dragging_ = true;
+        lastPos_ = e.position;
+        acc_ = getValue();
     }
+
     void mouseDrag (const juce::MouseEvent& e) override
     {
         if (armDrag_)
@@ -535,15 +602,97 @@ struct PathSlider : juce::Slider
             if (e.getDistanceFromDragStart() > 3) { armDrag_ = false; onStartMacroDrag(); }
             return;
         }
-        juce::Slider::mouseDrag (e);
+        if (e.getDistanceFromDragStart() > 3) armType_ = false;
+        if (! dragging_) { juce::Slider::mouseDrag (e); return; }
+        if (! isEnabled()) return;
+
+        // relative: only the movement SINCE THE LAST EVENT is ever used
+        const double px = (e.position.x - lastPos_.x) + (lastPos_.y - e.position.y);
+        lastPos_ = e.position;
+        const double span = getMaximum() - getMinimum();
+        const double perPixel = span / kPixelsFullRange * (fineHeld (e.mods) ? kFineFactor : 1.0);
+        acc_ = juce::jlimit (getMinimum(), getMaximum(), acc_ + px * perPixel);
+        setValue (acc_, juce::sendNotificationSync);
     }
+
     void mouseUp (const juce::MouseEvent& e) override
     {
         if (armDrag_) { armDrag_ = false; return; }
-        juce::Slider::mouseUp (e);
+        const bool wasDragging = dragging_;
+        dragging_ = false;
+        if (armType_ && ! e.mouseWasDraggedSinceMouseDown())
+        {
+            armType_ = false;
+            onTypedEntry();
+            return;
+        }
+        armType_ = false;
+        if (! wasDragging) juce::Slider::mouseUp (e);
     }
+
+    /// The second click of a double-click arrives as a mouseDown FIRST, so the
+    /// drag accumulator has to be re-anchored after the reset or the next pixel
+    /// of movement would drag the knob back to where it was.
+    void mouseDoubleClick (const juce::MouseEvent& e) override
+    {
+        juce::Slider::mouseDoubleClick (e);
+        acc_ = getValue();
+    }
+
+    void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
+    {
+        // JUCE's own wheel handling moves 15 % of the range per notch, which is
+        // a shove rather than an increment. 2 % (0.3 % fine) is the increment a
+        // hardware encoder gives and what every plugin in this category uses.
+        if (! isEnabled()) { juce::Slider::mouseWheelMove (e, w); return; }
+        const float d = std::abs (w.deltaY) >= std::abs (w.deltaX) ? w.deltaY : -w.deltaX;
+        if (d == 0.0f) return;
+        const double span = getMaximum() - getMinimum();
+        const double step = span * kWheelStep * (fineHeld (e.mods) ? kFineFactor : 1.0);
+        const double dir = (d > 0.0f ? 1.0 : -1.0) * (w.isReversed ? -1.0 : 1.0);
+        setValue (juce::jlimit (getMinimum(), getMaximum(), getValue() + dir * step),
+                  juce::sendNotificationSync);
+        acc_ = getValue();
+    }
+
+    /// §6 accessibility: a knob that can be focused has to be operable from the
+    /// keyboard, and a screen-reader user needs an exact route to a value.
+    bool keyPressed (const juce::KeyPress& k) override
+    {
+        if (! isEnabled()) return false;
+        const double span = getMaximum() - getMinimum();
+        const bool page = k.isKeyCode (juce::KeyPress::pageUpKey) || k.isKeyCode (juce::KeyPress::pageDownKey);
+        const double step = page ? span * 0.10
+                                 : span * (k.getModifiers().isShiftDown() ? 0.002 : 0.01);
+        double dir = 0.0;
+        if (k.isKeyCode (juce::KeyPress::upKey) || k.isKeyCode (juce::KeyPress::rightKey)
+            || k.isKeyCode (juce::KeyPress::pageUpKey))
+            dir = 1.0;
+        else if (k.isKeyCode (juce::KeyPress::downKey) || k.isKeyCode (juce::KeyPress::leftKey)
+                 || k.isKeyCode (juce::KeyPress::pageDownKey))
+            dir = -1.0;
+        else if (k.isKeyCode (juce::KeyPress::homeKey))
+        { setValue (getMinimum(), juce::sendNotificationSync); return true; }
+        else if (k.isKeyCode (juce::KeyPress::endKey))
+        { setValue (getMaximum(), juce::sendNotificationSync); return true; }
+        else if (k.isKeyCode (juce::KeyPress::returnKey) && onTypedEntry != nullptr)
+        { onTypedEntry(); return true; }
+        else
+            return juce::Slider::keyPressed (k);
+
+        setValue (juce::jlimit (getMinimum(), getMaximum(), getValue() + dir * step),
+                  juce::sendNotificationSync);
+        acc_ = getValue();
+        return true;
+    }
+
+    void focusGained (FocusChangeType t) override { juce::Slider::focusGained (t); repaint(); }
+    void focusLost (FocusChangeType t) override   { juce::Slider::focusLost (t); repaint(); }
+
 private:
-    bool armDrag_ = false;
+    bool armDrag_ = false, armType_ = false, dragging_ = false;
+    juce::Point<float> lastPos_;
+    double acc_ = 0.0;
 };
 
 //==============================================================================
@@ -584,6 +733,34 @@ public:
             return false;
         };
         slider_.onStartMacroDrag = [this] { startMacroDrag(); };
+        slider_.onTypedEntry = [this] { showValueEntry(); };
+
+        //=================================== VALIDATION + UX STANDARDS PASS (§6)
+        // "JUCE's accessibility APIs expose plugin UI to screen readers on both
+        // AU and VST3 hosts that support it." They do — but only for components
+        // that are focusable and carry a title, and juce::Slider ships with
+        // setWantsKeyboardFocus(false). Every knob in the plugin was therefore
+        // invisible to the keyboard AND announced as an unnamed "0.42" slider.
+        // Three lines fix both:
+        //   * the slider takes focus, so Tab reaches it and PathSlider's arrow
+        //     keys drive it (and JmLookAndFeel already draws a focus ring);
+        //   * it carries the control's own name;
+        //   * it reports the value the way the panel prints it ("440 Hz", not
+        //     the 0..1 normalised number the slider actually holds).
+        // The two Labels are removed from the accessibility tree because they
+        // duplicate what the slider now says.
+        slider_.setWantsKeyboardFocus (true);
+        // Some knobs carry no visible caption (the master column and the slot
+        // volume/pan controls are labelled by the panel around them), so the
+        // accessible name falls back to the parameter router's display name --
+        // an unnamed slider is exactly what a screen reader cannot use.
+        const auto a11yName = label.isNotEmpty() ? label : proc_.paramDisplayName (path_);
+        slider_.setTitle (a11yName);
+        slider_.setDescription (a11yName);
+        slider_.textFromValueFunction = [this] (double) { return valueText_; };
+        setTitle (a11yName);
+        name_.setAccessible (false);
+        value_.setAccessible (false);
         addAndMakeVisible (slider_);
         addAndMakeVisible (name_);
         addAndMakeVisible (value_);
@@ -752,21 +929,114 @@ private:
         if (path_.startsWith ("host."))
         {
             if (auto* p = proc_.apvts.getParameter (path_.fromFirstOccurrenceOf ("host.", false, false)))
-                value_.setText (p->getCurrentValueAsText(), juce::dontSendNotification);
-            return;
+                valueText_ = hostValueText (p);
         }
-        if (spec_.id != nullptr)
+        else if (spec_.id != nullptr)
+            valueText_ = formatParamValue (spec_, denormalised ((float) slider_.getValue()));
+        else
+            valueText_ = juce::String ((int) std::lround (slider_.getValue() * 100.0));
+        value_.setText (valueText_, juce::dontSendNotification);
+    }
+
+    /// A host parameter's readout. juce::AudioParameterFloat derives its
+    /// decimal places from its NormalisableRange interval, and ours are
+    /// continuous (interval 0), so the stock text is '-9.0000000' -- unreadable
+    /// on a knob and unreadable to a screen reader. Continuous parameters are
+    /// printed to 2 dp; everything else (int, bool, choice) keeps its own text.
+    static juce::String hostValueText (juce::AudioProcessorParameter* p)
+    {
+        if (auto* f = dynamic_cast<juce::AudioParameterFloat*> (p))
+            return juce::String (f->get(), 2);
+        return p->getCurrentValueAsText();
+    }
+
+    /// The parameter's real-world value for a 0..1 slider position.
+    float denormalised (float nv) const
+    {
+        if (spec_.logTaper && spec_.min > 0.0f)
+            return spec_.min * std::pow (spec_.max / spec_.min, nv);
+        return spec_.min + (spec_.max - spec_.min) * nv;
+    }
+
+    //====================================== VALIDATION + UX STANDARDS PASS (§6)
+    // Typed value entry. A small chrome well over the value readout — the
+    // LookAndFeel already draws TextEditors in the ux::Hardware register, so
+    // this needs no new visual language. Reached by Cmd/Ctrl-click, by Return
+    // on a focused knob, and by the first item of the right-click menu.
+    void showValueEntry()
+    {
+        if (entry_ == nullptr)
         {
-            const float nv = (float) slider_.getValue();
-            float v;
-            if (spec_.logTaper && spec_.min > 0.0f)
-                v = spec_.min * std::pow (spec_.max / spec_.min, nv);
-            else
-                v = spec_.min + (spec_.max - spec_.min) * nv;
-            value_.setText (formatParamValue (spec_, v), juce::dontSendNotification);
+            entry_ = std::make_unique<juce::TextEditor>();
+            entry_->setFont (Theme::value (13.0f));
+            entry_->setJustification (juce::Justification::centred);
+            entry_->setColour (juce::TextEditor::textColourId, Theme::goldHi);
+            entry_->setColour (juce::TextEditor::highlightColourId, Theme::goldDark);
+            entry_->setSelectAllWhenFocused (true);
+            entry_->setTitle (name_.getText() + " value");
+            entry_->onReturnKey = [this] { commitValueEntry(); };
+            entry_->onEscapeKey = [this] { hideValueEntry(); };
+            entry_->onFocusLost = [this] { hideValueEntry(); };
+            addChildComponent (*entry_);
+        }
+        auto r = value_.isVisible() && ! value_.getBounds().isEmpty()
+                     ? value_.getBounds()
+                     : juce::Rectangle<int> (getWidth(), 18).withCentre (getLocalBounds().getCentre());
+        entry_->setBounds (r.withSizeKeepingCentre (juce::jmin (getWidth(), juce::jmax (72, r.getWidth())),
+                                                    juce::jmax (20, r.getHeight())));
+        entry_->setText (editableValueText(), false);
+        entry_->setVisible (true);
+        entry_->toFront (true);
+        entry_->selectAll();
+        entry_->grabKeyboardFocus();
+    }
+
+    void hideValueEntry()
+    {
+        if (entry_ == nullptr || ! entry_->isVisible()) return;
+        entry_->setVisible (false);
+        slider_.grabKeyboardFocus();
+    }
+
+    /// The number without its unit — a user typing "440" should not have to
+    /// delete " Hz" first, and "440 Hz" is accepted too (getFloatValue stops at
+    /// the first non-numeric character).
+    juce::String editableValueText() const
+    {
+        if (path_.startsWith ("host."))
+            return valueText_.upToFirstOccurrenceOf (" ", false, false);
+        if (spec_.id == nullptr)
+            return valueText_;
+        const float v = denormalised ((float) slider_.getValue());
+        const int decimals = (spec_.max - spec_.min) > 20.0f ? 0 : 2;
+        return juce::String (v, decimals);
+    }
+
+    void commitValueEntry()
+    {
+        const auto text = entry_->getText().trim();
+        hideValueEntry();
+        if (text.isEmpty()) return;
+
+        if (path_.startsWith ("host."))
+        {
+            if (auto* p = proc_.apvts.getParameter (path_.fromFirstOccurrenceOf ("host.", false, false)))
+                proc_.setParamNormalized (path_, juce::jlimit (0.0f, 1.0f, p->getValueForText (text)));
+        }
+        else if (spec_.id != nullptr)
+        {
+            const float v = juce::jlimit (spec_.min, spec_.max, text.getFloatValue());
+            float n = 0.0f;
+            if (spec_.logTaper && spec_.min > 0.0f && spec_.max > spec_.min && v > 0.0f)
+                n = std::log (v / spec_.min) / std::log (spec_.max / spec_.min);
+            else if (spec_.max > spec_.min)
+                n = (v - spec_.min) / (spec_.max - spec_.min);
+            proc_.setParamNormalized (path_, juce::jlimit (0.0f, 1.0f, n));
         }
         else
-            value_.setText (juce::String ((int) std::lround (slider_.getValue() * 100.0)), juce::dontSendNotification);
+            proc_.setParamNormalized (path_, juce::jlimit (0.0f, 1.0f, text.getFloatValue() * 0.01f));
+
+        refresh();
     }
 
     /// R3(F) third assignment route: right-click -> "Assign to Macro 1-4",
@@ -776,6 +1046,19 @@ private:
         juce::PopupMenu m;
         const int cc = proc_.state.midiMap.ccForPath (path_);
         m.addSectionHeader (name_.getText().isNotEmpty() ? name_.getText() : path_);
+        // §6: the discoverable half of typed value entry. The shortcut is shown
+        // beside it so the menu teaches the direct route.
+        {
+            juce::PopupMenu::Item typeItem ("Type value...");
+            typeItem.itemID = 3;
+#if JUCE_MAC
+            typeItem.shortcutKeyDescription = "Cmd-click";
+#else
+            typeItem.shortcutKeyDescription = "Ctrl-click";
+#endif
+            m.addItem (typeItem);
+        }
+        m.addSeparator();
         for (int i = 0; i < 4; ++i)
         {
             bool linked = false;
@@ -798,6 +1081,10 @@ private:
             {
                 proc_.state.midiMap.removePath (path_);
                 repaint();
+            }
+            else if (r == 3)
+            {
+                showValueEntry();
             }
             else if (r >= 10 && r <= 13)
             {
@@ -832,7 +1119,13 @@ private:
     struct LinkTab : juce::Component
     {
         std::function<void()> onStartDrag, onClickMenu;
-        LinkTab() { setMouseCursor (juce::MouseCursor::DraggingHandCursor); }
+        LinkTab()
+        {
+            setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+            // §6: a hover-only affordance that duplicates the right-click menu
+            // is noise in a screen reader, so it stays out of the tree.
+            setAccessible (false);
+        }
         void setLinked (int macroIdx) { linked_ = macroIdx; repaint(); }
         void mouseEnter (const juce::MouseEvent&) override { hover_ = true; repaint(); }
         void mouseExit (const juce::MouseEvent&) override  { hover_ = false; repaint(); }
@@ -880,6 +1173,8 @@ private:
     ParamSpec spec_ { nullptr, "", ParamKind::Float, 0, 1, 0 };
     PathSlider slider_;
     juce::Label name_, value_;
+    juce::String valueText_;                       // what the value readout says
+    std::unique_ptr<juce::TextEditor> entry_;      // §6 typed value entry (lazy)
     LinkTab link_;
     int linkedMacro_ = -1;
     int v2Diameter_ = 0, v2LabelOff_ = -74, v2ValueOff_ = 68;
@@ -892,16 +1187,38 @@ class PillToggle : public juce::Component
 {
 public:
     std::function<void (bool)> onToggle;
+    /// §6 accessibility: a hand-drawn Component is invisible to a screen reader
+    /// unless it says what it is. Set this to the control's caption.
+    PillToggle() { setWantsKeyboardFocus (true); }
     void setState (bool b) { if (state_ != b) { state_ = b; repaint(); } }
     bool getState() const { return state_; }
+    void toggle()
+    {
+        if (! isEnabled()) return;
+        state_ = ! state_;
+        if (onToggle) onToggle (state_);
+        repaint();
+    }
     void mouseUp (const juce::MouseEvent& e) override
     {
-        if (! e.mouseWasDraggedSinceMouseDown() && isEnabled())
-        {
-            state_ = ! state_;
-            if (onToggle) onToggle (state_);
-            repaint();
-        }
+        if (! e.mouseWasDraggedSinceMouseDown()) toggle();
+    }
+    /// Space / Return operate it, exactly as they operate a juce::ToggleButton.
+    bool keyPressed (const juce::KeyPress& k) override
+    {
+        if (k.isKeyCode (juce::KeyPress::spaceKey) || k.isKeyCode (juce::KeyPress::returnKey))
+        { toggle(); return true; }
+        return false;
+    }
+    void focusGained (FocusChangeType) override { repaint(); }
+    void focusLost (FocusChangeType) override   { repaint(); }
+    std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override
+    {
+        return std::make_unique<juce::AccessibilityHandler> (
+            *this, juce::AccessibilityRole::toggleButton,
+            juce::AccessibilityActions()
+                .addAction (juce::AccessibilityActionType::toggle, [this] { toggle(); })
+                .addAction (juce::AccessibilityActionType::press,  [this] { toggle(); }));
     }
     juce::Colour thumbColour = Theme::gold;         // solo/poly asset uses #B4E51A
     juce::Colour thumbRim = Theme::goldHi;
@@ -926,6 +1243,11 @@ public:
         g.fillEllipse (x, r.getY() + 3.0f, d, d);
         g.setColour (thumbRim);
         g.drawEllipse (x, r.getY() + 3.0f, d, d, 1.0f);
+        if (hasKeyboardFocus (false))
+        {
+            g.setColour (ux::HwState::focus);
+            g.drawRoundedRectangle (r.expanded (1.5f), rad + 1.5f, 2.0f);
+        }
     }
 private:
     bool state_ = false;
@@ -938,16 +1260,35 @@ class PowerButton : public juce::Component
 {
 public:
     std::function<void (bool)> onToggle;
+    PowerButton() { setWantsKeyboardFocus (true); }     // §6 keyboard-navigable
     void setState (bool b) { if (state_ != b) { state_ = b; repaint(); } }
     bool getState() const { return state_; }
+    void toggle()
+    {
+        if (! isEnabled()) return;
+        state_ = ! state_;
+        if (onToggle) onToggle (state_);
+        repaint();
+    }
     void mouseUp (const juce::MouseEvent& e) override
     {
-        if (! e.mouseWasDraggedSinceMouseDown() && isEnabled())
-        {
-            state_ = ! state_;
-            if (onToggle) onToggle (state_);
-            repaint();
-        }
+        if (! e.mouseWasDraggedSinceMouseDown()) toggle();
+    }
+    bool keyPressed (const juce::KeyPress& k) override
+    {
+        if (k.isKeyCode (juce::KeyPress::spaceKey) || k.isKeyCode (juce::KeyPress::returnKey))
+        { toggle(); return true; }
+        return false;
+    }
+    void focusGained (FocusChangeType) override { repaint(); }
+    void focusLost (FocusChangeType) override   { repaint(); }
+    std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override
+    {
+        return std::make_unique<juce::AccessibilityHandler> (
+            *this, juce::AccessibilityRole::toggleButton,
+            juce::AccessibilityActions()
+                .addAction (juce::AccessibilityActionType::toggle, [this] { toggle(); })
+                .addAction (juce::AccessibilityActionType::press,  [this] { toggle(); }));
     }
     juce::Colour ringColour = Theme::gold;      // world/FX accent ring when ON
     void paint (juce::Graphics& g) override
@@ -967,6 +1308,11 @@ public:
         g.drawEllipse (disc.reduced (size * 0.06f), juce::jmax (1.2f, size * 0.055f));
         // kit icon-power.png (42px reference)
         kit::drawPowerIcon (g, disc.reduced (size * 0.26f), state_ ? 1.0f : 0.35f);
+        if (hasKeyboardFocus (false))
+        {
+            g.setColour (ux::HwState::focus);
+            g.drawEllipse (disc.reduced (size * 0.02f), 2.0f);
+        }
     }
 private:
     bool state_ = false;
@@ -985,6 +1331,13 @@ public:
         name_.setFont (Theme::ui (11.0f));
         name_.setColour (juce::Label::textColourId, Theme::cream);
         addAndMakeVisible (name_);
+        // §6 accessibility: name the control, and drop the duplicate label from
+        // the tree (a juce::TextButton already announces its own button text).
+        setTitle (label);
+        name_.setAccessible (false);
+        pill_.setTitle (label);
+        pill_.setDescription (label);
+        btn_.setTitle (label);
         if (spec_.kind == ParamKind::Bool)          // pill toggle per client toggle.svg
         {
             pill_.onToggle = [this] (bool b)

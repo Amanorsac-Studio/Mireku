@@ -1611,6 +1611,9 @@ static void testArpStateRoundTrip()
 
 //==============================================================================
 #include "Round5Streaming.inc"
+// DSP STANDARDS PASS — aliasing (guide §1.3), DC blocking / feedback margin /
+// interpolation (§2), sample-rate and buffer-size independence (§4.1).
+#include "DspStandards.inc"
 
 //==============================================================================
 //==============================================================================
@@ -1816,6 +1819,14 @@ int main()
     testStarvationIsBoundedWhenAudioNeverArrives();
     testResidencyPolyphonyUnderLoad();
     testRealBundleResidency();
+    // DSP STANDARDS PASS
+    testAliasSuppression();
+    testToneBeforeAfter();
+    testDcBlockingAndTone();
+    testDelayFeedbackStability();
+    testInterpolationQuality();
+    testSampleRateAndBufferIndependence();
+    testDspCpuCost();
     std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL TESTS PASSED" : "TESTS FAILED",
                  failures, failures == 1 ? "" : "s");
     return failures == 0 ? 0 : 1;

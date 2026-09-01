@@ -344,6 +344,7 @@ public:
             proc_.setParamNormalized (prefix_ + ".fx" + juce::String (idx_) + ".bypass", on ? 0.0f : 1.0f);
             bypass_.setToggleState (! on, juce::dontSendNotification);
         };
+        power_.setTitle ("Enable " + juce::String (spec.name));
         addAndMakeVisible (power_);
 
         menuBtn_ = ux::makePackIconButton ("more", ux::PackIcon::kebab, Theme::muted);

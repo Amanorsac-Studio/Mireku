@@ -29,6 +29,7 @@ public:
         {
             proc_.setParamNormalized ("host.slotEnable" + juce::String (slot_), on ? 1.0f : 0.0f);
         };
+        power_.setTitle ("Slot " + juce::String::charToString ((juce::juce_wchar) (0x41 + slot_)) + " enable");
         addAndMakeVisible (power_);
 
         for (int w = 0; w < 4; ++w) world_.addItem (worldName (w), w + 1);

@@ -32,7 +32,7 @@ public:
         keyRange_.setRange (0, 127, 1); velRange_.setRange (1, 127, 1);
         keyRange_.onValueChange = [this] { pushRange(); };
         velRange_.onValueChange = [this] { pushRange(); };
-        addAndMakeVisible (octave_); octave_.addItemList ({ "−3", "−2", "−1", "0", "+1", "+2", "+3" }, 1); octave_.onChange = [this] { pushRange(); };
+        addAndMakeVisible (octave_); octave_.addItemList ({ "-3", "-2", "-1", "0", "+1", "+2", "+3" }, 1); octave_.onChange = [this] { pushRange(); };
         addAndMakeVisible (channel_); channel_.addItem ("Omni", 1); for (int c = 1; c <= 16; ++c) channel_.addItem ("Ch " + juce::String (c), c + 1); channel_.onChange = [this] { pushRange(); };
         addAndMakeVisible (ignoreWheel_); ignoreWheel_.onClick = [this] { pushRange(); };
         addAndMakeVisible (learnSplit_); learnSplit_.onClick = [this] { learning_ = true; proc_.lastIncomingNote.store (-1); startTimer (50); };
@@ -46,7 +46,7 @@ public:
     {
         auto& s = proc_.rig.slots[(size_t) slot_];
         soundBox_.clear (juce::dontSendNotification);
-        soundBox_.addItem ("— no sound —", 1);
+        soundBox_.addItem (juce::String (juce::CharPointer_UTF8 ("— no sound —")), 1);
         int sel = 1; int id = 2;
         for (int w = 0; w < 4; ++w)
         {
@@ -104,10 +104,10 @@ public:
     {
         auto& s = proc_.rig.slots[(size_t) slot_];
         paint::panel (g, getLocalBounds().toFloat().reduced (3.0f), Theme::panel, s.enabled ? Theme::slotColour (slot_).withAlpha (0.7f) : Theme::line);
-        paint::label (g, getLocalBounds().reduced (12, 8).removeFromTop (16), juce::String ("Slot ") + slotLetter (slot_) + "  ·  " + (s.hasSound() ? juce::String (jm::worldName (s.world)) : juce::String ("empty")), 11.0f, Theme::slotColour (slot_));
+        paint::label (g, getLocalBounds().reduced (12, 8).removeFromTop (16), juce::String ("Slot ") + slotLetter (slot_) + juce::String (juce::CharPointer_UTF8 ("  ·  ")) + (s.hasSound() ? juce::String (jm::worldName (s.world)) : juce::String ("empty")), 11.0f, Theme::slotColour (slot_));
         g.setColour (Theme::textDim); g.setFont (Theme::mono (10.0f));
-        g.drawText (juce::MidiMessage::getMidiNoteName (s.keyLo, true, true, 3) + "–" + juce::MidiMessage::getMidiNoteName (s.keyHi, true, true, 3), rangeLabel_, juce::Justification::centredLeft);
-        g.drawText ("v" + juce::String (s.velLo) + "–" + juce::String (s.velHi), velLabel_, juce::Justification::centredLeft);
+        g.drawText (juce::MidiMessage::getMidiNoteName (s.keyLo, true, true, 3) + juce::String (juce::CharPointer_UTF8 ("–")) + juce::MidiMessage::getMidiNoteName (s.keyHi, true, true, 3), rangeLabel_, juce::Justification::centredLeft);
+        g.drawText ("v" + juce::String (s.velLo) + juce::String (juce::CharPointer_UTF8 ("–")) + juce::String (s.velHi), velLabel_, juce::Justification::centredLeft);
         if (learning_) { g.setColour (Theme::cyan); g.setFont (Theme::label (10.0f)); g.drawText ("PLAY THE SPLIT KEY", getLocalBounds().reduced (12, 8).removeFromTop (16), juce::Justification::centredRight); }
     }
 private:
@@ -142,7 +142,7 @@ private:
     SanctuaryProcessor& proc_; int slot_; int world_ = -1; bool learning_ = false;
     juce::ComboBox soundBox_, octave_, channel_;
     juce::Label label_;
-    FlatButton enabled_ { "On" }, learnSplit_ { "Split…" };
+    FlatButton enabled_ { "On" }, learnSplit_ { juce::String (juce::CharPointer_UTF8 ("Split…")) };
     juce::ToggleButton ignoreWheel_ { "Ignore wheel" };
     juce::Slider keyRange_, velRange_;
     juce::Rectangle<int> rangeLabel_, velLabel_;
@@ -256,7 +256,7 @@ public:
         FxType type() const { return type_; }
     private:
         SanctuaryProcessor& proc_; RacksTab& owner_; int index_; FxType type_;
-        FlatButton bypass_ { "Active" }, remove_ { "✕" }, up_ { "▲" }, down_ { "▼" };
+        FlatButton bypass_ { "Active" }, remove_ { "X" }, up_ { juce::String (juce::CharPointer_UTF8 ("▲")) }, down_ { juce::String (juce::CharPointer_UTF8 ("▼")) };
         juce::OwnedArray<PathKnob> knobs_;
     };
 
@@ -310,7 +310,7 @@ public:
         r.removeFromLeft (8);
         g.setColour (Theme::text); g.setFont (Theme::display (13.0f)); g.drawText (juce::String (row + 1) + ".  " + m.name, r.removeFromLeft (200), juce::Justification::centredLeft);
         g.setColour (Theme::textDim); g.setFont (Theme::mono (11.0f));
-        g.drawText (juce::String (m.transitionBars, 2) + " bars  ·  " + juce::String ((int) m.diff.size()) + (row == 0 ? " (base state)" : " changes"), r, juce::Justification::centredLeft);
+        g.drawText (juce::String (m.transitionBars, 2) + juce::String (juce::CharPointer_UTF8 (" bars  ·  ")) + juce::String ((int) m.diff.size()) + (row == 0 ? " (base state)" : " changes"), r, juce::Justification::centredLeft);
     }
     void selectedRowsChanged (int) override { syncSel(); }
     void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override { proc_.gotoMoment (row); }
@@ -346,7 +346,7 @@ private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override { list_.updateContent(); list_.repaint(); if (list_.getSelectedRow() < 0) list_.selectRow (proc_.momentIndex); syncSel(); }
     SanctuaryProcessor& proc_;
     juce::ListBox list_;
-    FlatButton add_ { "+ Add" }, del_ { "Delete" }, up_ { "▲" }, down_ { "▼" }, goto_ { "Go to" }, clear_ { "Clear changes" };
+    FlatButton add_ { "+ Add" }, del_ { "Delete" }, up_ { juce::String (juce::CharPointer_UTF8 ("▲")) }, down_ { juce::String (juce::CharPointer_UTF8 ("▼")) }, goto_ { "Go to" }, clear_ { "Clear changes" };
     juce::TextEditor name_; juce::Slider bars_;
     juce::Rectangle<int> nameLab_, barsLab_, help_;
 };
@@ -417,9 +417,9 @@ public:
     }
     void paint (juce::Graphics& g) override
     {
-        paint::label (g, l1_, "Title", 10.0f); paint::label (g, l2_, "Artist / arranger", 10.0f); paint::label (g, l3_, "Key · minor · meter · colour", 10.0f);
+        paint::label (g, l1_, "Title", 10.0f); paint::label (g, l2_, "Artist / arranger", 10.0f); paint::label (g, l3_, juce::String (juce::CharPointer_UTF8 ("Key · minor · meter · colour")), 10.0f);
         paint::label (g, l4_, "Tempo", 10.0f); paint::label (g, l5_, "Tags (comma separated)", 10.0f); paint::label (g, l6_, "Notes (shown in the Deck)", 10.0f);
-        paint::label (g, macroLab_, "Macros  ·  one knob, many targets", 10.0f);
+        paint::label (g, macroLab_, juce::String (juce::CharPointer_UTF8 ("Macros  ·  one knob, many targets")), 10.0f);
     }
 
     class MacroEditor : public juce::Component
@@ -437,7 +437,7 @@ public:
         {
             auto& m = proc_.rig.macros[(size_t) index_];
             name_.setText (m.name, false);
-            juce::String t; for (auto& l : m.links) t << l.path << "   " << juce::String (l.min, 2) << " → " << juce::String (l.max, 2) << "\n";
+            juce::String t; for (auto& l : m.links) t << l.path << "   " << juce::String (l.min, 2) << juce::String (juce::CharPointer_UTF8 (" → ")) << juce::String (l.max, 2) << "\n";
             links_.setText (t, false);
             knob_.setName2 (m.name);
         }
@@ -528,7 +528,7 @@ public:
         g.setColour (sel ? Theme::panelHi : Theme::panel); g.fillRect (0, 0, w, h);
         g.setColour (Theme::text); g.setFont (Theme::mono (11.0f));
         g.drawText (ctl, 8, 0, w / 2 - 8, h, juce::Justification::centredLeft);
-        g.setColour (Theme::blueHi); g.drawText ("→  " + b.target, w / 2, 0, w / 2 - 8, h, juce::Justification::centredLeft);
+        g.setColour (Theme::blueHi); g.drawText (juce::String (juce::CharPointer_UTF8 ("→  ")) + b.target, w / 2, 0, w / 2 - 8, h, juce::Justification::centredLeft);
     }
     void resized() override
     {
@@ -545,7 +545,7 @@ public:
     void paint (juce::Graphics& g) override
     {
         g.setFont (Theme::mono (11.0f));
-        if (proc_.learnArmed()) { g.setColour (Theme::cyan); g.drawText ("LEARNING " + proc_.learnTarget() + " — move a knob or press a button…", status_, juce::Justification::centredLeft); }
+        if (proc_.learnArmed()) { g.setColour (Theme::cyan); g.drawText ("LEARNING " + proc_.learnTarget() + juce::String (juce::CharPointer_UTF8 (" — move a knob or press a button…")), status_, juce::Justification::centredLeft); }
         else { g.setColour (Theme::textDim); g.drawText ("last CC " + juce::String (proc_.lastIncomingCc.load()) + "   last note " + juce::String (proc_.lastIncomingNote.load()), status_, juce::Justification::centredLeft); }
     }
 private:
@@ -598,13 +598,13 @@ public:
     {
         paint::label (g, libLab_, "Sound library: " + proc_.library.libraryDir().getFullPathName() + "   (" + juce::String ((int) proc_.library.bundles().size()) + " bundles" + (proc_.library.usedFallback() ? ", placeholder fallback" : "") + ")", 10.0f);
         g.setColour (Theme::textDim); g.setFont (Theme::ui (12.0f));
-        g.drawFittedText ("Sanctuary · Amanorsac Studio · v1.0\nSongs, Sets and Surfaces are plain JSON in the data folder; keep that folder in a shared drive or git to share with your team.\n"
+        g.drawFittedText (juce::String (juce::CharPointer_UTF8 ("Sanctuary · Amanorsac Studio · v1.0\nSongs, Sets and Surfaces are plain JSON in the data folder; keep that folder in a shared drive or git to share with your team.\n")) +
                           "Outputs: Main (stereo). Hosts and the standalone device chooser can enable the Drone and Click buses for separate feeds to front of house.",
                           info_, juce::Justification::topLeft, 8);
     }
 private:
     SanctuaryProcessor& proc_;
-    FlatButton libBtn_ { "Choose library folder…" }, rescan_ { "Rescan" }, audio_ { "Audio & MIDI devices…" }, openFolder_ { "Open data folder" };
+    FlatButton libBtn_ { juce::String (juce::CharPointer_UTF8 ("Choose library folder…")) }, rescan_ { "Rescan" }, audio_ { juce::String (juce::CharPointer_UTF8 ("Audio & MIDI devices…")) }, openFolder_ { "Open data folder" };
     juce::ToggleButton hostTempo_ { "Follow host tempo when running as a plugin" }, clickMain_ { "Allow click on the main output (no click bus)" }, limiter_ { "Master safety limiter" };
     juce::ComboBox pad_;
     juce::Rectangle<int> libLab_, info_;

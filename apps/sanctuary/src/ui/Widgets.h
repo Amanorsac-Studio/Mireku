@@ -124,8 +124,20 @@ public:
     juce::Font getComboBoxFont (juce::ComboBox&) override { return Theme::ui (12.0f); }
     juce::Font getPopupMenuFont() override { return Theme::ui (13.0f); }
     juce::Font getLabelFont (juce::Label&) override { return Theme::ui (12.0f); }
-    void drawLinearSlider (juce::Graphics& g, int x, int y, int w, int h, float pos, float, float, juce::Slider::SliderStyle style, juce::Slider& s) override
+    void drawLinearSlider (juce::Graphics& g, int x, int y, int w, int h, float pos, float minPos, float maxPos, juce::Slider::SliderStyle style, juce::Slider& s) override
     {
+        if (style == juce::Slider::TwoValueHorizontal)
+        {
+            auto r = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h);
+            auto track = r.withSizeKeepingCentre (r.getWidth(), 4.0f);
+            g.setColour (Theme::recess); g.fillRoundedRectangle (track, 2.0f);
+            g.setColour (s.isEnabled() ? Theme::blue : Theme::textMute);
+            g.fillRoundedRectangle (track.withLeft (minPos).withRight (maxPos), 2.0f);
+            g.setColour (Theme::ice);
+            g.fillEllipse (juce::Rectangle<float> (10.0f, 10.0f).withCentre ({ minPos, track.getCentreY() }));
+            g.fillEllipse (juce::Rectangle<float> (10.0f, 10.0f).withCentre ({ maxPos, track.getCentreY() }));
+            return;
+        }
         const bool horiz = style == juce::Slider::LinearHorizontal || style == juce::Slider::LinearBar;
         auto r = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h);
         auto track = horiz ? r.withSizeKeepingCentre (r.getWidth(), 4.0f) : r.withSizeKeepingCentre (4.0f, r.getHeight());
@@ -241,7 +253,7 @@ public:
     {
         juce::PopupMenu m;
         const auto bound = proc_.bindingFor (path_);
-        m.addItem (1, proc_.learnArmed() && proc_.learnTarget() == path_ ? "Learning… (move a control)" : "Learn MIDI control");
+        m.addItem (1, proc_.learnArmed() && proc_.learnTarget() == path_ ? juce::String (juce::CharPointer_UTF8 ("Learning… (move a control)")) : "Learn MIDI control");
         if (bound.isNotEmpty()) m.addItem (2, "Unbind (" + bound + ")");
         m.addSeparator();
         m.addItem (3, "Pin to Live Trim");
@@ -328,7 +340,7 @@ private:
 };
 
 //==============================================================================
-/// 12 key buttons in a 6×2 grid.
+/// 12 key buttons in a 6x2 grid.
 class KeyPicker : public juce::Component
 {
 public:

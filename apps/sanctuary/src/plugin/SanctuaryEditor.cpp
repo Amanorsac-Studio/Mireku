@@ -130,7 +130,7 @@ void SanctuaryEditor::paint (juce::Graphics& g)
     g.fillAll (Theme::bg);
     // header
     g.setColour (Theme::panel); g.fillRect (header_);
-    g.setColour (Theme::line); g.fillRect (header_.removeFromBottom (1));
+    g.setColour (Theme::line); g.fillRect (header_.withTop (header_.getBottom() - 1));
     auto brand = header_.reduced (14, 8).removeFromLeft (160);
     auto mark = brand.removeFromLeft (30).withSizeKeepingCentre (22, 22).toFloat();
     juce::Path arch; arch.addRoundedRectangle (mark, 4.0f);
@@ -142,9 +142,9 @@ void SanctuaryEditor::paint (juce::Graphics& g)
     paint::label (g, brand, "Amanorsac Studio", 9.0f, Theme::textDim);
     // status
     g.setColour (Theme::textDim); g.setFont (Theme::mono (11.0f));
-    juce::String st = proc_.set.name + "   ·   " + proc_.currentSongTitle();
-    st += "   ·   cpu " + juce::String ((int) (proc_.cpuLoad.load() * 100)) + "%   voices " + juce::String (proc_.totalVoices.load());
-    if (proc_.overruns.load() > 0) st += "   ·   overruns " + juce::String (proc_.overruns.load());
+    juce::String st = proc_.set.name + juce::String (juce::CharPointer_UTF8 ("   ·   ")) + proc_.currentSongTitle();
+    st += juce::String (juce::CharPointer_UTF8 ("   ·   cpu ")) + juce::String ((int) (proc_.cpuLoad.load() * 100)) + "%   voices " + juce::String (proc_.totalVoices.load());
+    if (proc_.overruns.load() > 0) st += juce::String (juce::CharPointer_UTF8 ("   ·   overruns ")) + juce::String (proc_.overruns.load());
     g.drawText (st, status_.reduced (16, 0), juce::Justification::centredLeft);
     paint::label (g, master_.getBounds().translated (0, -14).withHeight (12), "Master", 9.0f);
     // banner
@@ -156,9 +156,9 @@ void SanctuaryEditor::paint (juce::Graphics& g)
     }
     // bottom
     g.setColour (Theme::panel); g.fillRect (bottom_);
-    g.setColour (Theme::line); g.fillRect (bottom_.removeFromTop (1));
+    g.setColour (Theme::line); g.fillRect (bottom_.withHeight (1));
     g.setColour (Theme::textMute); g.setFont (Theme::ui (11.0f));
-    g.drawText ("F1 stage · F2 edit · F3 deck · space next moment", bottom_.reduced (130, 0), juce::Justification::centred);
+    g.drawText (juce::String (juce::CharPointer_UTF8 ("F1 stage · F2 edit · F3 deck · space next moment")), bottom_.reduced (130, 0), juce::Justification::centred);
 }
 
 bool SanctuaryEditor::keyPressed (const juce::KeyPress& k)

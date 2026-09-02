@@ -46,7 +46,13 @@ inline int keyFromName (const juce::String& s)
 }
 /// Prefer flats for the flat keys (F, Bb, Eb, Ab, Db, Gb) — how charts are written.
 inline bool keyPrefersFlats (int pc) { pc = ((pc % 12) + 12) % 12; return pc == 5 || pc == 10 || pc == 3 || pc == 8 || pc == 1 || pc == 6; }
-inline juce::String keyDisplay (int pc, bool minor) { return juce::String (keyName (pc, keyPrefersFlats (pc))) + (minor ? "m" : ""); }
+inline juce::String keyDisplay (int pc, bool minor)
+{
+    // minor keys are written with sharps where charts do (C#m, F#m, G#m), flats otherwise (Ebm, Bbm)
+    pc = ((pc % 12) + 12) % 12;
+    const bool flats = minor ? (pc == 3 || pc == 10 || pc == 5) : keyPrefersFlats (pc);
+    return juce::String (keyName (pc, flats)) + (minor ? "m" : "");
+}
 
 /// Wheel: Play In → Sound In. Semitone shift wraps to the nearest direction (−6..+5).
 inline int wheelSemitones (int playIn, int soundIn)

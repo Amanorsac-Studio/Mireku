@@ -190,7 +190,7 @@ struct DroneBed
             level += levelStep;
             if ((levelStep > 0 && level >= levelTarget) || (levelStep < 0 && level <= levelTarget)) { level = levelTarget; levelStep = 0; }
             const float gEq = std::sin (juce::jlimit (0.0f, 1.0f, level) * juce::MathConstants<float>::halfPi);
-            const float g = gEq * 0.5f;
+            const float g = gEq * 0.22f;   // six partials sum hot: keep the bed well under the sampler slots
             const float gl = lp[0].process (scratch[i]);
             const float gr = lp[1].process (scratch[i]);
             const float al = airLp[0].process (scratchAir[i]);

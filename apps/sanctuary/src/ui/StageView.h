@@ -48,7 +48,7 @@ public:
     {
         g.fillAll (Theme::bg);
         g.setColour (Theme::line); g.fillRect (getLocalBounds().removeFromRight (1));
-        paint::label (g, header_, proc_.set.name + "  ·  " + juce::String ((int) proc_.set.songs.size()) + " songs", 10.0f, Theme::textDim);
+        paint::label (g, header_, proc_.set.name + juce::String (juce::CharPointer_UTF8 ("  ·  ")) + juce::String ((int) proc_.set.songs.size()) + " songs", 10.0f, Theme::textDim);
     }
 
     // ListBoxModel
@@ -124,7 +124,7 @@ private:
     {
         juce::PopupMenu m;
         m.addSectionHeader ("Add to set");
-        m.addItem (1, "New song from the current rig…");
+        m.addItem (1, juce::String (juce::CharPointer_UTF8 ("New song from the current rig…")));
         m.addSeparator();
         std::vector<juce::String> ids;
         for (auto& [id, s] : proc_.songs) { ids.push_back (id); m.addItem (100 + (int) ids.size() - 1, s.title + "   (" + keyDisplay (s.songKey, s.minor) + ")"); }
@@ -156,9 +156,9 @@ private:
         auto sets = proc_.setsOnDisk();
         for (int i = 0; i < (int) sets.size(); ++i) m.addItem (100 + i, sets[(size_t) i].name + "   (" + sets[(size_t) i].serviceType + ", " + juce::String ((int) sets[(size_t) i].songs.size()) + ")");
         m.addSeparator();
-        m.addItem (1, "New empty set…");
-        m.addItem (2, "Export this set as a pack…");
-        m.addItem (3, "Import a set pack…");
+        m.addItem (1, juce::String (juce::CharPointer_UTF8 ("New empty set…")));
+        m.addItem (2, juce::String (juce::CharPointer_UTF8 ("Export this set as a pack…")));
+        m.addItem (3, juce::String (juce::CharPointer_UTF8 ("Import a set pack…")));
         m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&loadBtn_), [this, sets] (int r)
         {
             if (r >= 100) { proc_.saveCurrentSong(); proc_.loadSet (sets[(size_t) (r - 100)]); }
@@ -261,12 +261,12 @@ public:
     {
         paint::panel (g, getLocalBounds().toFloat().reduced (4.0f));
         auto* s = proc_.currentSong();
-        if (s == nullptr) { drawDisplayText (g, "No song loaded — add one from the rail", title_, 20.0f, Theme::textDim); return; }
+        if (s == nullptr) { drawDisplayText (g, juce::String (juce::CharPointer_UTF8 ("No song loaded — add one from the rail")), title_, 20.0f, Theme::textDim); return; }
         drawDisplayText (g, s->title, title_, 34.0f, Theme::ice);
         // key, wheel, tempo, meter, beat light
         auto r = info_;
         const int pi = proc_.playIn(), si = proc_.soundIn();
-        juce::String key = pi == si ? keyDisplay (si, s->minor) : keyDisplay (pi, s->minor) + "  →  " + keyDisplay (si, s->minor);
+        juce::String key = pi == si ? keyDisplay (si, s->minor) : keyDisplay (pi, s->minor) + juce::String (juce::CharPointer_UTF8 ("  →  ")) + keyDisplay (si, s->minor);
         g.setColour (pi == si ? Theme::text : Theme::warn); g.setFont (Theme::display (18.0f));
         g.drawText (key, r.removeFromLeft (180), juce::Justification::centredLeft);
         const double phase = proc_.beatPhase.load();
@@ -287,7 +287,7 @@ public:
         if (auto* nx = proc_.nextSongInSet())
         {
             g.setColour (Theme::textMute); g.setFont (Theme::ui (11.0f));
-            g.drawText ("Next: " + nx->title + "  ·  " + keyDisplay (nx->soundIn, nx->minor), getLocalBounds().reduced (20, 8).removeFromBottom (14), juce::Justification::centredRight);
+            g.drawText ("Next: " + nx->title + juce::String (juce::CharPointer_UTF8 ("  ·  ")) + keyDisplay (nx->soundIn, nx->minor), getLocalBounds().reduced (20, 8).removeFromBottom (14), juce::Justification::centredRight);
         }
     }
 private:
@@ -302,7 +302,7 @@ private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override { rebuild(); }
     SanctuaryProcessor& proc_;
     juce::OwnedArray<Pill> pills_;
-    FlatButton prev_ { "◀  Prev" }, next_ { "Next  ▶" }, addMoment_ { "+" };
+    FlatButton prev_ { juce::String (juce::CharPointer_UTF8 ("◀  Prev")) }, next_ { juce::String (juce::CharPointer_UTF8 ("Next  ▶")) }, addMoment_ { "+" };
     juce::Rectangle<int> title_, info_, progress_;
 };
 
@@ -316,7 +316,15 @@ public:
     {
         juce::StringArray paths;
         if (auto* s = proc_.currentSong()) paths = s->liveTrimPaths();
-        if (paths == paths_ && knobs_.size() == paths.size()) { for (auto* k : knobs_) k->setPath (k->path()); return; }
+        auto labelFor = [this] (const juce::String& p)
+        {
+            auto pi = pathInfo (proc_.rig, p);
+            if (! p.startsWith ("slot")) return pi.label;
+            const int si = p.substring (4, 5).getIntValue();
+            auto& sl = proc_.rig.slots[(size_t) si];
+            return (sl.label.isNotEmpty() ? sl.label : juce::String ("Slot ") + slotLetter (si)) + " " + pi.label;
+        };
+        if (paths == paths_ && knobs_.size() == paths.size()) { for (auto* k : knobs_) { k->setPath (k->path()); k->setName2 (labelFor (k->path())); } return; }
         paths_ = paths;
         knobs_.clear();
         for (auto& p : paths_)
@@ -326,9 +334,7 @@ public:
             if (p.startsWith ("slot")) c = Theme::slotColour (p.substring (4, 5).getIntValue());
             else if (p.startsWith ("drone")) c = Theme::cyan;
             auto* k = knobs_.add (new PathKnob (proc_, p, c));
-            juce::String label = pi.label;
-            if (p.startsWith ("slot")) { auto& sl = proc_.rig.slots[(size_t) p.substring (4, 5).getIntValue()]; label = (sl.label.isNotEmpty() ? sl.label : juce::String ("Slot ") + slotLetter (p.substring (4, 5).getIntValue())) + " " + pi.label; }
-            k->setName2 (label);
+            k->setName2 (labelFor (p));
             addAndMakeVisible (k);
         }
         resized();
@@ -344,7 +350,7 @@ public:
     void paint (juce::Graphics& g) override
     {
         paint::panel (g, getLocalBounds().toFloat().reduced (4.0f));
-        paint::label (g, getLocalBounds().reduced (16, 10).removeFromTop (14), "Live trim  ·  turn = write into this Moment  ·  right-click = MIDI", 10.0f);
+        paint::label (g, getLocalBounds().reduced (16, 10).removeFromTop (14), juce::String (juce::CharPointer_UTF8 ("Live trim  ·  turn = write into this Moment  ·  right-click = MIDI")), 10.0f);
     }
 private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override { rebuild(); }
@@ -483,7 +489,7 @@ public:
         auto hd = droneArea_.reduced (8).removeFromTop (16);
         paint::label (g, hd, "Drone", 11.0f, Theme::cyan);
         const auto c = proc_.currentChord();
-        juce::String chordTxt = c.root >= 0 ? juce::String (keyName (c.root, keyPrefersFlats (proc_.soundIn()))) + chordQualitySuffix (c.quality) : juce::String ("—");
+        juce::String chordTxt = c.root >= 0 ? juce::String (keyName (c.root, keyPrefersFlats (proc_.soundIn()))) + chordQualitySuffix (c.quality) : juce::String (juce::String (juce::CharPointer_UTF8 ("—")));
         g.setColour (Theme::textDim); g.setFont (Theme::mono (11.0f));
         g.drawText ("chord " + chordTxt, hd, juce::Justification::centredRight);
         // level dot
@@ -492,14 +498,14 @@ public:
         g.setColour (Theme::cyan.withAlpha (juce::jlimit (0.15f, 1.0f, pk * 4.0f))); g.fillEllipse (dot);
 
         paint::panel (g, wheelArea_.toFloat());
-        paint::label (g, wheelArea_.reduced (8).removeFromTop (16), "Wheel  ·  play in  →  sound in", 11.0f);
-        g.setColour (Theme::blue); g.setFont (Theme::display (16.0f)); g.drawText ("→", arrow_, juce::Justification::centred);
+        paint::label (g, wheelArea_.reduced (8).removeFromTop (16), juce::String (juce::CharPointer_UTF8 ("Wheel  ·  play in  →  sound in")), 11.0f);
+        g.setColour (Theme::blue); g.setFont (Theme::display (16.0f)); g.drawText (juce::String (juce::CharPointer_UTF8 ("→")), arrow_, juce::Justification::centred);
         const int sh = proc_.wheelShift();
         g.setColour (sh == 0 ? Theme::textDim : Theme::warn); g.setFont (Theme::mono (11.0f));
         g.drawText (sh == 0 ? "no transposition" : (sh > 0 ? "+" : "") + juce::String (sh) + " semitones", shiftText_, juce::Justification::centredLeft);
 
         paint::panel (g, tempoArea_.toFloat());
-        paint::label (g, tempoArea_.reduced (8).removeFromTop (16), proc_.hostTempo.load() && proc_.followHostTempo() ? "Tempo  ·  host" : "Tempo", 11.0f);
+        paint::label (g, tempoArea_.reduced (8).removeFromTop (16), proc_.hostTempo.load() && proc_.followHostTempo() ? juce::String (juce::CharPointer_UTF8 ("Tempo  ·  host")) : "Tempo", 11.0f);
     }
 private:
     void timerCallback() override { if (proc_.rig.drone.follow != DroneFollow::off) keys_.setCurrent (proc_.drone.currentRoot() >= 0 ? proc_.drone.currentRoot() : proc_.soundIn()); repaint (droneArea_.removeFromTop (30)); }
@@ -513,8 +519,8 @@ private:
              air_ { proc_, "drone.air", Theme::cyan, "Air" }, shimmer_ { proc_, "drone.shimmer", Theme::cyan, "Shimmer" },
              depth_ { proc_, "drone.depth", Theme::cyan, "Depth" }, motion_ { proc_, "drone.motion", Theme::cyan, "Motion" };
     juce::ComboBox followBox_, charBox_, regBox_, playBox_, soundBox_;
-    FlatButton upBtn_ { "▲" }, downBtn_ { "▼" }, lockBtn_ { "Lock" };
-    FlatButton tapBtn_ { "Tap" }, minusBtn_ { "−" }, plusBtn_ { "+" }, halfBtn_ { "½" }, doubleBtn_ { "×2" }, clickBtn_ { "Click" };
+    FlatButton upBtn_ { juce::String (juce::CharPointer_UTF8 ("▲")) }, downBtn_ { juce::String (juce::CharPointer_UTF8 ("▼")) }, lockBtn_ { "Lock" };
+    FlatButton tapBtn_ { "Tap" }, minusBtn_ { "-" }, plusBtn_ { "+" }, halfBtn_ { "1/2" }, doubleBtn_ { "x2" }, clickBtn_ { "Click" };
     juce::TextEditor bpmEdit_;
 };
 

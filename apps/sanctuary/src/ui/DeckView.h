@@ -82,7 +82,7 @@ public:
         auto r = info_;
         const int pi = proc_.playIn(), si = proc_.soundIn();
         g.setFont (Theme::display (30.0f)); g.setColour (pi == si ? Theme::text : Theme::warn);
-        g.drawText (pi == si ? keyDisplay (si, s->minor) : keyDisplay (pi, s->minor) + "  →  " + keyDisplay (si, s->minor), r.removeFromLeft (320), juce::Justification::centredLeft);
+        g.drawText (pi == si ? keyDisplay (si, s->minor) : keyDisplay (pi, s->minor) + juce::String (juce::CharPointer_UTF8 ("  →  ")) + keyDisplay (si, s->minor), r.removeFromLeft (320), juce::Justification::centredLeft);
         const double phase = proc_.beatPhase.load(); const int beat = (int) phase; const float pulse = 1.0f - (float) (phase - beat);
         auto light = r.removeFromLeft (44).withSizeKeepingCentre (26, 26).toFloat();
         g.setColour ((beat == 0 ? Theme::cyan : Theme::blue).withAlpha (0.2f + 0.8f * pulse * pulse)); g.fillEllipse (light);
@@ -130,7 +130,7 @@ public:
         }
         // shortcuts
         g.setColour (Theme::textMute); g.setFont (Theme::ui (12.0f));
-        g.drawText ("SPACE next moment  ·  SHIFT+SPACE prev  ·  PGDN/PGUP song  ·  D drone  ·  ↑↓ sound-in  ·  ESC exit deck", getLocalBounds().reduced (32, 6).removeFromBottom (16), juce::Justification::centredLeft);
+        g.drawText (juce::String (juce::CharPointer_UTF8 ("SPACE next moment  ·  SHIFT+SPACE prev  ·  PGDN/PGUP song  ·  D drone  ·  ↑↓ sound-in  ·  ESC exit deck")), getLocalBounds().reduced (32, 6).removeFromBottom (16), juce::Justification::centredLeft);
     }
     bool keyPressed (const juce::KeyPress& k) override
     {

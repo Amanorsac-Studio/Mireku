@@ -130,7 +130,8 @@ static void testDrone()
     e.setSettings (s); e.setTarget (0, false, -1);
     float peak = 0.0f;
     for (int i = 0; i < 200; ++i) { buf.clear(); e.render (buf, 512); peak = juce::jmax (peak, buf.getMagnitude (0, 512)); }
-    CHECK (peak > 0.01f && peak < 1.0f, "drone produces bounded audio when on");
+    std::printf ("    drone peak at level 80 after 2 s: %.3f (%.1f dBFS)\n", peak, 20.0f * std::log10 (juce::jmax (1e-6f, peak)));
+    CHECK (peak > 0.01f && peak < 0.5f, "drone produces bounded audio when on (peaks under -6 dBFS at level 80)");
     CHECK (e.isSounding(), "drone reports sounding");
     // key change: crossfade, no discontinuity beyond a sane bound
     e.setTarget (7, false, -1);

@@ -85,6 +85,14 @@ public:
     // -------------------------------------------------- message-thread model ops
     void loadBundleIntoSlot (int slot, const BundleInfo& info);
     void applyJmiPresetToSlot (int slot, const jmi::Preset& preset);
+    /// CLIENT REVIEW ROUND 8 — "sounds are not changing when I change sound".
+    /// Deliberately choosing a patch on a MODEL PAGE must make that patch
+    /// audible; only slot A is enabled at first run, so a patch loaded into any
+    /// other slot changed nothing a player could hear. Call this from the
+    /// audition paths ONLY (model page + preset browser), never from the
+    /// PERFORM page, where the slot enables are the player's own arrangement.
+    /// See DECISIONS-signature.md, "Client review round 8".
+    void makeSlotAudible (int slot);
     bool applyUserPresetToSlot (int slot, const juce::File& jsonFile);
     void saveUserPreset (int slot, const juce::String& name);
     juce::var slotPresetToVar (int slot, const juce::String& name) const;

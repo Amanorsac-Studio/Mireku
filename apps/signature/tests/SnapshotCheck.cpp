@@ -2115,6 +2115,330 @@ int main()
         delete ed;
     }
 
+    //==========================================================================
+    // CLIENT REVIEW ROUND 8 — "sounds are not changing when I change sound"
+    //
+    // The model pages address a slot through slotForWorld(), so the MKS page
+    // edits slot B, the FM page slot C and so on — but only slot A is enabled
+    // at first run, and a disabled slot never receives a note. Choosing a patch
+    // on any page but the first therefore loaded it into silence.
+    //
+    // These render REAL AUDIO through the REAL processor after driving the REAL
+    // browser row, which is the only formulation that would have caught it: the
+    // patch always did load, so every state-level assertion passed.
+    //==========================================================================
+    {
+        proc.prepareToPlay (48000.0, 512);
+        juce::MidiBuffer emptyMidi;
+
+        auto settle = [&]
+        {
+            for (auto& e : proc.engines) e.allNotesOff (false);
+            juce::AudioBuffer<float> b (2, 512);
+            for (int k = 0; k < 40; ++k) { juce::MidiBuffer m; proc.processBlock (b, m); }
+        };
+        // One note, 8192 frames, rendered in 512-frame blocks like a real host.
+        // Per-slot peaks are latched as a running maximum across the render, so
+        // "which slot is actually sounding" — the question the whole round
+        // turns on — is answered per slot rather than inferred from the mix.
+        // settle() silences everything first, so a slot that reads zero here
+        // genuinely received nothing.
+        std::array<float, 4> slotPeakAtOnset {};
+        auto renderNote = [&] (juce::AudioBuffer<float>& out)
+        {
+            settle();
+            slotPeakAtOnset.fill (0.0f);
+            out.setSize (2, 8192, false, false, true);
+            out.clear();
+            for (int off = 0; off < 8192; off += 512)
+            {
+                float* p[2] = { out.getWritePointer (0) + off, out.getWritePointer (1) + off };
+                juce::AudioBuffer<float> view (p, 2, 512);
+                juce::MidiBuffer m;
+                if (off == 0) m.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+                proc.processBlock (view, m);
+                for (int i = 0; i < 4; ++i)
+                    slotPeakAtOnset[(size_t) i] = juce::jmax (slotPeakAtOnset[(size_t) i],
+                                                              proc.slotPeak[(size_t) i].load());
+            }
+        };
+        auto rms = [] (const juce::AudioBuffer<float>& b)
+        {
+            return 0.5 * (b.getRMSLevel (0, 0, b.getNumSamples()) + b.getRMSLevel (1, 0, b.getNumSamples()));
+        };
+        auto differ = [] (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b)
+        {
+            double worst = 0.0;
+            for (int c = 0; c < 2; ++c)
+                for (int s = 0; s < a.getNumSamples(); ++s)
+                    worst = juce::jmax (worst, (double) std::abs (a.getSample (c, s) - b.getSample (c, s)));
+            return worst;
+        };
+        auto enabledCount = [&]
+        {
+            int n = 0;
+            for (int i = 0; i < 4; ++i)
+                if (proc.getParamNormalized ("host.slotEnable" + juce::String (i)) >= 0.5f) ++n;
+            return n;
+        };
+        auto setEnables = [&] (bool a, bool b, bool c, bool d)
+        {
+            const bool w[4] = { a, b, c, d };
+            for (int i = 0; i < 4; ++i)
+                proc.setParamNormalized ("host.slotEnable" + juce::String (i), w[i] ? 1.0f : 0.0f);
+        };
+        auto isEnabled = [&] (int i)
+        {
+            return proc.getParamNormalized ("host.slotEnable" + juce::String (i)) >= 0.5f;
+        };
+
+        // Drives the browser the way the mouse does: rebuild for the page the
+        // player is on, then activate the first instrument row.
+        PresetBrowserPanel browser (proc);
+        auto firstBundleRow = [&] (int page)
+        {
+            proc.state.currentPage = page;
+            browser.rebuild();
+            for (int i = 0; i < browser.rowCount(); ++i)
+                if (browser.rowIsBundle (i)) return i;
+            return -1;
+        };
+
+        std::printf ("\n== R8 (1) choosing a patch on a model page is AUDIBLE ==\n");
+        {
+            setEnables (true, false, false, false);      // the shipped first-run state
+            proc.setParamNormalized ("host.solo", 0.0f);
+
+            juce::AudioBuffer<float> prev, cur;
+            bool havePrev = false;
+            for (int page = 0; page < 4; ++page)
+            {
+                const int row = firstBundleRow (page);
+                if (row < 0) { std::printf ("  page %d: no instruments in the library\n", page); continue; }
+                const int slot = browser.rowSlot (row);
+                browser.activateRow (row);
+                renderNote (cur);
+                const double level = rms (cur);
+                const float chosen = slotPeakAtOnset[(size_t) slot];
+                float others = 0.0f;
+                for (int i = 0; i < 4; ++i) if (i != slot) others = juce::jmax (others, slotPeakAtOnset[(size_t) i]);
+                std::printf ("  %-8s -> slot %c  \"%s\"  enabled=%d  voices=%d  chosen-slot peak=%.6f  "
+                             "other slots=%.6f  mix rms=%.6f\n",
+                             worldName (page), (char) ('A' + slot), browser.rowName (row).toRawUTF8(),
+                             (int) isEnabled (slot), proc.engines[(size_t) slot].activeVoices(),
+                             chosen, others, level);
+                CHECK (slot == slotForWorld (proc.state, page), "the page's row targets the page's slot");
+                CHECK (proc.engines[(size_t) slot].bundle() != nullptr, "the patch really loaded");
+                CHECK (isEnabled (slot), "the slot holding the chosen patch is enabled");
+                CHECK (proc.engines[(size_t) slot].activeVoices() > 0,
+                       "the chosen patch's slot actually RECEIVES what you play (a disabled slot gets no note)");
+                CHECK (chosen > 1.0e-4f, "the chosen patch is AUDIBLE — the round-8 defect");
+                CHECK (others < 1.0e-6f,
+                       "and it is the ONLY thing sounding: you hear the sound you picked, not the one before it");
+                CHECK (level > 1.0e-4, "the mix carries it");
+                if (havePrev)
+                    CHECK (differ (prev, cur) > 1.0e-3,
+                           "the rendered output actually CHANGES when the patch changes");
+                prev.makeCopyOf (cur);
+                havePrev = true;
+            }
+        }
+
+        std::printf ("\n== R8 (2) patch load vs. a deliberate PERFORM arrangement ==\n");
+        {
+            // POLY, one slot on -> the enable MOVES (single-instrument setup)
+            proc.setParamNormalized ("host.solo", 0.0f);
+            setEnables (false, true, false, false);
+            int row = firstBundleRow (0);
+            CHECK (row >= 0, "the rhodes-ep page offers an instrument");
+            browser.activateRow (row);
+            CHECK (isEnabled (slotForWorld (proc.state, 0)) && enabledCount() == 1,
+                   "POLY + single instrument: the enable MOVES to the chosen slot");
+
+            // POLY, a layer the player built by hand -> additive only
+            setEnables (true, true, false, false);
+            row = firstBundleRow (2);
+            if (row >= 0)
+            {
+                const int slot = browser.rowSlot (row);
+                browser.activateRow (row);
+                CHECK (isEnabled (0) && isEnabled (1) && isEnabled (slot),
+                       "POLY + a built layer: the chosen slot is ADDED, nothing is switched off");
+                CHECK (enabledCount() == 3, "a deliberate 2-slot arrangement survives a patch load");
+            }
+
+            // SOLO -> the chosen patch becomes the soloed slot
+            proc.setParamNormalized ("host.solo", 1.0f);
+            setEnables (true, true, false, false);
+            row = firstBundleRow (3);
+            if (row >= 0)
+            {
+                const int slot = browser.rowSlot (row);
+                browser.activateRow (row);
+                CHECK (isEnabled (slot) && enabledCount() == 1,
+                       "SOLO: the chosen patch becomes the one slot that sounds");
+            }
+            proc.setParamNormalized ("host.solo", 0.0f);
+        }
+
+        //----------------------------------------------------------------------
+        // The client's own library SHAPE, built as a fixture so the case is
+        // covered on any machine: two bundles in ONE world (mks), one in
+        // rhodes-ep, and NOTHING for fm or strings.
+        //----------------------------------------------------------------------
+        std::printf ("\n== R8 (3) the client's library shape (2 in one world, 2 worlds empty) ==\n");
+        const auto libRoot = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                 .getChildFile ("JMSignatureRound8Library");
+        {
+            libRoot.deleteRecursively();
+            libRoot.createDirectory();
+            struct Fx { const char* name; const char* world; double hz; };
+            const Fx fixtures[] = { { "MKS20", "mks", 220.0 },
+                                    { "Piano", "mks", 277.18 },
+                                    { "EP2",   "rhodes-ep", 329.63 } };
+            juce::WavAudioFormat wav;
+            for (auto& f : fixtures)
+            {
+                auto dir = libRoot.getChildFile (juce::String (f.name) + ".jmi");
+                dir.getChildFile ("samples").createDirectory();
+                auto wf = dir.getChildFile ("samples").getChildFile ("tone.wav");
+                {
+                    const int len = 48000;      // 1 s at 48 kHz
+                    juce::AudioBuffer<float> b (1, len);
+                    for (int s = 0; s < len; ++s)
+                        b.setSample (0, s, 0.5f * (float) std::sin (2.0 * juce::MathConstants<double>::pi
+                                                                   * f.hz * (double) s / 48000.0));
+                    if (auto out = wf.createOutputStream())
+                        if (auto* w = wav.createWriterFor (out.release(), 48000.0, 1, 16, {}, 0))
+                        { w->writeFromAudioSampleBuffer (b, 0, len); delete w; }
+                }
+                juce::String js;
+                js << "{\"formatVersion\":1,\"meta\":{\"name\":\"" << f.name << "\",\"world\":\"" << f.world
+                   << "\",\"author\":\"round8 fixture\",\"createdAt\":\"2026-09-02T00:00:00Z\","
+                      "\"captureMode\":\"auto\",\"channels\":\"mono\",\"sampleRate\":48000,\"bitDepth\":16,"
+                      "\"notes\":\"\"},\"soundType\":\"sustaining\",\"zones\":[{\"rootNote\":60,"
+                      "\"keyRangeLo\":0,\"keyRangeHi\":127,\"velRangeLo\":1,\"velRangeHi\":127,"
+                      "\"roundRobins\":[{\"file\":\"samples/tone.wav\",\"peakDb\":-6.0,\"lengthMs\":1000}]}]}";
+                dir.getChildFile ("instrument.json").replaceWithText (js);
+            }
+            proc.state.library.setLibraryDirTransient (libRoot);
+            // Emulate a FRESH INSTANCE restoring saved state against this
+            // library: empty engines, slots still naming the old bundles by
+            // absolute path. That is the client's situation exactly, and it is
+            // the path round 8 changed — substitute from the library where it
+            // can, empty the slot where it cannot, never load the pinned path.
+            for (auto& e : proc.engines) e.setBundle (nullptr);
+            proc.syncAllToDsp();
+
+            std::printf ("  library now lists %d bundles:", (int) proc.state.library.bundles().size());
+            bool anyPlaceholder = false;
+            for (auto& b : proc.state.library.bundles())
+            {
+                std::printf (" %s(%s)", b.name.toRawUTF8(), worldName (b.world));
+                if (b.name.containsIgnoreCase ("Placeholder")) anyPlaceholder = true;
+            }
+            std::printf ("\n");
+            CHECK ((int) proc.state.library.bundles().size() == 3 && ! anyPlaceholder,
+                   "only the player's own instruments are listed (no placeholders)");
+            CHECK ((int) proc.state.library.bundlesForWorld (1).size() == 2,
+                   "two instruments share the mks world");
+            CHECK (proc.state.library.bundlesForWorld (2).empty()
+                   && proc.state.library.bundlesForWorld (3).empty(),
+                   "fm and strings have nothing — as in the client's library");
+
+            // both mks instruments must be reachable and audible from the mks page
+            setEnables (true, false, false, false);
+            proc.state.currentPage = 1;
+            browser.rebuild();
+            int played = 0;
+            juce::AudioBuffer<float> a, b;
+            for (int i = 0; i < browser.rowCount(); ++i)
+            {
+                if (! browser.rowIsBundle (i)) continue;
+                const int slot = browser.rowSlot (i);
+                browser.activateRow (i);
+                renderNote (played == 0 ? a : b);
+                const double level = rms (played == 0 ? a : b);
+                std::printf ("  mks row \"%s\" -> slot %c rms=%.6f\n",
+                             browser.rowName (i).toRawUTF8(), (char) ('A' + slot), level);
+                CHECK (level > 1.0e-4, "each mks instrument is audible when chosen");
+                CHECK (enabledCount() == 1 && isEnabled (slot),
+                       "the mks page's slot is the one the player hears");
+                ++played;
+            }
+            CHECK (played == 2, "both mks instruments were auditioned from the one page");
+            if (played == 2)
+                CHECK (differ (a, b) > 1.0e-3, "the two mks instruments render DIFFERENT audio");
+
+            // an empty-world page: nothing to load, and nothing goes silent
+            proc.state.currentPage = 2;
+            browser.rebuild();
+            std::printf ("  fm page browser rows: %d, message: \"%s\"\n",
+                         browser.rowCount(),
+                         browser.emptyMessage().replaceCharacter ('\n', ' ').toRawUTF8());
+            CHECK (browser.rowCount() == 0, "an empty world lists nothing (no placeholder fallback)");
+            CHECK (browser.emptyMessage().containsIgnoreCase ("FM")
+                   && browser.emptyMessage().containsIgnoreCase ("library"),
+                   "the browser says WHY the page is empty instead of showing a black box");
+            juce::AudioBuffer<float> onEmptyPage;
+            renderNote (onEmptyPage);
+            CHECK (rms (onEmptyPage) > 1.0e-4,
+                   "visiting a world the library cannot fill never silences the instrument");
+        }
+
+        std::printf ("\n== R8 (4) saved state that names an instrument the library no longer has ==\n");
+        {
+            // Exactly the client's situation: state written when the library was
+            // empty pinned the testdata placeholders BY ABSOLUTE PATH, and
+            // syncSlotToDsp used to load that path straight off disk for ever.
+            const juce::File stale (juce::String (JM_LIBRARY_TESTDATA) + "/JM_Placeholder_MKS.jmi");
+            std::printf ("  stale reference: %s (exists on disk: %d)\n",
+                         stale.getFullPathName().toRawUTF8(), (int) stale.isDirectory());
+
+            // (a) the world still has instruments -> substitute one of them
+            {
+                auto& s = proc.state.slots[1];
+                s.world = 1;
+                s.bundleDir = stale.getFullPathName();
+                s.bundleName = "JM Placeholder MKS";
+                proc.engines[1].setBundle (nullptr);
+                proc.state.libraryNotice.clear();
+                proc.syncSlotToDsp (1);
+                auto lb = proc.engines[1].bundle();
+                std::printf ("  -> loaded \"%s\", notice: \"%s\"\n",
+                             lb != nullptr ? lb->dir.getFileName().toRawUTF8() : "(none)",
+                             proc.state.libraryNotice.toRawUTF8());
+                CHECK (lb != nullptr && lb->dir.getParentDirectory() == libRoot,
+                       "a stale reference is NOT resurrected from disk — the library substitutes");
+                CHECK (proc.state.library.find (juce::File (s.bundleDir)) != nullptr,
+                       "the slot's stored path is corrected to something the library offers");
+                CHECK (proc.state.libraryNotice.isNotEmpty(),
+                       "the substitution is said out loud, not done silently");
+            }
+            // (b) the world has nothing -> the slot is honestly left empty
+            {
+                auto& s = proc.state.slots[3];
+                s.world = 3;
+                s.bundleDir = stale.getFullPathName();
+                s.bundleName = "JM Placeholder MKS";
+                proc.engines[3].setBundle (nullptr);
+                proc.state.libraryNotice.clear();
+                proc.syncSlotToDsp (3);
+                std::printf ("  -> strings slot bundle: %s, notice: \"%s\"\n",
+                             proc.engines[3].bundle() == nullptr ? "(empty)" : "LOADED",
+                             proc.state.libraryNotice.toRawUTF8());
+                CHECK (proc.engines[3].bundle() == nullptr && s.bundleDir.isEmpty(),
+                       "with nothing to substitute the slot is left visibly empty, not filled with a ghost");
+                CHECK (proc.state.libraryNotice.isNotEmpty(), "and that is reported too");
+            }
+        }
+
+        // put the process back on the testdata library it was started with
+        proc.state.library.setLibraryDirTransient (juce::File (JM_LIBRARY_TESTDATA));
+        libRoot.deleteRecursively();
+        proc.state.libraryNotice.clear();
+        for (auto& e : proc.engines) e.allNotesOff (false);
+    }
 
     juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
     std::printf ("\nworst measured hero offset: (%d,%d) px\n", worstDx, worstDy);

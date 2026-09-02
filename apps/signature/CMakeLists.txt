@@ -211,7 +211,8 @@ target_compile_definitions(JMSignatureSnapshot PRIVATE
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_MODAL_LOOPS_PERMITTED=1
-    JM_SNAPSHOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/build/snapshots")
+    JM_SNAPSHOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/build/snapshots"
+    JM_LIBRARY_TESTDATA="${CMAKE_CURRENT_SOURCE_DIR}/../../testdata")
 target_link_libraries(JMSignatureSnapshot PRIVATE
     JMAssets
     juce::juce_audio_utils

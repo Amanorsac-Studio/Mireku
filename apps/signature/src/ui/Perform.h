@@ -1143,6 +1143,17 @@ public:
                         juce::Justification::centredRight, false);
             g.setFont (Theme::value (13.0f));
         }
+        // ROUND 8: a saved patch that named an instrument the library no longer
+        // has is substituted, never resurrected off disk — and it says so here
+        // instead of quietly playing something the browser does not list.
+        else if (proc_.state.libraryNotice.isNotEmpty())
+        {
+            g.setColour (Theme::warnRed.withAlpha (0.9f));
+            g.setFont (Theme::value (11.0f));
+            g.drawText (proc_.state.libraryNotice, 250, 0, getWidth() - 750, getHeight(),
+                        juce::Justification::centredLeft, true);
+            g.setFont (Theme::value (13.0f));
+        }
 
         const float cpu = proc_.cpuLoad.load();
         g.setColour (Theme::muted);

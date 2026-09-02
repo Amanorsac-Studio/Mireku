@@ -430,6 +430,11 @@ struct AppState
     LearnState learn;
     int currentPage = 0;             // 0..3 model pages, 4 = perform
     juce::String performPresetName;
+    // ROUND 8: one line of plain truth about what the library did to a slot the
+    // saved state asked for and the library no longer offers. Set by
+    // JMSignatureProcessor::syncSlotToDsp, shown in the bottom status bar,
+    // deliberately NOT persisted — it describes this session's load, not the patch.
+    juce::String libraryNotice;
 
     AppState()
     {

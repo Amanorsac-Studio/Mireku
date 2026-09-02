@@ -478,6 +478,12 @@ public:
         rescan();
     }
 
+    /// ROUND 8 (self-check only): repoint the scan WITHOUT writing settings.json,
+    /// so a test can build a library of a chosen shape — e.g. the client's two
+    /// bundles in one world and two worlds with nothing — inside one process
+    /// without touching the developer's own settings.
+    void setLibraryDirTransient (const juce::File& f) { libraryDir_ = f; rescan(); }
+
     void loadSettings()
     {
         libraryDir_ = defaultLibraryDir();
@@ -568,6 +574,22 @@ public:
         std::vector<BundleInfo> out;
         for (auto& b : bundles_) if (b.world == world) out.push_back (b);
         return out;
+    }
+
+    // CLIENT REVIEW ROUND 8 — saved state and performance presets reference a
+    // bundle by ABSOLUTE PATH. These two answer "is that path still one of the
+    // instruments this library offers?" and "what should stand in for it?", so
+    // a stale reference can be substituted instead of resurrected off disk.
+    const BundleInfo* find (const juce::File& dir) const
+    {
+        if (dir == juce::File()) return nullptr;
+        for (auto& b : bundles_) if (b.dir == dir) return &b;
+        return nullptr;
+    }
+    const BundleInfo* firstForWorld (int world) const
+    {
+        for (auto& b : bundles_) if (b.world == world) return &b;
+        return nullptr;
     }
 
     // ----------------------------------------------------------------- load

@@ -182,7 +182,86 @@ public:
         g.setColour (juce::Colour (0xff0A0908));
         g.fillRoundedRectangle (list_.getBounds().toFloat().expanded (2.0f), 6.0f);
 
+        // ROUND 8: an empty list used to be an unexplained black rectangle. With
+        // the client's library the FM and STRINGS pages have nothing to offer,
+        // and "nothing here, and here is why" is the least a browser owes.
+        if (rows_.empty())
+        {
+            g.setColour (Theme::muted.withAlpha (0.8f));
+            g.setFont (Theme::ui (12.5f));
+            g.drawFittedText (emptyMessage(), list_.getBounds().reduced (14, 18),
+                              juce::Justification::centredTop, 6);
+        }
+
         if (! compact_ && ! artArea_.isEmpty()) drawBrandArt (g, artArea_.toFloat());
+    }
+
+    //=========================================================== ROUND 8 (test)
+    // The row activation used to live entirely inside the private ListBoxModel
+    // callback, which made "clicking a patch is audible" unreachable from the
+    // self-check without synthesising mouse events into a ListBox row. It is
+    // the same code path the mouse takes — listBoxItemClicked calls it.
+    int rowCount() const { return (int) rows_.size(); }
+    juce::String rowName (int i) const
+    {
+        return i >= 0 && i < (int) rows_.size() ? rows_[(size_t) i].name : juce::String();
+    }
+    bool rowIsBundle (int i) const
+    {
+        return i >= 0 && i < (int) rows_.size() && rows_[(size_t) i].kind == Row::Bundle;
+    }
+    int rowSlot (int i) const
+    {
+        return i >= 0 && i < (int) rows_.size() ? rows_[(size_t) i].slot : -1;
+    }
+    void activateRow (int index)
+    {
+        if (index < 0 || index >= (int) rows_.size()) return;
+        auto& r = rows_[(size_t) index];
+        switch (r.kind)
+        {
+            // ROUND 8: every row here belongs to a MODEL PAGE, i.e. the player
+            // is auditioning a sound. A patch he deliberately picked has to be
+            // one he can hear — see JMSignatureProcessor::makeSlotAudible.
+            case Row::Bundle:
+                for (auto& b : proc_.state.library.bundles())
+                    if (b.dir == r.file) { proc_.loadBundleIntoSlot (r.slot, b); break; }
+                if (proc_.engines[(size_t) r.slot].bundle() != nullptr) proc_.makeSlotAudible (r.slot);
+                break;
+            case Row::FactoryPreset:
+                if (auto lb = proc_.engines[(size_t) r.slot].bundle())
+                    if (r.presetIndex >= 0 && r.presetIndex < (int) lb->inst.presets.size())
+                    {
+                        proc_.applyJmiPresetToSlot (r.slot, lb->inst.presets[(size_t) r.presetIndex]);
+                        proc_.makeSlotAudible (r.slot);
+                    }
+                break;
+            case Row::UserPreset:
+                if (proc_.applyUserPresetToSlot (r.slot, r.file)
+                    && proc_.engines[(size_t) r.slot].bundle() != nullptr)
+                    proc_.makeSlotAudible (r.slot);
+                break;
+            case Row::Performance:
+                proc_.loadPerformancePreset (r.file);
+                break;
+        }
+    }
+
+    /// Why this list is empty, in the player's terms.
+    juce::String emptyMessage()
+    {
+        const int page = proc_.state.currentPage;
+        const int mode = tabs_[0].getToggleState() ? 0 : tabs_[2].getToggleState() ? 2 : 1;
+        if (page < 0 || page > 3)
+            return "No performance presets.\n\nArrange the slots on PERFORM,\nthen SAVE one below.";
+        if (mode == 2) return "No favourites yet.\n\nRight-click a row and\n\"Toggle Favorite\" to star it.";
+        if (search_.getText().trim().isNotEmpty())
+            return "Nothing matches\n\"" + search_.getText().trim() + "\"";
+        if (mode == 0) return "No user presets for " + juce::String (worldName (page)).toUpperCase()
+                            + ".\n\nDial in a sound and SAVE it below.";
+        return "No " + juce::String (worldName (page)).toUpperCase() + " instruments\nin your library.\n\n"
+               "Sample one with JM Capture, or copy\na .jmi bundle into your library folder\n"
+               "(gear icon " + juce::String::fromUTF8 ("\xE2\x86\x92") + " Settings).";
     }
 
     /// The search glyph sits inside the well, over the TextEditor.
@@ -267,24 +346,7 @@ private:
             });
             return;
         }
-        switch (r.kind)
-        {
-            case Row::Bundle:
-                for (auto& b : proc_.state.library.bundles())
-                    if (b.dir == r.file) { proc_.loadBundleIntoSlot (r.slot, b); break; }
-                break;
-            case Row::FactoryPreset:
-                if (auto lb = proc_.engines[(size_t) r.slot].bundle())
-                    if (r.presetIndex >= 0 && r.presetIndex < (int) lb->inst.presets.size())
-                        proc_.applyJmiPresetToSlot (r.slot, lb->inst.presets[(size_t) r.presetIndex]);
-                break;
-            case Row::UserPreset:
-                proc_.applyUserPresetToSlot (r.slot, r.file);
-                break;
-            case Row::Performance:
-                proc_.loadPerformancePreset (r.file);
-                break;
-        }
+        activateRow (row);
     }
 
     void doSave()
@@ -1067,6 +1129,7 @@ public:
             if (juce::String (lb->inst.presets[(size_t) i].name) == proc_.state.slots[(size_t) slot_].presetName)
                 { cur = i; break; }
         proc_.applyJmiPresetToSlot (slot_, lb->inst.presets[(size_t) (((cur + delta) % n + n) % n)]);
+        proc_.makeSlotAudible (slot_);      // ROUND 8 — stepping patches is auditioning
     }
 
     void rebuildContent()

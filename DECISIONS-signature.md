@@ -3,6 +3,180 @@
 Judgment calls made while building the JUCE plugin, per JM-BUILD-SPEC.md §5.
 Owner: JM Signature build agent.
 
+## Client review round 8 — "sounds are not changing when I change sound" (2026-09-02)
+
+Two reports, one fix each: a patch chosen on a model page was inaudible, and
+placeholders could still be heard once a real library existed. No DSP, no
+modulation, no `.jmi` format and no visual-design change; nothing was added to
+the audio thread.
+
+### Issue 1 — the confirmed root cause
+
+`slotForWorld()` (`src/ui/Panels.h`) maps a model page to *the first slot hosting
+that world*. With the default layout (A=Rhodes, B=MKS, C=FM, D=Strings) the MKS
+page edits **slot B**, the FM page slot C, the STRINGS page slot D. But
+`createLayout()` declares `slotEnable0` **true and the other three false** — only
+slot A is enabled at first run (recorded under "Model pages ↔ Perform slots") —
+and **a disabled slot never receives a note**: `handleRoutedMessage()` gates every
+note-on on `slotEnable[i]` before it reaches an engine, so it is not merely muted,
+it is never played. The patch really did load; the player really did hear nothing
+new.
+
+The client's library makes this the majority case: `EP2.jmi` is **rhodes-ep** and
+both `MKS20.jmi` and `Piano.jmi` are **mks**, so *two of his three instruments*
+live on the MKS page and every one of them was inaudible when chosen.
+
+Measured, before the fix, through the real browser and the real processor
+(`UiSelfCheck`, section `R8 (1)`; the fix was temporarily disabled to record it):
+
+| page | slot | patch loaded? | voices | chosen-slot peak | other slots |
+|---|---|---|---:|---:|---:|
+| RHODES / EP | A | yes | 2 | **0.279173** | 0.000000 |
+| MKS | B | yes | **0** | **0.000000** | 0.242646 |
+| FM | C | yes | **0** | **0.000000** | 0.188495 |
+| STRINGS | D | yes | **0** | **0.000000** | 0.272691 |
+
+Note the third column: every state-level assertion about the load passes. That is
+exactly why this survived seven review rounds — the only formulation that catches
+it renders audio and asks *which slot is making it*. The last column is the
+client's experience in one number: whatever he picked, he kept hearing slot A.
+
+### The behaviour chosen — patch load versus slot enable
+
+New `JMSignatureProcessor::makeSlotAudible (int slot)`, called from the
+**audition paths only**: the preset browser's instrument / factory-preset /
+user-preset rows (which exist only on model pages) and the model page's
+prev/next patch stepper. It is **never** called from the Perform page.
+
+| situation | what happens | why |
+|---|---|---|
+| **SOLO** | the chosen slot becomes the soloed one | the switch already means "exactly one slot sounds". Picking a sound in SOLO and not hearing it is indefensible. |
+| **POLY, ≤ 1 slot enabled** | the enable **moves** to the chosen slot | this is the single-instrument setup the plugin ships in and the client's setup. There is no arrangement to protect, so he hears the sound he picked **and only that sound** — not it layered under the Rhodes he did not ask for. |
+| **POLY, ≥ 2 slots enabled** | the chosen slot is **added**; nothing is switched off | the player has deliberately built a layer. His arrangement survives, he gets his new sound, and the Perform power buttons stay the authority. |
+
+**Why the test is the observable enable count and not a hidden "has arranged"
+flag.** A stored flag would make identical-looking states behave differently, and
+the player has no way to see which one he is in. The enable count is *readable
+off the four power lamps*: one lamp lit means "this is my instrument, swap it";
+two or more means "this is my rig, don't touch it". A rule the player can predict
+by looking is worth more than a rule that is theoretically more precise.
+
+That is also the answer to the Perform-page composition question. The distinction
+between auditioning and arranging is drawn **by where the click happened**, not
+guessed: the Perform slot cards' world and patch combos deliberately do *not*
+call `makeSlotAudible`, because a card carries its own power button an inch away
+and a player editing that page is arranging, not shopping. Loading a patch there
+behaves exactly as it did before.
+
+Mechanically: the target is enabled **before** the others are cleared, so the
+exclusive case never passes through a moment of silence, and each write is a
+proper `begin/endChangeGesture` pair so hosts record it as one edit. Slots that
+are switched off keep rendering their ringing voices (the existing
+`! enabled && activeVoices() == 0` guard), so nothing clicks.
+
+### Issue 2 — placeholders, and stale bundle references in saved state
+
+The scan itself was already right: `Library::rescan()` falls back to
+`C:\JM VST\testdata` only when the configured folder yields **no** bundles, and
+every `loadBundleIntoSlot` call site takes its `BundleInfo` from
+`library.bundles()` / `bundlesForWorld()`. **One** route remained, and it is the
+likely second half of the client's complaint: saved plugin state and performance
+presets pin a bundle **by absolute path**, and `syncSlotToDsp()` loaded that path
+straight off disk regardless of what the library now held. State written while his
+library folder was empty pinned the testdata placeholders — and then resurrected
+them for ever, in a session whose browser correctly listed only his own three
+instruments. A sound he could hear but could not find in the list.
+
+**Decision: the library is the authority, and the substitution is said out loud.**
+A reference the library does not offer is no longer loaded. The first library
+instrument of the slot's world stands in, the slot's stored path and name are
+corrected so the next save is honest, and the bottom status bar carries the line
+`"JM Placeholder MKS" is not in your library - loaded "MKS20"` (also written to
+the log). If the library has nothing for that world the slot is left **genuinely
+empty** with `"…" is not in your library - slot D is empty` — an empty slot the
+player can see beats a ghost he cannot find. The notice is deliberately **not
+persisted**: it describes this session's load, not the patch.
+
+Silently loading it from disk was the wrong default because it makes the browser
+lie. Silently dropping it would have been the other wrong default, because the
+player would lose a sound with no explanation. Substituting *and saying so* is the
+only option that leaves him able to act.
+
+The `testdata` placeholders are untouched — they are the CI fixtures and the
+documented dev fallback, and `UiSelfCheck` still runs against them via
+`JM_LIBRARY_DIR`.
+
+### The empty-world pages (FM and STRINGS, for this client)
+
+- The browser listed **nothing, with no explanation** — an unlit black rectangle.
+  It now draws why: *"No FM instruments in your library. Sample one with JM
+  Capture, or copy a .jmi bundle into your library folder (gear icon → Settings)."*
+  with distinct wording for an empty favourites tab, an empty user-preset tab, a
+  search that matched nothing, and an empty performance list.
+- The model page itself already said `NO BUNDLE - CLICK TO BROWSE`; unchanged.
+- **Visiting such a page cannot silence the instrument.** There is nothing to
+  load, so `makeSlotAudible` is never reached and no enable moves — asserted, by
+  playing a note while sitting on the FM page with an fm-less library.
+
+### New / changed
+
+- `src/plugin/PluginProcessor.{h,cpp}` — `makeSlotAudible()`; the stale-reference
+  rule in `syncSlotToDsp()`.
+- `src/engine/Library.h` — `find()`, `firstForWorld()`, and
+  `setLibraryDirTransient()` (self-check only: repoints the scan **without**
+  writing `settings.json`).
+- `src/engine/AppState.h` — `libraryNotice`, one line of plain truth, not persisted.
+- `src/ui/Panels.h` — `makeSlotAudible` at the audition call sites; the row
+  activation moved out of the private `ListBoxModel` callback into a public
+  `activateRow()` (the same code path the mouse takes) so the self-check can
+  click a patch instead of synthesising mouse events into a `ListBox`; the
+  empty-list message.
+- `src/ui/Perform.h` — the status-bar notice.
+- `tests/SnapshotCheck.cpp` — four new sections; `CMakeLists.txt` gains
+  `JM_LIBRARY_TESTDATA` for the snapshot target.
+
+### The regression test that would have caught it
+
+`UiSelfCheck` sections `R8 (1)`–`R8 (4)`, all through the real processor, the real
+browser and real rendered audio:
+
+1. **Every model page, in turn**: click its first instrument row, play a note,
+   and assert the chosen slot has voices, that *its* peak is non-zero and that
+   **every other slot's is zero** — then that the rendered mix differs from the
+   previous page's. The per-slot peak matters: an earlier draft compared only the
+   mix, and it passed on the broken build, because slot A was still sounding and
+   round-robin cycling made consecutive renders differ anyway. Measuring the mix
+   answers "did something change"; measuring per slot answers "did the thing I
+   picked start playing", which is the actual question.
+2. **The three arrangement cases** above — enable moves, enable adds, SOLO.
+3. **The client's library shape, built as a fixture** so it is covered on any
+   machine: two bundles in one world, one in another, two worlds with nothing.
+   Both mks instruments are auditioned from the one page and render different
+   audio; the fm page lists zero rows and explains itself; playing there stays
+   audible.
+4. **A stale reference** to a real testdata placeholder, both ways — substituted
+   when the world has instruments, left empty when it does not, notice set in
+   both cases.
+
+### Build / test evidence
+
+- Release build (VST3 + AU + Standalone + all console targets): **exit 0**. Two
+  relinks hit **LNK1104** because the client's standalone was running; the
+  "JM Signature" process (**PID 41440**, and once more after he relaunched) was
+  terminated and the build completed. **The standalone was not launched.**
+- `ctest -C Release`: **100 % passed, 5/5** — `EngineTests` 4.90 s, `UiSelfCheck`
+  19.19 s, `NullTest` 2.11 s, `RateBufferMatrix` 5.10 s, `AudioRegression` 1.03 s.
+  The audio-regression reference did **not** move: nothing in this round touches
+  a sample the DSP produces.
+- **Against the client's own library**
+  (`JM_LIBRARY_DIR=C:\Users\amano\Documents\JM Signature\Library`): every `R8`
+  assertion passes, including both mks instruments and the two empty worlds
+  (`page 2: no instruments in the library`, likewise page 3). The four failures
+  that remain in that run are the **pre-existing** round-5 ones — the Omni,
+  device-routing and arp assertions need four populated slots, which is precisely
+  why `JM_LIBRARY_DIR` was introduced to point `UiSelfCheck` at `testdata`. They
+  are not regressions and are unchanged by this round.
+
 ## DSP standards pass — aliasing, DC, feedback margin, interpolation, rate independence (2026-08-31)
 
 Raising the FX/voice DSP to `pedal-style-effect-plugin-development-guide.md`
@@ -1067,6 +1241,8 @@ the ARP bottom-bar plate is deliberately still a disabled placeholder. New files
 ## Model pages ↔ Perform slots
 - The plugin owns **4 slot engines** (Perform A–D). By default slot A=Rhodes, B=MKS, C=FM, D=Strings. A model page edits **the first slot hosting that world**; if no slot hosts the world, the page falls back to the same-index slot and loading a patch from that page assigns the world to it. This keeps one engine instance count (4) while satisfying "each slot loads any world/patch".
 - Default slot enables: only slot A enabled at first run (all four stacked would be a wall of sound); the approved reference's all-on look is one click away.
+  **Qualified by client review round 8**: because a disabled slot never receives a note, this default made every model page but the first silent when a patch was chosen. Choosing a patch on a model page now makes that slot audible — moving the enable in a single-instrument setup, adding it to a layer the player built, and soloing it in SOLO. Perform-page loads are untouched.
+- **Round 8**: a slot whose stored `bundleDir` is not in the current library is no longer loaded from that path; the library substitutes (or the slot is left empty) and the status bar says so.
 - Model-page "EQ" sub-tab binds to the slot rack's Vintage EQ unit, auto-inserting one (flat) if the rack has room — keeps a single EQ implementation and the preset JSON portable.
 - Rhodes **Bark** maps to layer-crossfade bias (+0..+30 velocity toward harder layers) plus a gentle per-voice tanh drive. **Tine** = 3.2 kHz bell ±8 dB, **Body** = 200 Hz low shelf ±8 dB, **Tremolo/Space** drive the rack units (tremolo depth; tape delay + plate mix). Similar curated mappings for MKS/FM/Strings per §5.2 (FM Brightness = velocity-scaled per-voice LP; Strings Swell = 10 ms–2 s attack override; Motion = slow pan/level LFO).
 

@@ -1238,6 +1238,56 @@ void JMSignatureProcessor::loadBundleIntoSlot (int slot, const BundleInfo& info)
     stateChanged.sendChangeMessage();
 }
 
+// CLIENT REVIEW ROUND 8 — the whole of the client's complaint.
+//
+// The model pages address a slot through slotForWorld(): the MKS page edits
+// whichever slot hosts world "mks", which with the default layout is slot B.
+// Only slot A is enabled at first run, and a DISABLED SLOT NEVER RECEIVES A
+// NOTE (processBlock's routing gate), so choosing MKS20 or Piano really did
+// load the patch and really did produce no audible change whatsoever.
+//
+// The rule, and why it is this rule rather than "always enable":
+//
+//   * SOLO — the switch already means "exactly one slot sounds". Choosing a
+//     patch makes the chosen slot the soloed one. Anything else would mean
+//     picking a sound in SOLO and not hearing it.
+//   * POLY with at most one slot enabled — this is the single-instrument
+//     setup the plugin ships in. There is no arrangement to protect, so the
+//     enable MOVES to the slot the player just chose: he hears the sound he
+//     picked, and only that sound. This is the client's case exactly.
+//   * POLY with two or more slots enabled — the player has deliberately built
+//     a layer. We only ever ADD the chosen slot; nothing he switched on is
+//     switched off behind his back. He gets his new sound, his layer survives,
+//     and the Perform page's power buttons remain the authority.
+//
+// The test is the observable enable count, not a hidden "has arranged" flag:
+// a rule the player can read off the four power lamps is one he can predict.
+// The target is enabled BEFORE the others are cleared, so the exclusive case
+// never passes through a moment of silence.
+void JMSignatureProcessor::makeSlotAudible (int slot)
+{
+    if (slot < 0 || slot > 3) return;
+    auto setEnable = [this] (int i, bool on)
+    {
+        if (auto* p = apvts.getParameter ("slotEnable" + juce::String (i)))
+            if ((p->getValue() >= 0.5f) != on)
+            {
+                p->beginChangeGesture();
+                p->setValueNotifyingHost (on ? 1.0f : 0.0f);
+                p->endChangeGesture();
+            }
+    };
+    const bool solo = soloParam != nullptr && soloParam->load() >= 0.5f;
+    int enabled = 0;
+    for (int i = 0; i < 4; ++i)
+        if (slotEnable[(size_t) i] != nullptr && slotEnable[(size_t) i]->load() >= 0.5f) ++enabled;
+
+    setEnable (slot, true);
+    if (solo || enabled <= 1)
+        for (int i = 0; i < 4; ++i)
+            if (i != slot) setEnable (i, false);
+}
+
 void JMSignatureProcessor::applyJmiPresetToSlot (int slot, const jmi::Preset& preset)
 {
     auto& s = state.slots[(size_t) slot];
@@ -1410,6 +1460,46 @@ void JMSignatureProcessor::syncSlotToDsp (int i)
         if (current == nullptr || current->dir.getFullPathName() != s.bundleDir)
         {
             juce::File dir (s.bundleDir);
+            // ------------------------------------------- CLIENT REVIEW ROUND 8
+            // "Remove all placeholders and leave just the sounds I have added."
+            //
+            // Saved plugin state and performance presets pin a bundle by
+            // ABSOLUTE PATH, and this used to load that path straight off disk
+            // whatever the library now held. A state saved while the library
+            // folder was empty pins the testdata placeholders — and then keeps
+            // resurrecting them for ever, in a session whose browser correctly
+            // lists only the client's own three instruments. That is the one
+            // remaining route by which a placeholder can be heard.
+            //
+            // The library is now the authority. A reference the library does
+            // not offer is NOT loaded; the first library instrument of the
+            // slot's world stands in, the slot's stored name/path are corrected
+            // so the next save is honest, and the substitution is SAID OUT LOUD
+            // in the status bar rather than done silently. If the library has
+            // nothing for that world the slot is left genuinely empty — an
+            // empty slot the player can see beats a ghost he cannot find.
+            if (state.library.find (dir) == nullptr)
+            {
+                const auto missing = s.bundleName.isNotEmpty() ? s.bundleName : dir.getFileName();
+                if (auto* sub = state.library.firstForWorld (s.world))
+                {
+                    dir = sub->dir;
+                    s.bundleDir = sub->dir.getFullPathName();
+                    s.bundleName = sub->name;
+                    state.libraryNotice = "\"" + missing + "\" is not in your library - loaded \"" + sub->name + "\"";
+                }
+                else
+                {
+                    s.bundleDir.clear();
+                    s.bundleName.clear();
+                    eng.setBundle (nullptr);
+                    state.libraryNotice = "\"" + missing + "\" is not in your library - slot "
+                                        + juce::String::charToString ((juce::juce_wchar) ('A' + i)) + " is empty";
+                    juce::Logger::writeToLog ("JM Signature: " + state.libraryNotice);
+                    return;
+                }
+                juce::Logger::writeToLog ("JM Signature: " + state.libraryNotice);
+            }
             juce::String err;
             if (auto b = dir.isDirectory() ? state.library.loadBundle (dir, err) : nullptr)
             {

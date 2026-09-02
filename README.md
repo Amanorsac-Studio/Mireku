@@ -8,6 +8,7 @@ Two applications, one shared format. Client: James Mireku (JM Studios). Spec: [d
 | **JM Capture** | [apps/capture](apps/capture) | Electron guided/auto sampling app → exports `.jmi` bundles |
 | **JM Signature** | [apps/signature](apps/signature) | JUCE 8 VST3/AU/Standalone instrument → loads `.jmi` bundles |
 | **placeholder-gen** | [tools/placeholder-gen](tools/placeholder-gen) | Synthesizes the 4 placeholder bundles into `testdata/` |
+| **Sanctuary** (Amanorsac Studio) | [apps/sanctuary](apps/sanctuary) | Separate live-service keys app + VST3/AU: sets, songs, moments, drone, wheel, deck. Own copy of the engine; JM Signature untouched. Spec: [docs/SANCTUARY-BUILD-SPEC.md](docs/SANCTUARY-BUILD-SPEC.md) · decisions: [DECISIONS-sanctuary.md](DECISIONS-sanctuary.md) |
 
 ## Quick start
 

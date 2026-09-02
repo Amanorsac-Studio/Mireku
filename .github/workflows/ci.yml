@@ -111,3 +111,61 @@ jobs:
           name: jm-signature-${{ matrix.os }}
           path: dist-plugin/*.zip
           if-no-files-found: warn
+
+  sanctuary:
+    name: Sanctuary (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build jmi-format + quick fixtures
+        run: |
+          npm run build -w @jm/jmi-format
+          npm run generate:quick -w @jm/placeholder-gen
+      - name: Configure
+        run: cmake -S apps/sanctuary -B apps/sanctuary/build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build apps/sanctuary/build --config Release --parallel
+      - name: Unit + soak tests
+        run: ctest --test-dir apps/sanctuary/build -C Release --output-on-failure
+      - name: pluginval (VST3, strictness 8)
+        shell: bash
+        run: |
+          set -e
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            curl -L -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip
+            unzip -o pluginval.zip
+            PV=./pluginval.exe
+          else
+            curl -L -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+            unzip -o pluginval.zip
+            PV="./pluginval.app/Contents/MacOS/pluginval"
+          fi
+          VST3=$(find apps/sanctuary/build -name "Sanctuary.vst3" -type d | head -n1)
+          "$PV" --strictness-level 8 --validate-in-process --skip-gui-tests --timeout-ms 600000 --validate "$VST3"
+      - name: Zip artifacts
+        shell: bash
+        run: |
+          mkdir -p dist-sanctuary
+          cd apps/sanctuary/build
+          for d in $(find . \( -name "Sanctuary.vst3" -o -name "Sanctuary.component" \) -type d); do
+            base=$(basename "$d")
+            7z a "../../../dist-sanctuary/${base}-${RUNNER_OS}.zip" "$d" >/dev/null || zip -r "../../../dist-sanctuary/${base}-${RUNNER_OS}.zip" "$d"
+          done
+          for f in $(find . -path "*Standalone*" \( -name "Sanctuary.exe" -o -name "Sanctuary.app" \) | head -n1); do
+            7z a "../../../dist-sanctuary/Sanctuary-Standalone-${RUNNER_OS}.zip" "$f" >/dev/null || zip -r "../../../dist-sanctuary/Sanctuary-Standalone-${RUNNER_OS}.zip" "$f"
+          done
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sanctuary-${{ matrix.os }}
+          path: dist-sanctuary/*.zip
+          if-no-files-found: warn

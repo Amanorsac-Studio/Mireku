@@ -45,17 +45,42 @@ SanctuaryEditor::SanctuaryEditor (SanctuaryProcessor& p) : AudioProcessorEditor 
             done (runCommand (name, a));
         });
     web_ = std::make_unique<juce::WebBrowserComponent> (opts);
+    web_->setWantsKeyboardFocus (true);
     addAndMakeVisible (*web_);
     web_->goToURL (juce::WebBrowserComponent::getResourceProviderRoot());
 
     proc_.stageChanged.addChangeListener (this);
     proc_.rigChanged.addChangeListener (this);
     proc_.learnChanged.addChangeListener (this);
+    setWantsKeyboardFocus (true);
     setResizable (true, true);
     setResizeLimits (1100, 680, 4096, 2400);
     setSize (1280, 820);
     startTimerHz (30);
+    // The WebView only receives native OS keyboard focus (and therefore keystrokes) once
+    // something has explicitly asked JUCE to focus it — a plain click on the native child
+    // window never routes back through JUCE's own focus system. Grab it once we're on
+    // screen, and keep re-grabbing on the events below.
+    juce::Component::SafePointer<SanctuaryEditor> self (this);
+    juce::MessageManager::callAsync ([self] { if (self != nullptr) self->focusWebView(); });
 }
+
+void SanctuaryEditor::focusWebView()
+{
+    if (web_ == nullptr || ! isShowing())
+        return;
+    // Component::grabKeyboardFocus() early-outs if JUCE already believes `web_` is the
+    // focused component — which happens after the FIRST call, long before WebView2's native
+    // controller exists (it's created asynchronously). Every later retry would then silently
+    // no-op forever, never re-forwarding focus into the browser once the controller is ready.
+    // Force a real focus transition each time by dropping focus first.
+    web_->giveAwayKeyboardFocus();
+    web_->grabKeyboardFocus();
+}
+
+void SanctuaryEditor::visibilityChanged() { if (isShowing()) focusWebView(); }
+void SanctuaryEditor::parentHierarchyChanged() { if (isShowing()) focusWebView(); }
+void SanctuaryEditor::focusOfChildComponentChanged (FocusChangeType) {}
 
 SanctuaryEditor::~SanctuaryEditor()
 {
@@ -83,6 +108,12 @@ void SanctuaryEditor::changeListenerCallback (juce::ChangeBroadcaster*) { stateD
 
 void SanctuaryEditor::timerCallback()
 {
+    // WebView2's native controller (needed for MoveFocus) is created asynchronously, so the
+    // very first focusWebView() call after construction usually no-ops. Keep retrying for a
+    // few seconds at startup; harmless once it has actually taken (grabbing focus we already
+    // have is a no-op), and stops well before a user would be typing into a text field.
+    if (focusGrabAttempts_ < 90) { ++focusGrabAttempts_; focusWebView(); }
+
     if (splitSlot_ >= 0)
     {
         const int note = proc_.lastIncomingNote.load();

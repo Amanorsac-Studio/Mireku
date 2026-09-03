@@ -42,6 +42,18 @@ public:
     }
     void moved() override { juce::StandaloneFilterWindow::moved(); if (! isFullScreen() && ! isMinimised()) lastBounds_ = getBounds(); }
 
+    /// Alt-tabbing back into the app (or first activation) does not automatically hand OS
+    /// keyboard focus to the WebView's native child control — re-grab it explicitly so
+    /// keyboard shortcuts keep working after the window regains focus.
+    void activeWindowStatusChanged() override
+    {
+        juce::StandaloneFilterWindow::activeWindowStatusChanged();
+        if (isActiveWindow())
+            if (pluginHolder != nullptr && pluginHolder->processor != nullptr)
+                if (auto* editor = dynamic_cast<SanctuaryEditor*> (pluginHolder->processor->getActiveEditor()))
+                    editor->focusWebView();
+    }
+
 private:
     void restoreBounds()
     {

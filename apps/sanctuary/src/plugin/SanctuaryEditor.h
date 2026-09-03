@@ -21,6 +21,17 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    void visibilityChanged() override;
+    void parentHierarchyChanged() override;
+    void focusOfChildComponentChanged (FocusChangeType) override;
+
+    /// Forwards OS keyboard focus into the embedded WebView. JUCE never routes native
+    /// child-window clicks through its own mouseDown dispatch, so the WebView's internal
+    /// WebView2 control only receives focus (and therefore keystrokes) when something
+    /// explicitly grabs JUCE keyboard focus on the WebBrowserComponent itself — which then
+    /// triggers WebBrowserComponent's own focusGained handler to call MoveFocus() into the
+    /// browser. Call this whenever the editor becomes visible/active.
+    void focusWebView();
 
     /// Standalone installs its device dialog here before any editor exists.
     static std::function<void()>& audioSettingsHook() { static std::function<void()> f; return f; }
@@ -40,6 +51,8 @@ private:
     std::unique_ptr<juce::WebBrowserComponent> web_;
     bool stateDirty_ = true;
     int tickCount_ = 0;
+    int focusGrabAttempts_ = 0;         // WebView2's native controller is created async; retry
+                                         // grabbing keyboard focus for the first ~3 s at 30 Hz.
     int splitSlot_ = -1;                // Slots page "Split…": waiting for a key press
     std::unique_ptr<juce::FileChooser> chooser_;
 

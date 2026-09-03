@@ -13,3 +13,11 @@ apps/signature/external/
 
 # validation tooling (downloaded, never committed)
 tools/pluginval/
+
+# studio keys NEVER belong in the repo (they live in ~/.amanorsac)
+studio-keys.json
+*studio-key*.json
+
+# the .aofas reference vector SOURCE bundle is regenerable; the vector itself
+# (testdata/aofas/) is committed because the VST reader is built against it
+testdata/aofas-src/

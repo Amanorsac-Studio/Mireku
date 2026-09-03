@@ -1,0 +1,51 @@
+{
+  "note": "AOFAS v1 reference vector. Studio key = 32 zero bytes, keyId 1.",
+  "file": "vector1.aofas",
+  "bundleId": "5975c44a-cffd-456c-949f-b0d2aee85413",
+  "chunkSize": 65536,
+  "card": {
+    "format": "aofas",
+    "formatVersion": 1,
+    "bundleId": "5975c44a-cffd-456c-949f-b0d2aee85413",
+    "name": "AOFAS Vector",
+    "author": "Amanorsac Studio",
+    "world": "rhodes-ep",
+    "createdAt": "2026-09-02T00:00:00Z",
+    "sampleCount": 3,
+    "totalAudioBytes": 454608,
+    "minAppVersion": "1.0.0",
+    "keyId": 1
+  },
+  "streams": [
+    {
+      "id": 1,
+      "path": "samples/C3_v1_rr1.wav",
+      "codec": "pcm_s24le",
+      "frames": 3000,
+      "byteLength": 18000,
+      "offset": 2113,
+      "chunkCount": 1,
+      "plaintextSha256": "e42275de3ef359571d6259ee3c9faddd2fb6f141618cf5d56d90dff2b8ecb953"
+    },
+    {
+      "id": 2,
+      "path": "samples/C3_v2_rr1.wav",
+      "codec": "pcm_s24le",
+      "frames": 40000,
+      "byteLength": 240000,
+      "offset": 20129,
+      "chunkCount": 4,
+      "plaintextSha256": "18bd5c895b70b831d92c81eb4672d7727d8510f05109299108063e1f92f46c6d"
+    },
+    {
+      "id": 3,
+      "path": "samples/C4_v1_rr1.wav",
+      "codec": "pcm_s24le",
+      "frames": 32768,
+      "byteLength": 196608,
+      "offset": 260193,
+      "chunkCount": 3,
+      "plaintextSha256": "ac71842a1d7a218315eb37663c8b8b39f3f3001ce7f7aed2323ef94446f0f99c"
+    }
+  ]
+}

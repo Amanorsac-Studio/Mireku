@@ -6,12 +6,15 @@
   "workspaces": [
     "packages/*",
     "apps/capture",
+    "apps/amanorsac-studio",
     "tools/*"
   ],
   "scripts": {
     "build:format": "npm run build -w @jm/jmi-format",
     "gen:placeholders": "npm run generate -w @jm/placeholder-gen",
-    "test": "npm run test -w @jm/jmi-format && npm run test -w jm-capture",
-    "validate:testdata": "node packages/jmi-format/dist/cli.js validate testdata/*.jmi"
+    "test": "npm run test -w @jm/jmi-format && npm run test -w @amanorsac/aofas-format && npm run test -w jm-capture",
+    "validate:testdata": "node packages/jmi-format/dist/cli.js validate testdata/*.jmi",
+    "dev:studio": "npm run dev -w amanorsac-studio",
+    "build:aofas": "npm run build -w @amanorsac/aofas-format"
   }
 }

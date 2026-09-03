@@ -8,7 +8,9 @@ Two applications, one shared format. Client: James Mireku (JM Studios). Spec: [d
 | **JM Capture** | [apps/capture](apps/capture) | Electron guided/auto sampling app → exports `.jmi` bundles |
 | **JM Signature** | [apps/signature](apps/signature) | JUCE 8 VST3/AU/Standalone instrument → loads `.jmi` bundles |
 | **placeholder-gen** | [tools/placeholder-gen](tools/placeholder-gen) | Synthesizes the 4 placeholder bundles into `testdata/` |
-| **Sanctuary** (Amanorsac Studio) | [apps/sanctuary](apps/sanctuary) | Separate live-service keys app + VST3/AU: sets, songs, moments, drone, wheel, deck. Own copy of the engine; JM Signature untouched. Spec: [docs/SANCTUARY-BUILD-SPEC.md](docs/SANCTUARY-BUILD-SPEC.md) · decisions: [DECISIONS-sanctuary.md](DECISIONS-sanctuary.md) |
+| **.aofas format** | [packages/aofas-format](packages/aofas-format) | Sealed single-file instrument container: ChaCha20-Poly1305, chunked for streaming. Packer, reader, CLI. Spec: [docs/AOFAS-FORMAT-SPEC.md](docs/AOFAS-FORMAT-SPEC.md) |
+| **Amanorsac Studio** | [apps/amanorsac-studio](apps/amanorsac-studio) | Amanorsac-brand sampling app (own copy of JM Capture, blue theme): captures instruments and seals them to `.aofas`. JM Capture untouched |
+| **Sanctuary** (Amanorsac Studio) | [apps/sanctuary](apps/sanctuary) | Separate live-service keys app + VST3/AU: sets, songs, moments, drone, pads, wheel, deck. UI is `resources/ui/index.html` hosted in a JUCE WebView (WebView2 on Windows: `nuget install Microsoft.Web.WebView2` once, see the CMakeLists header). Own copy of the engine; JM Signature untouched. UI spec: [docs/SANCTUARY-UI-SPEC.md](docs/SANCTUARY-UI-SPEC.md). Spec: [docs/SANCTUARY-BUILD-SPEC.md](docs/SANCTUARY-BUILD-SPEC.md) · decisions: [DECISIONS-sanctuary.md](DECISIONS-sanctuary.md) |
 
 ## Quick start
 

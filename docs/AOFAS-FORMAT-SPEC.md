@@ -146,7 +146,7 @@ Two things raise that ceiling later without touching the container format:
 | 0 | 8 | bytes | `magic` | `41 4F 46 41 53 1A 0D 0A` — `"AOFAS"` + `0x1A 0x0D 0x0A` (catches text-mode / CRLF corruption) |
 | 8 | 2 | u16 | `formatVersion` | `1` |
 | 10 | 2 | u16 | `headerSize` | `128`. A reader must use this value to locate the card, not the constant, so v2 can grow the header. |
-| 12 | 4 | u32 | `flags` | bit 0 `INDEX_DEFLATED` — index JSON is raw-deflate compressed *before* encryption. bit 1 `LICENSED` — reserved; v1 writes 0, a reader rejects the file if set. bits 2–31 reserved, must be 0. |
+| 12 | 4 | u32 | `flags` | bit 0 `INDEX_DEFLATED` — index JSON is raw-deflate compressed *before* encryption. **The v1 packer writes 0** (an index is a few hundred KB next to a 400 MB payload); a reader must still support the bit, because a future packer may set it. bit 1 `LICENSED` — reserved; v1 writes 0, a reader rejects the file if set. bits 2–31 reserved, must be 0. |
 | 16 | 16 | bytes | `bundleId` | UUID v4, raw bytes in printed order |
 | 32 | 1 | u8 | `kdfId` | `1` = HKDF-SHA256 |
 | 33 | 1 | u8 | `cipherId` | `1` = ChaCha20-Poly1305 (IETF) |
@@ -229,6 +229,13 @@ handed those objects unchanged.
   ]
 }
 ```
+
+A reader **must ignore members it does not recognise**, at the top level and in
+a stream record. The v1 packer emits one such member, `_pad`: a run of spaces
+that lets the index be padded to an exact byte length. Stream offsets are
+absolute, so the index's content depends on the index's own size; fixing that
+size and padding to it is how the circle is closed. `_pad` carries no meaning
+and must never be interpreted.
 
 **The join between the two halves:** every `roundRobins[].file` in the embedded
 `instrument.json` matches exactly one `streams[].path`. That is how a zone finds

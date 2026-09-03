@@ -1,0 +1,1838 @@
+/* Amanorsac Studio global styles — colors/fonts/sizes ONLY via CSS variables
+   generated from src/ui/theme/tokens.ts. No literals here.
+
+   FAMILY RESTYLE: this sheet is the web transcription of JM Signature's
+   ux::Hardware registers (Segment / Plate / SolidGold / CHROME) plus the
+   photoreal hardware-kit furniture. Every tabbed, segmented, button, menu,
+   dropdown, input and dialog surface in the app resolves to one of them. */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background-color: var(--as-color-chassis);
+  background-image: var(--as-weave-chassis);
+  background-repeat: repeat;
+  color: var(--as-color-cream);
+  font-family: var(--as-font-body);
+  font-size: var(--as-type-body);
+  overflow: hidden;
+  user-select: none;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+.as-app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* ================================================================== */
+/* Header chassis                                                      */
+/* ================================================================== */
+
+.as-nav {
+  height: var(--as-size-nav-height);
+  display: flex;
+  align-items: center;
+  gap: calc(var(--as-size-gap-unit) * 2);
+  padding: 0 calc(var(--as-size-gap-unit) * 2);
+  background: linear-gradient(180deg, var(--as-color-panel-raised), var(--as-color-chassis));
+  border-bottom: 1px solid var(--as-color-gold-dark);
+  box-shadow: 0 4px 14px var(--as-color-shadow-soft);
+  flex-shrink: 0;
+  position: relative;
+  z-index: 5;
+}
+
+.as-brand {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--as-size-gap-unit) * 1.25);
+  min-width: 220px;
+}
+
+.as-logo {
+  font-family: var(--as-font-display);
+  font-weight: 600;
+  letter-spacing: var(--as-tracking-label);
+  color: var(--as-color-cream);
+  font-size: var(--as-type-h1);
+  line-height: 1.05;
+  text-transform: uppercase;
+}
+
+.as-logo-sub {
+  font-family: var(--as-font-display);
+  font-size: var(--as-type-label);
+  letter-spacing: var(--as-tracking-display);
+  color: var(--as-color-muted);
+  text-transform: uppercase;
+}
+
+.as-nav-center {
+  font-family: var(--as-font-display);
+  letter-spacing: var(--as-tracking-label);
+  color: var(--as-color-muted);
+  font-size: var(--as-type-label);
+  text-transform: uppercase;
+}
+
+.as-nav-master {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--as-size-gap-unit) * 1.5);
+  padding: calc(var(--as-size-gap-unit) * 0.75) calc(var(--as-size-gap-unit) * 1.5);
+  border-radius: var(--as-size-radius-control);
+  background: linear-gradient(180deg, var(--as-color-plaque-top), var(--as-color-plaque-bottom));
+  border: 1px solid var(--as-color-plaque-hairline);
+  box-shadow: 0 3px 10px var(--as-color-shadow-soft);
+}
+
+.as-screen {
+  flex: 1;
+  overflow-y: auto;
+  padding: calc(var(--as-size-gap-unit) * 3) calc(var(--as-size-gap-unit) * 4);
+}
+
+/* ================================================================== */
+/* Panels / surfaces                                                   */
+/* ================================================================== */
+
+.as-panel {
+  position: relative;
+  background-color: var(--as-color-deep-panel);
+  background-image: var(--as-weave-panel);
+  background-repeat: repeat;
+  border: 1px solid var(--as-color-panel-border);
+  border-radius: var(--as-size-radius-panel);
+  padding: calc(var(--as-size-gap-unit) * 3);
+  box-shadow:
+    0 6px 20px var(--as-color-shadow-soft),
+    inset 0 1px 0 var(--as-color-panel-border-soft);
+}
+
+/* recessed plate (guided meter, session map): the V2 recessed control surface —
+   near-black at .93, 2px warm gold stroke, inner gold hairline, inner shadow */
+.as-panel.recessed {
+  background-color: var(--as-color-panel-deep);
+  background-image: var(--as-weave-panel);
+  border: 2px solid var(--as-color-gold-dark);
+  box-shadow:
+    inset 0 8px 24px var(--as-color-shadow-soft),
+    inset 0 0 0 1px var(--as-color-panel-border-soft),
+    0 6px 20px var(--as-color-shadow-soft);
+}
+
+/* a title plaque so text never sits on undimmed cloth (Signature's legibility
+   call: title/patch text never on raw pattern) */
+.as-plaque {
+  display: inline-block;
+  background: linear-gradient(180deg, var(--as-color-plaque-top), var(--as-color-plaque-bottom));
+  border: 1px solid var(--as-color-plaque-hairline);
+  border-radius: var(--as-size-radius-control);
+  padding: calc(var(--as-size-gap-unit) * 0.75) calc(var(--as-size-gap-unit) * 2);
+  box-shadow: 0 3px 10px var(--as-color-shadow-soft);
+}
+
+.as-cloth {
+  background-color: var(--as-color-deep-panel);
+  background-repeat: repeat;
+  border: 1px solid var(--as-color-panel-border);
+}
+
+/* ================================================================== */
+/* Type registers                                                      */
+/* ================================================================== */
+
+.as-label {
+  font-family: var(--as-font-display);
+  font-weight: 400;
+  font-size: var(--as-type-label);
+  letter-spacing: var(--as-tracking-label);
+  text-transform: uppercase;
+  color: var(--as-color-muted);
+}
+
+.as-value {
+  font-family: var(--as-font-numeric);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--as-type-value);
+  color: var(--as-color-cream);
+}
+
+.as-title {
+  font-family: var(--as-font-display);
+  font-size: var(--as-type-h2);
+  letter-spacing: var(--as-tracking-label);
+  text-transform: uppercase;
+  color: var(--as-color-gold-bright);
+}
+
+/* ================================================================== */
+/* SEGMENT register — the "matured" tab strip                          */
+/* ================================================================== */
+
+.as-seg {
+  display: inline-flex;
+  align-items: stretch;
+  padding: 2px;
+  border-radius: var(--as-size-radius-control);
+  background: linear-gradient(180deg, var(--as-color-plaque-top), var(--as-color-plaque-bottom));
+  border: 1px solid var(--as-color-plaque-hairline);
+  box-shadow:
+    0 3px 10px var(--as-color-shadow-soft),
+    inset 0 1px 0 var(--as-color-shadow-inset);
+}
+
+.as-seg.grow {
+  display: flex;
+  width: 100%;
+}
+
+.as-seg.grow .as-seg-cell {
+  flex: 1;
+}
+
+.as-seg-cell {
+  position: relative;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+  padding: calc(var(--as-size-gap-unit) * 1.25) calc(var(--as-size-gap-unit) * 2.25);
+  font-family: var(--as-font-display);
+  font-weight: 600;
+  font-size: var(--as-type-label);
+  letter-spacing: var(--as-tracking-hardware);
+  text-transform: uppercase;
+  color: var(--as-color-label-idle);
+  white-space: nowrap;
+  transition: color 0.15s, background 0.15s;
+}
+
+.as-seg.compact .as-seg-cell {
+  padding: calc(var(--as-size-gap-unit) * 0.6) calc(var(--as-size-gap-unit) * 1.25);
+}
+
+/* hairline divider between inactive cells */
+.as-seg-cell:not(.first)::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 5px;
+  bottom: 5px;
+  width: 1px;
+  background: var(--as-color-plaque-divider);
+}
+
+.as-seg-cell.active::before,
+.as-seg-cell.active + .as-seg-cell::before {
+  opacity: 0;
+}
+
+.as-seg-cell:hover:not(.active):not(:disabled) {
+  background: var(--as-color-gold-glow-soft);
+}
+
+/* ACTIVE cell: lifted, warm gold top edge, soft underline, inner glow */
+.as-seg-cell.active {
+  background:
+    radial-gradient(120% 100% at 50% 0%, var(--as-color-gold-hot-glow), transparent 65%),
+    linear-gradient(180deg, var(--as-color-cell-top), var(--as-color-cell-bottom));
+  color: var(--as-color-gold-bright);
+  box-shadow: inset 0 0 0 1px var(--as-color-gold-dark);
+}
+
+.as-seg-cell.active::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  top: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--as-color-cell-edge);
+  box-shadow: 0 6px 12px var(--as-color-gold-hot-bloom);
+}
+
+.as-seg-cell:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.as-seg-cell:focus-visible {
+  outline: 2px solid var(--as-color-gold-bright);
+  outline-offset: -2px;
+}
+
+/* ================================================================== */
+/* PLATE register — the kit's photoreal button plaque                  */
+/* ================================================================== */
+
+.as-plate {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--as-size-gap-unit) * 0.75);
+  min-height: 34px;
+  min-width: 92px;
+  padding: 0 calc(var(--as-size-gap-unit) * 2.75);
+  cursor: pointer;
+  background: transparent;
+  border-style: solid;
+  border-width: var(--as-kit-button-border);
+  border-image-source: var(--as-plate-art);
+  border-image-slice: var(--as-kit-button-slice) fill;
+  border-image-width: var(--as-kit-button-border);
+  font-family: var(--as-font-display);
+  font-weight: 600;
+  font-size: var(--as-type-label);
+  letter-spacing: var(--as-tracking-hardware);
+  text-transform: uppercase;
+  color: var(--as-color-cream);
+  transition: color 0.12s, filter 0.12s;
+}
+
+.as-plate.wide {
+  min-width: 180px;
+}
+
+.as-plate:hover:not(:disabled) {
+  filter: brightness(1.16);
+  color: var(--as-color-gold-bright);
+}
+
+.as-plate.held .as-plate-label {
+  transform: translateY(1px);
+}
+
+/* engaged / toggled → the filled-gold register */
+.as-plate.on {
+  color: var(--as-color-bg);
+  text-shadow: none;
+}
+
+/* the engaged pill reaches past the padding box so the label never touches its
+   rounded ends, while still sitting inside the plaque's ornate frame */
+.as-plate.on::before {
+  content: '';
+  position: absolute;
+  inset: 3px calc(var(--as-size-gap-unit) * -1);
+  border-radius: 6px;
+  background: linear-gradient(180deg, var(--as-color-plate-on-top), var(--as-color-plate-on-bottom));
+  box-shadow: inset 0 0 0 1px var(--as-color-gold-bright);
+}
+
+.as-plate-label {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--as-size-gap-unit) * 0.75);
+}
+
+.as-plate:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.as-plate:focus-visible {
+  outline: 2px solid var(--as-color-gold-bright);
+  outline-offset: 1px;
+}
+
+/* below ~26px the kit bevel reads as a lozenge → flat member, same family */
+.as-plate.compact {
+  min-height: 24px;
+  min-width: 0;
+  padding: 0 calc(var(--as-size-gap-unit) * 1.5);
+  border: 1px solid var(--as-color-plaque-hairline);
+  border-image: none;
+  border-radius: 4px;
+  background: linear-gradient(180deg, var(--as-color-plaque-top), var(--as-color-plaque-bottom));
+  font-size: calc(var(--as-type-label) * 0.94);
+}
+
+.as-plate.compact.on::before {
+  inset: 1px calc(var(--as-size-gap-unit) * -0.5);
+  border-radius: 4px;
+}
+
+/* ================================================================== */
+/* CHROME register — menus, listboxes, wells, dialogs                  */
+/* ================================================================== */
+
+.as-well {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--as-size-gap-unit));
+  width: 100%;
+  background: linear-gradient(180deg, var(--as-color-chrome-well-top), var(--as-color-chrome-well-bottom));
+  color: var(--as-color-cream);
+  border: 1px solid var(--as-color-plaque-hairline);
+  border-radius: var(--as-size-radius-control);
+  padding: calc(var(--as-size-gap-unit) * 1.1) calc(var(--as-size-gap-unit) * 1.5);
+  font-family: var(--as-font-body);
+  font-size: var(--as-type-body);
+  box-shadow: inset 0 2px 4px var(--as-color-shadow-inset);
+  text-align: left;
+}
+
+.as-well::placeholder {
+  color: var(--as-color-muted);
+}
+
+.as-well:focus,
+.as-well:focus-visible {
+  outline: none;
+  border-color: var(--as-color-gold-bright);
+  box-shadow:
+    inset 0 2px 4px var(--as-color-shadow-inset),
+    0 0 0 1px var(--as-color-gold-bright);
+}
+
+.as-well:disabled {
+  opacity: 0.38;
+}
+
+input.as-well[type='number']::-webkit-inner-spin-button {
+  filter: invert(0.75) sepia(1) saturate(3) hue-rotate(5deg);
+}
+
+.as-listbox {
+  position: relative;
+  width: 100%;
+}
+
+.as-listbox-btn {
+  cursor: pointer;
+  justify-content: space-between;
+  color: var(--as-color-gold);
+}
+
+.as-listbox-value {
+  color: var(--as-color-cream);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.as-listbox-placeholder {
+  color: var(--as-color-muted);
+}
+
+.as-chrome-plaque {
+  background: linear-gradient(180deg, var(--as-color-chrome-top), var(--as-color-chrome-bottom));
+  border: 1px solid var(--as-color-plaque-hairline);
+  border-radius: var(--as-size-radius-control);
+  box-shadow:
+    0 10px 30px var(--as-color-shadow-drop),
+    inset 0 0 0 1px var(--as-color-shadow-inset);
+}
+
+.as-listbox-menu {
+  position: absolute;
+  z-index: 40;
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  max-height: 260px;
+  overflow-y: auto;
+  padding: calc(var(--as-size-gap-unit) * 0.75) 0;
+}
+
+.as-listbox-menu.up {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
+.as-chrome-header {
+  font-family: var(--as-font-display);
+  font-size: var(--as-type-label);
+  letter-spacing: var(--as-tracking-chrome);
+  text-transform: uppercase;
+  color: var(--as-color-chrome-header);
+  padding: calc(var(--as-size-gap-unit) * 0.75) calc(var(--as-size-gap-unit) * 1.5);
+  display: flex;
+  align-items: center;
+  gap: calc(var(--as-size-gap-unit));
+}
+
+.as-chrome-header::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--as-color-gold-dark);
+  opacity: 0.5;
+}
+
+.as-chrome-item {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--as-size-gap-unit));
+  width: 100%;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+  padding: calc(var(--as-size-gap-unit) * 0.85) calc(var(--as-size-gap-unit) * 1.25);
+  color: var(--as-color-cream);
+  font-size: var(--as-type-body);
+}
+
+/* THE gold highlight row — never the system blue */
+.as-chrome-item:hover,
+.as-chrome-item:focus-visible {
+  outline: none;
+  background: linear-gradient(180deg, var(--as-color-chrome-row-top), var(--as-color-chrome-row-bottom));
+  box-shadow:
+    inset 0 1.6px 0 var(--as-color-cell-edge),
+    inset 0 0 0 1px var(--as-color-gold-dark);
+  color: var(--as-color-gold-bright);
+}
+
+.as-chrome-tick {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  color: var(--as-color-gold-bright);
+  display: inline-flex;
+}
+
+.as-chrome-item-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.as-chrome-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: var(--as-color-scrim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.as-chrome-dialog {
+  min-width: 380px;
+  max-width: 560px;
+  padding: calc(var(--as-size-gap-unit) * 2);
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--as-size-gap-unit) * 1.5);
+}
+
+/* ================================================================== */
+/* Kit furniture                                                       */
+/* ================================================================== */
+
+.as-power {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  line-height: 0;
+  filter: grayscale(1) brightness(0.5);
+  transition: filter 0.15s;
+}
+
+.as-power.on {
+  filter: none;
+  border-radius: 50%;
+  box-shadow: 0 0 12px var(--as-color-gold-glow);
+}
+
+.as-power img {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* The kit divider is a TALL vertical bar; it is rotated a quarter turn (never
+   squashed, which would smear its length across the width). */
+.as-gold-divider {
+  container-type: inline-size;
+  position: relative;
+  height: 7px;
+  width: 100%;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.as-gold-divider::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 7px;
+  height: 100cqw;
+  transform: translate(-50%, -50%) rotate(90deg);
+  background-image: var(--as-divider-art);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  opacity: 0.92;
+}
+
+.as-rack-corner {
+  position: absolute;
+  top: 0;
+  width: 34px;
+  height: 50px;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  pointer-events: none;
+  opacity: 0.95;
+  z-index: 2;
+}
+
+.as-rack-corner.left {
+  left: 0;
+}
+
+.as-rack-corner.right {
+  right: 0;
+  transform: scaleX(-1);
+}
+
+/* The header meter is the same column rotated a quarter turn — source bottom
+   lands on the left, so the green segments lead (Signature's header rule). */
+.as-kit-meter-wrap {
+  position: relative;
+  flex-shrink: 0;
+  overflow: visible;
+}
+
+.as-kit-meter-wrap > .as-kit-meter {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%) rotate(-90deg);
+}
+
+.as-kit-meter {
+  position: relative;
+  overflow: hidden;
+  background: var(--as-meter-well);
+  border: 1px solid var(--as-meter-frame);
+  border-radius: var(--as-size-radius-cell);
+  flex-shrink: 0;
+  box-shadow: inset 0 2px 6px var(--as-color-shadow-deep);
+}
+
+.as-kit-meter-art {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 100%;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+}
+
+.as-kit-meter-art.ghost {
+  opacity: 0.14;
+}
+
+.as-kit-meter-clip {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  overflow: hidden;
+}
+
+/* ================================================================== */
+/* Knob                                                                */
+/* ================================================================== */
+
+.as-knob {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: calc(var(--as-size-gap-unit) * 0.35);
+  width: 100%;
+  max-width: calc(var(--as-size-knob-diameter) + var(--as-size-gap-unit) * 4);
+  min-width: 0;
+}
+
+.as-knob-hardware {
+  position: relative;
+  cursor: ns-resize;
+  touch-action: none;
+  flex-shrink: 0;
+}
+
+.as-knob-arc {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.as-knob-art {
+  position: absolute;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.as-knob-motif {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+
+.as-knob-label {
+  width: 100%;
+  font-family: var(--as-font-display);
+  font-size: calc(var(--as-type-label) * 0.92);
+  letter-spacing: var(--as-tracking-hardware);
+  text-transform: uppercase;
+  color: var(--as-color-cream);
+  text-align: center;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+  text-shadow: 0 1px 2px var(--as-color-shadow-deep);
+}
+
+.as-knob-value {
+  font-family: var(--as-font-numeric);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--as-type-label);
+  color: var(--as-color-cream);
+}
+
+.as-knob-row {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: calc(var(--as-size-gap-unit) * 1.25) 0;
+  justify-items: center;
+}
+
+/* ================================================================== */
+/* FX rack (photoreal faceplates)                                      */
+/* ================================================================== */
+
+/* The rack ears live on the frame so they stay put while the strip scrolls. */
+.as-rack-frame {
+  position: relative;
+  border-radius: var(--as-size-radius-panel);
+  background: var(--as-color-bg);
+  box-shadow: inset 0 6px 22px var(--as-color-shadow-deep);
+}
+
+/* Units stretch to a common height so the row reads as one rack, with BYPASS
+   pinned to each unit's foot (Signature's rack strip). */
+.as-rack {
+  position: relative;
+  display: flex;
+  gap: calc(var(--as-size-gap-unit) * 1.5);
+  align-items: stretch;
+  overflow-x: auto;
+  padding: calc(var(--as-size-gap-unit) * 2) calc(var(--as-size-gap-unit) * 6.5);
+  border-radius: var(--as-size-radius-panel);
+}
+
+.as-fx-unit {
+  position: relative;
+  flex-shrink: 0;
+  width: var(--as-size-fx-unit-width);
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--as-size-gap-unit));
+  padding: calc(var(--as-size-gap-unit) * 1.5) calc(var(--as-size-gap-unit) * 0.5);
+  border-style: solid;
+  border-width: var(--as-kit-panel-border);
+  border-image-source: var(--as-fx-plate);
+  border-image-slice: var(--as-kit-panel-slice) fill;
+  border-image-width: var(--as-kit-panel-border);
+  filter: drop-shadow(0 6px 14px var(--as-color-shadow-drop));
+  /* reordering is armed from .as-fx-grip only — see "reorder" below */
+  cursor: default;
+}
+
+/* widener is the one unit carrying a gold wash over its plate */
+.as-fx-unit.gold-wash::before {
+  content: '';
+  position: absolute;
+  inset: 6px;
+  border-radius: 6px;
+  background: var(--as-color-gold);
+  opacity: var(--as-fx-gold, 0);
+  mix-blend-mode: overlay;
+  pointer-events: none;
+}
+
+.as-fx-unit.bypassed {
+  filter: grayscale(0.55) brightness(0.62);
+}
+
+/* the unit label sits on an opaque plaque, never on raw plate art */
+.as-fx-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(var(--as-size-gap-unit));
+  background: linear-gradient(180deg, var(--as-color-plaque-top), var(--as-color-plaque-bottom));
+  border: 1px solid var(--as-color-plaque-hairline);
+  border-radius: 5px;
+  padding: calc(var(--as-size-gap-unit) * 0.5) calc(var(--as-size-gap-unit) * 0.85);
+  box-shadow: 0 2px 6px var(--as-color-shadow-inset);
+}
+
+.as-fx-name {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--as-font-display);
+  font-weight: 600;
+  font-size: calc(var(--as-type-label) * 0.94);
+  line-height: 1.15;
+  letter-spacing: var(--as-tracking-hardware);
+  text-transform: uppercase;
+  text-align: center;
+  color: var(--as-color-gold-bright);
+  overflow-wrap: anywhere;
+}
+
+/* CLIENT REVIEW ROUND 7 (item 2): removal was a bare glyph that read as
+   decoration. It is now an explicit recessed chip in the plate language —
+   bordered, hit-target sized, and it lights warn-red on hover so the
+   destructive action announces itself before it is taken. */
+.as-fx-x {
+  flex: 0 0 auto;
+  width: calc(var(--as-size-gap-unit) * 2.5);
+  height: calc(var(--as-size-gap-unit) * 2.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: linear-gradient(180deg, var(--as-color-chrome-well-bottom), var(--as-color-chrome-well-top));
+  border: 1px solid var(--as-color-plaque-hairline);
+  border-radius: var(--as-size-radius-cell);
+  color: var(--as-color-muted);
+  cursor: pointer;
+}
+
+.as-fx-x svg {
+  width: 70%;
+  height: 70%;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  fill: none;
+}
+
+.as-fx-x:hover {
+  color: var(--as-color-gold-bright);
+  border-color: var(--as-color-gold);
+  background: linear-gradient(180deg, var(--as-color-cell-top), var(--as-color-cell-bottom));
+}
+
+.as-fx-x:active {
+  transform: translateY(1px);
+}
+
+/* ---- reorder (spec §4 "drag to reorder") -------------------------------- */
+
+/* The grab affordance. It is the ONLY drag origin in the unit, so a pointer
+   drag that starts on a knob stays a knob drag. */
+.as-fx-grip {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  width: calc(var(--as-size-gap-unit) * 1.5);
+  height: calc(var(--as-size-gap-unit) * 2.5);
+  padding: 0 calc(var(--as-size-gap-unit) * 0.25);
+  border-radius: var(--as-size-radius-cell);
+  cursor: grab;
+}
+
+.as-fx-grip i {
+  display: block;
+  height: 1px;
+  background: var(--as-color-muted);
+}
+
+.as-fx-grip:hover {
+  background: var(--as-color-gold-glow-soft);
+}
+
+.as-fx-grip:hover i {
+  background: var(--as-color-gold-bright);
+}
+
+.as-fx-grip:active {
+  cursor: grabbing;
+}
+
+/* the source unit, while its ghost is under the cursor */
+.as-fx-unit.dragging {
+  opacity: 0.4;
+}
+
+/* The insertion rule: where the unit will land. It is a child of the RACK, not
+   of a unit — a bypassed unit carries a grayscale filter, and anything drawn
+   inside it (a pseudo-element included) is desaturated with it, which would
+   turn the gold rule grey exactly when the rack is at its most default.
+   `--as-fx-drop-index` counts GAPS, so gap n sits half a gutter before unit n. */
+.as-fx-drop-rule {
+  position: absolute;
+  top: calc(var(--as-size-gap-unit) * 1.5);
+  bottom: calc(var(--as-size-gap-unit) * 1.5);
+  left: calc(
+    var(--as-size-gap-unit) * 6.5 + var(--as-fx-drop-index) *
+      (var(--as-size-fx-unit-width) + var(--as-size-gap-unit) * 1.5) - var(--as-size-gap-unit) * 0.75
+  );
+  width: 3px;
+  transform: translateX(-50%);
+  border-radius: 2px;
+  background: var(--as-color-gold-bright);
+  box-shadow: 0 0 10px var(--as-color-gold-glow);
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* end caps, so the rule reads as a hardware guide rather than a stray hairline */
+.as-fx-drop-rule::before,
+.as-fx-drop-rule::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  width: calc(var(--as-size-gap-unit) * 1.25);
+  height: calc(var(--as-size-gap-unit) * 1.25);
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: var(--as-color-gold-bright);
+  box-shadow: 0 0 10px var(--as-color-gold-glow);
+}
+
+.as-fx-drop-rule::before {
+  top: 0;
+}
+
+.as-fx-drop-rule::after {
+  top: 100%;
+}
+
+.as-fx-foot {
+  margin-top: auto;
+  display: flex;
+  justify-content: center;
+  padding-top: calc(var(--as-size-gap-unit) * 0.5);
+}
+
+.as-fx-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 180px;
+  width: 280px;
+  flex-shrink: 0;
+  border-style: solid;
+  border-width: var(--as-kit-master-border);
+  border-image-source: var(--as-master-plate);
+  border-image-slice: var(--as-kit-master-slice) fill;
+  border-image-width: var(--as-kit-master-border);
+  text-align: center;
+}
+
+/* ================================================================== */
+/* Guided screen (Capture's own signature screens)                     */
+/* ================================================================== */
+
+.as-note-hero {
+  font-family: var(--as-font-display);
+  font-weight: 600;
+  font-size: var(--as-type-hero);
+  line-height: 1;
+  color: var(--as-color-cream);
+  text-align: center;
+  text-shadow:
+    0 0 60px var(--as-color-gold-glow-soft),
+    0 3px 0 var(--as-color-shadow-drop);
+}
+
+.as-layer-strip {
+  display: flex;
+  justify-content: center;
+  gap: calc(var(--as-size-gap-unit) * 4);
+  margin-top: calc(var(--as-size-gap-unit) * 2);
+}
+
+.as-layer-strip .layer {
+  font-family: var(--as-font-display);
+  font-weight: 300;
+  letter-spacing: var(--as-tracking-display);
+  text-transform: uppercase;
+  font-size: var(--as-type-h2);
+  color: var(--as-color-muted);
+  opacity: 0.45;
+  transition: opacity 0.2s, color 0.2s, text-shadow 0.2s;
+}
+
+.as-layer-strip .layer.active {
+  color: var(--as-color-gold-bright);
+  opacity: 1;
+  text-shadow: 0 0 18px var(--as-color-gold-glow);
+}
+
+.as-verdict {
+  font-family: var(--as-font-display);
+  font-weight: 500;
+  letter-spacing: var(--as-tracking-display);
+  text-transform: uppercase;
+  font-size: var(--as-type-h1);
+  text-align: center;
+  min-height: calc(var(--as-size-gap-unit) * 5);
+}
+
+/* design law: acceptance GLOWS, corrections INSTRUCT — no warning-red here */
+.as-verdict.accepted {
+  color: var(--as-color-gold-bright);
+  text-shadow: 0 0 28px var(--as-color-gold-glow);
+}
+
+.as-verdict.coaching {
+  color: var(--as-color-cream);
+}
+
+.as-take-dots {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--as-size-gap-unit) * 1.5);
+}
+
+.as-take-dot {
+  width: calc(var(--as-size-gap-unit) * 1.75);
+  height: calc(var(--as-size-gap-unit) * 1.75);
+  border-radius: 50%;
+  border: 1px solid var(--as-color-gold-dark);
+  background: var(--as-color-panel-deep);
+  box-shadow: inset 0 1px 3px var(--as-color-shadow-deep);
+}
+
+.as-take-dot.filled {
+  background: radial-gradient(circle at 35% 30%, var(--as-color-gold-bright), var(--as-color-gold));
+  border-color: var(--as-color-gold-bright);
+  box-shadow: 0 0 10px var(--as-color-gold-glow);
+}
+
+/* session map */
+
+.as-map {
+  display: grid;
+  gap: calc(var(--as-size-gap-unit) * 0.5);
+}
+
+.as-map-cell {
+  height: calc(var(--as-size-gap-unit) * 1.75);
+  border-radius: var(--as-size-radius-cell);
+  background: var(--as-color-cell-empty);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.15s;
+  box-shadow: inset 0 1px 2px var(--as-color-shadow-inset);
+}
+
+.as-map-cell.partial {
+  background: var(--as-color-gold-dark);
+}
+
+.as-map-cell.done {
+  background: linear-gradient(180deg, var(--as-color-gold-bright), var(--as-color-gold));
+  box-shadow: 0 0 6px var(--as-color-gold-glow-soft);
+}
+
+.as-map-cell.current {
+  border-color: var(--as-color-gold-bright);
+  box-shadow: 0 0 8px var(--as-color-gold-glow);
+}
+
+/* ================================================================== */
+/* Wizard world cards                                                  */
+/* ================================================================== */
+
+.as-world-card {
+  position: relative;
+  flex: 1;
+  min-height: calc(var(--as-size-gap-unit) * 14);
+  display: flex;
+  align-items: flex-end;
+  padding: calc(var(--as-size-gap-unit) * 1.5);
+  border-radius: var(--as-size-radius-panel);
+  cursor: pointer;
+  overflow: hidden;
+  border: 1.6px solid var(--as-color-plaque-hairline);
+  box-shadow: 0 5px 16px var(--as-color-shadow-soft);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.as-world-card:hover {
+  border-color: var(--as-color-gold-dark);
+}
+
+/* SELECTED: the world accent edge + the 2px gold inner line (Signature's
+   Perform-slot state rule) */
+.as-world-card.selected {
+  border-color: var(--as-world-accent);
+  box-shadow:
+    inset 0 0 0 2px var(--as-color-gold-dark),
+    0 0 22px var(--as-color-gold-glow-soft);
+}
+
+/* controls / labels never sit on undimmed pattern */
+.as-world-card .as-world-name {
+  position: relative;
+  z-index: 1;
+  font-family: var(--as-font-display);
+  font-size: var(--as-type-h2);
+  letter-spacing: var(--as-tracking-label);
+  text-transform: uppercase;
+  color: var(--as-color-cream);
+  background: linear-gradient(180deg, var(--as-color-plaque-top), var(--as-color-plaque-bottom));
+  border: 1px solid var(--as-color-plaque-hairline);
+  border-radius: 5px;
+  padding: calc(var(--as-size-gap-unit) * 0.5) calc(var(--as-size-gap-unit) * 1.25);
+  box-shadow: 0 3px 10px var(--as-color-shadow-soft);
+}
+
+.as-world-card.selected .as-world-name {
+  color: var(--as-color-gold-bright);
+}
+
+/* the world backdrop's radial vignette (V2 backdropVignette) */
+.as-world-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 50% 45%, transparent 35%, var(--as-color-shadow-deep) 100%);
+  pointer-events: none;
+}
+
+/* ================================================================== */
+/* Keyboard                                                            */
+/* ================================================================== */
+
+.as-kbd {
+  position: relative;
+  height: calc(var(--as-size-gap-unit) * 14);
+  display: flex;
+  padding: 4px;
+  border-radius: var(--as-size-radius-control);
+  background: var(--as-color-bg);
+  box-shadow: inset 0 4px 14px var(--as-color-shadow-deep);
+}
+
+.as-kbd .white {
+  flex: 1;
+  background: linear-gradient(180deg, var(--as-color-cream), var(--as-color-key-white-low));
+  border: 1px solid var(--as-color-bg);
+  border-radius: 0 0 var(--as-size-radius-cell) var(--as-size-radius-cell);
+  cursor: pointer;
+}
+
+.as-kbd .white:active,
+.as-kbd .white.held {
+  background: linear-gradient(180deg, var(--as-color-gold-bright), var(--as-color-gold));
+}
+
+.as-kbd .black {
+  position: absolute;
+  top: 4px;
+  width: 1.4%;
+  height: 60%;
+  background: linear-gradient(180deg, var(--as-color-key-black-high), var(--as-color-bg));
+  border: 1px solid var(--as-color-gold-dark);
+  border-radius: 0 0 var(--as-size-radius-cell) var(--as-size-radius-cell);
+  cursor: pointer;
+  z-index: 2;
+}
+
+.as-kbd .black:active,
+.as-kbd .black.held {
+  background: linear-gradient(180deg, var(--as-color-gold), var(--as-color-gold-dark));
+}
+
+/* ================================================================== */
+/* Layout helpers + status bar                                         */
+/* ================================================================== */
+
+.as-row {
+  display: flex;
+  gap: calc(var(--as-size-gap-unit) * 2);
+  align-items: center;
+}
+
+.as-row.wrap {
+  flex-wrap: wrap;
+}
+
+.as-col {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--as-size-gap-unit) * 2);
+}
+
+/* coaching / advisory notice — instructs, never alarms (no warning-red) */
+.as-warning {
+  font-family: var(--as-font-display);
+  letter-spacing: var(--as-tracking-label);
+  text-transform: uppercase;
+  font-size: var(--as-type-label);
+  color: var(--as-color-gold-bright);
+  background: linear-gradient(180deg, var(--as-color-plaque-top), var(--as-color-plaque-bottom));
+  border: 1px solid var(--as-color-gold-dark);
+  border-left: 3px solid var(--as-color-gold-hot);
+  border-radius: var(--as-size-radius-control);
+  padding: calc(var(--as-size-gap-unit) * 1.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--as-size-gap-unit));
+  flex-wrap: wrap;
+  box-shadow: 0 3px 12px var(--as-color-shadow-soft);
+}
+
+.as-status {
+  height: var(--as-size-status-height);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: calc(var(--as-size-gap-unit) * 2);
+  padding: 0 calc(var(--as-size-gap-unit) * 2);
+  background: linear-gradient(180deg, var(--as-color-chassis), var(--as-color-bg));
+  border-top: 1px solid var(--as-color-gold-dark);
+  font-family: var(--as-font-display);
+  font-size: calc(var(--as-type-label) * 0.92);
+  letter-spacing: var(--as-tracking-hardware);
+  text-transform: uppercase;
+  color: var(--as-color-muted);
+}
+
+.as-status .lamp {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--as-color-gold-dark);
+  flex-shrink: 0;
+}
+
+.as-status .lamp.live {
+  background: var(--as-meter-safe);
+  box-shadow: 0 0 8px var(--as-meter-safe);
+}
+
+.as-status .spacer {
+  flex: 1;
+}
+
+.as-status .gold {
+  color: var(--as-color-gold);
+}
+
+/* ================================================================== */
+/* Scrollbars — chrome register, never the OS default                  */
+/* ================================================================== */
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--as-color-gold-dark);
+  border-radius: 5px;
+  border: 2px solid var(--as-color-bg);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--as-color-gold);
+}
+
+::-webkit-scrollbar-track {
+  background: var(--as-color-bg);
+}
+
+::selection {
+  background: var(--as-color-chrome-row-top);
+  color: var(--as-color-gold-bright);
+}
+
+/* ================================================================== */
+/* Pill toggle (client toggle.svg) — family palette                    */
+/* ================================================================== */
+
+.as-toggle {
+  width: calc(var(--as-size-gap-unit) * 6);
+  height: calc(var(--as-size-gap-unit) * 3);
+  border-radius: calc(var(--as-size-gap-unit) * 1.5);
+  background: linear-gradient(180deg, var(--as-color-bg), var(--as-color-chrome-well-bottom));
+  border: 2px solid var(--as-color-gold-dark);
+  position: relative;
+  transition: border-color 0.15s;
+  flex-shrink: 0;
+  box-shadow: inset 0 2px 5px var(--as-color-shadow-deep);
+}
+
+.as-toggle.on {
+  border-color: var(--as-color-gold);
+}
+
+.as-toggle-thumb {
+  position: absolute;
+  top: 50%;
+  left: calc(var(--as-size-gap-unit) * 0.4);
+  transform: translateY(-50%);
+  width: calc(var(--as-size-gap-unit) * 2);
+  height: calc(var(--as-size-gap-unit) * 2);
+  border-radius: 50%;
+  background: var(--as-color-gold-dark);
+  transition: left 0.15s, background 0.15s;
+}
+
+.as-toggle.on .as-toggle-thumb {
+  left: calc(100% - var(--as-size-gap-unit) * 2.4);
+  background: radial-gradient(circle at 35% 30%, var(--as-color-gold-bright), var(--as-color-gold));
+  box-shadow: 0 0 8px var(--as-color-gold-glow);
+}
+
+/* ================================================================== */
+/* Brand panel — the shield + ONE gold flourish, never wallpaper       */
+/* ================================================================== */
+
+.as-brand-mark {
+  display: block;
+  height: 40px;
+  width: auto;
+  filter: drop-shadow(0 2px 6px var(--as-color-shadow-drop));
+}
+
+.as-flourish-accent {
+  pointer-events: none;
+  user-select: none;
+}
+
+/* idle placeholder for the hero note display */
+.as-note-hero-idle {
+  display: inline-block;
+  font-size: 0.28em;
+  color: var(--as-color-muted);
+  vertical-align: middle;
+  opacity: 0.6;
+}
+
+/* ================================================================== */
+/* Header gear + Devices settings panel                                */
+/* ================================================================== */
+
+/* Signature's header gear: a plaque icon button, lit gold while its panel
+   is open. Kept in the segment/plate family, never a bare browser button. */
+.as-gear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: var(--as-size-radius-control);
+  cursor: pointer;
+  background: linear-gradient(180deg, var(--as-color-plaque-top), var(--as-color-plaque-bottom));
+  border: 1px solid var(--as-color-plaque-hairline);
+  box-shadow: 0 3px 10px var(--as-color-shadow-soft);
+  color: var(--as-color-label-idle);
+  transition: color 120ms ease;
+}
+
+.as-gear:hover {
+  color: var(--as-color-gold-bright);
+}
+
+.as-gear.on {
+  color: var(--as-color-gold-bright);
+  background: linear-gradient(180deg, var(--as-color-cell-top), var(--as-color-cell-bottom));
+  border-color: var(--as-color-cell-edge);
+  box-shadow:
+    inset 0 2px 0 var(--as-color-gold-hot-bloom),
+    0 3px 10px var(--as-color-shadow-soft);
+}
+
+.as-settings {
+  position: relative;
+  min-width: 560px;
+  max-width: 620px;
+  max-height: 86vh;
+  overflow-y: auto;
+  gap: calc(var(--as-size-gap-unit) * 1.15);
+  padding: calc(var(--as-size-gap-unit) * 2.5);
+}
+
+.as-settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(var(--as-size-gap-unit) * 2);
+}
+
+.as-settings-row {
+  align-items: flex-end;
+  gap: calc(var(--as-size-gap-unit) * 1.5);
+}
+
+/* Recessed metering well: level columns plus a tabular dBFS readout. */
+.as-settings-meter {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: calc(var(--as-size-gap-unit) * 1.5);
+  padding: calc(var(--as-size-gap-unit) * 1.25) calc(var(--as-size-gap-unit) * 2.25);
+}
+
+.as-settings-db {
+  font-variant-numeric: tabular-nums;
+  min-width: 76px;
+  text-align: right;
+  color: var(--as-color-gold);
+}
+
+.as-settings-activity {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--as-size-gap-unit) * 1.25);
+  padding: calc(var(--as-size-gap-unit) * 0.75) calc(var(--as-size-gap-unit) * 1.25);
+}
+
+/* MIDI activity lamp — dark when idle, gold when a message just arrived. */
+.as-activity-lamp {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--as-color-gold-dark);
+  transition: background 80ms linear, box-shadow 80ms linear;
+}
+
+.as-activity-lamp.hot {
+  background: var(--as-color-gold-hot);
+  box-shadow: 0 0 9px var(--as-color-gold-hot);
+}
+
+/* Monitoring plaque: the toggle + its plain-language caution on the left,
+   the kit knob for level on the right. */
+.as-settings-monitor {
+  padding: calc(var(--as-size-gap-unit) * 1.25) calc(var(--as-size-gap-unit) * 1.5);
+}
+
+.as-settings-monitor-copy {
+  flex: 1;
+  gap: calc(var(--as-size-gap-unit) * 0.75);
+}
+
+.as-settings-format {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(var(--as-size-gap-unit) * 2);
+}
+
+.as-settings-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(var(--as-size-gap-unit) * 2);
+}
+
+/* Advisory plaque — the calm empty / permission state. Gold-edged, never
+   warning-red: the family's coaching rule holds here too. */
+.as-advisory {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--as-size-gap-unit) * 0.5);
+  padding: calc(var(--as-size-gap-unit) * 1.25) calc(var(--as-size-gap-unit) * 1.5);
+  border-radius: var(--as-size-radius-control);
+  background: linear-gradient(180deg, var(--as-color-plaque-top), var(--as-color-plaque-bottom));
+  border: 1px solid var(--as-color-gold-dark);
+  border-left: 2px solid var(--as-color-gold);
+  box-shadow: 0 3px 10px var(--as-color-shadow-soft);
+}
+
+/* ================================================================== */
+/* Note gate + pitch verification                                      */
+/*                                                                     */
+/* Design law: acceptance GLOWS, corrections INSTRUCT. Nothing here is  */
+/* warning-red — the whole register is the gold/cream coaching family   */
+/* the PLAY HARDER / PLAY SOFTER verdicts already live in.              */
+/* ================================================================== */
+
+.as-coach-detail {
+  font-family: var(--as-font-display);
+  letter-spacing: var(--as-tracking-label);
+  text-transform: uppercase;
+  font-size: var(--as-type-label);
+  color: var(--as-color-muted);
+  text-align: center;
+}
+
+.as-coach-detail .played {
+  color: var(--as-color-cream);
+}
+
+/* the plan-note switch offer — an invitation, so it sits on a plaque */
+.as-coach-switch {
+  font-family: var(--as-font-display);
+  letter-spacing: var(--as-tracking-label);
+  text-transform: uppercase;
+  font-size: var(--as-type-label);
+  color: var(--as-color-gold-bright);
+  background: linear-gradient(180deg, var(--as-color-plaque-top), var(--as-color-plaque-bottom));
+  border: 1px solid var(--as-color-gold-dark);
+  border-radius: var(--as-size-radius-control);
+  padding: calc(var(--as-size-gap-unit) * 0.75) calc(var(--as-size-gap-unit) * 2);
+  box-shadow: 0 3px 10px var(--as-color-shadow-soft);
+}
+
+.as-coach-switch .note {
+  color: var(--as-color-gold-hot);
+}
+
+/* multi-line warning bodies (pitch check) stack instead of running inline */
+.as-warning.stack {
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: calc(var(--as-size-gap-unit) * 1.25);
+}
+
+/* raised on the first take of a session, or once a fixed offset is proven —
+   still gold, only brighter and lifted, never red */
+.as-warning.prominent {
+  border-left-width: 5px;
+  border-color: var(--as-color-gold);
+  box-shadow:
+    0 0 26px var(--as-color-gold-glow-soft),
+    0 4px 16px var(--as-color-shadow-deep);
+}
+
+.as-warning-title {
+  color: var(--as-color-chrome-header);
+  letter-spacing: var(--as-tracking-chrome);
+}
+
+.as-warning-strong {
+  color: var(--as-color-gold-hot);
+}
+
+/* ================================================================== */
+/* Auto Mode — loopback verification + patch queue                     */
+/*                                                                     */
+/* CHROME / plaque register only; every colour and size comes from a   */
+/* tokens.ts variable. Gold-edged advisories, never warning-red.       */
+/* ================================================================== */
+
+/* the signal chain, drawn as hardware rather than described in prose */
+.as-chain {
+  display: flex;
+  align-items: stretch;
+  flex-wrap: wrap;
+  gap: calc(var(--as-size-gap-unit) * 0.75);
+  padding: calc(var(--as-size-gap-unit) * 1.25);
+  border-radius: var(--as-size-radius-control);
+  background: linear-gradient(180deg, var(--as-color-chrome-well-top), var(--as-color-chrome-well-bottom));
+  border: 1px solid var(--as-color-gold-dark);
+  box-shadow: inset 0 2px 6px var(--as-color-shadow-inset);
+}
+
+.as-chain-step {
+  flex: 1 1 0;
+  min-width: calc(var(--as-size-gap-unit) * 12);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--as-size-gap-unit) * 0.25);
+  padding: calc(var(--as-size-gap-unit) * 0.75);
+  border-radius: var(--as-size-radius-cell);
+  background: linear-gradient(180deg, var(--as-color-plaque-top), var(--as-color-plaque-bottom));
+  border: 1px solid var(--as-color-panel-border-soft);
+  text-align: center;
+}
+
+.as-chain-label {
+  font-family: var(--as-font-display);
+  text-transform: uppercase;
+  letter-spacing: var(--as-tracking-hardware);
+  font-size: var(--as-type-value);
+  color: var(--as-color-gold-bright);
+}
+
+.as-chain-sub {
+  font-family: var(--as-font-display);
+  text-transform: uppercase;
+  letter-spacing: var(--as-tracking-label);
+  font-size: calc(var(--as-type-label) * 0.9);
+  color: var(--as-color-muted);
+}
+
+.as-chain-arrow {
+  display: flex;
+  align-items: center;
+  color: var(--as-color-gold);
+  font-size: var(--as-type-value);
+}
+
+/* the two devices the check depends on, stated before it runs */
+.as-path-row {
+  gap: calc(var(--as-size-gap-unit) * 2);
+  align-items: stretch;
+}
+
+.as-path-cell {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--as-size-gap-unit) * 0.4);
+}
+
+.as-path-value {
+  font-family: var(--as-font-display);
+  text-transform: uppercase;
+  letter-spacing: var(--as-tracking-hardware);
+  font-size: var(--as-type-value);
+  color: var(--as-color-cream);
+  padding: calc(var(--as-size-gap-unit) * 0.6) calc(var(--as-size-gap-unit));
+  border-radius: var(--as-size-radius-cell);
+  background: linear-gradient(180deg, var(--as-color-chrome-well-top), var(--as-color-chrome-well-bottom));
+  border: 1px solid var(--as-color-panel-border-soft);
+  box-shadow: inset 0 2px 5px var(--as-color-shadow-inset);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.as-path-value.missing {
+  color: var(--as-color-muted);
+  border-color: var(--as-color-gold-dark);
+}
+
+/* measured readings (latency / peak / decay) in the numeric register */
+.as-readouts {
+  gap: calc(var(--as-size-gap-unit) * 2);
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.as-readout {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(var(--as-size-gap-unit) * 0.25);
+  min-width: calc(var(--as-size-gap-unit) * 13);
+}
+
+.as-readout-label {
+  font-family: var(--as-font-display);
+  text-transform: uppercase;
+  letter-spacing: var(--as-tracking-chrome);
+  font-size: calc(var(--as-type-label) * 0.9);
+  color: var(--as-color-chrome-header);
+}
+
+.as-readout-value {
+  font-family: var(--as-font-numeric);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--as-type-h2);
+  color: var(--as-color-gold-hot);
+}
+
+/* the long "what to check next" body reads as prose, not as a chip */
+.as-warning-body {
+  font-family: var(--as-font-body);
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: var(--as-type-body);
+  line-height: 1.5;
+  color: var(--as-color-cream);
+  max-width: calc(var(--as-size-gap-unit) * 74);
+  text-align: left;
+}
+
+/* ---- patch queue ---- */
+
+.as-queue-settings {
+  gap: calc(var(--as-size-gap-unit) * 1.5);
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.as-queue-field {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--as-size-gap-unit) * 0.4);
+  min-width: calc(var(--as-size-gap-unit) * 18);
+}
+
+.as-queue-field.grow {
+  flex: 1;
+}
+
+.as-queue-progress {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--as-size-gap-unit) * 0.6);
+}
+
+.as-queue-progress-head {
+  display: flex;
+  justify-content: space-between;
+  gap: calc(var(--as-size-gap-unit) * 2);
+  font-family: var(--as-font-display);
+  text-transform: uppercase;
+  letter-spacing: var(--as-tracking-label);
+  font-size: var(--as-type-label);
+  color: var(--as-color-muted);
+}
+
+.as-queue-progress-now {
+  color: var(--as-color-gold-bright);
+}
+
+.as-queue-bar {
+  height: calc(var(--as-size-gap-unit) * 0.9);
+  border-radius: var(--as-size-radius-cell);
+  background: linear-gradient(180deg, var(--as-color-chrome-well-top), var(--as-color-chrome-well-bottom));
+  border: 1px solid var(--as-color-panel-border-soft);
+  box-shadow: inset 0 2px 5px var(--as-color-shadow-inset);
+  overflow: hidden;
+}
+
+.as-queue-bar-fill {
+  height: 100%;
+  background: linear-gradient(180deg, var(--as-color-plate-on-top), var(--as-color-plate-on-bottom));
+  box-shadow: 0 0 10px var(--as-color-gold-glow);
+  transition: width 240ms ease-out;
+}
+
+.as-queue-list {
+  gap: calc(var(--as-size-gap-unit) * 0.75);
+}
+
+.as-queue-row {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--as-size-gap-unit));
+  padding: calc(var(--as-size-gap-unit) * 0.75) calc(var(--as-size-gap-unit));
+  border-radius: var(--as-size-radius-control);
+  background: linear-gradient(180deg, var(--as-color-plaque-top), var(--as-color-plaque-bottom));
+  border: 1px solid var(--as-color-panel-border-soft);
+}
+
+.as-queue-row.active {
+  border-color: var(--as-color-gold);
+  box-shadow: inset 0 2px 0 var(--as-color-cell-edge), 0 0 18px var(--as-color-gold-glow-soft);
+}
+
+.as-queue-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--as-size-gap-unit) * 0.2);
+}
+
+.as-queue-row-name {
+  font-family: var(--as-font-display);
+  text-transform: uppercase;
+  letter-spacing: var(--as-tracking-hardware);
+  font-size: var(--as-type-value);
+  color: var(--as-color-cream);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.as-queue-row-sub {
+  font-family: var(--as-font-display);
+  text-transform: uppercase;
+  letter-spacing: var(--as-tracking-label);
+  font-size: calc(var(--as-type-label) * 0.9);
+  color: var(--as-color-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* status chips stay inside the gold/cream coaching family — a skipped or
+   failed patch instructs, it does not alarm */
+.as-queue-chip {
+  flex-shrink: 0;
+  min-width: calc(var(--as-size-gap-unit) * 9);
+  text-align: center;
+  font-family: var(--as-font-display);
+  text-transform: uppercase;
+  letter-spacing: var(--as-tracking-label);
+  font-size: calc(var(--as-type-label) * 0.9);
+  padding: calc(var(--as-size-gap-unit) * 0.35) calc(var(--as-size-gap-unit) * 0.75);
+  border-radius: var(--as-size-radius-cell);
+  border: 1px solid var(--as-color-panel-border-soft);
+  color: var(--as-color-muted);
+  background: var(--as-color-black);
+}
+
+.as-queue-chip.running {
+  color: var(--as-color-gold-hot);
+  border-color: var(--as-color-gold);
+  background: linear-gradient(180deg, var(--as-color-cell-top), var(--as-color-cell-bottom));
+}
+
+.as-queue-chip.done {
+  color: var(--as-color-gold-bright);
+  border-color: var(--as-color-gold-dark);
+}
+
+.as-queue-chip.skipped,
+.as-queue-chip.failed {
+  color: var(--as-color-label-idle);
+  border-color: var(--as-color-gold-dark);
+}
+
+.as-patch-editor {
+  min-width: calc(var(--as-size-gap-unit) * 44);
+  gap: calc(var(--as-size-gap-unit) * 1.5);
+}
+
+/* ==========================================================================
+   AMANORSAC STUDIO — kit art.
+
+   The photoreal hardware kit was photographed as GOLD hardware. It is not
+   tinted here: the PNGs themselves were rotated to the Amanorsac blue once, by
+   scripts/tint-kit.mjs, from the untouched originals in assets/kit-source.
+
+   A CSS filter was tried first and is the wrong tool — it inherits down the
+   subtree, so it also rotated the token colours painted on top of the art (the
+   blue engaged-overlay on a button came back out gold). Rotate pixels, not
+   subtrees. Re-run the script to change the tint; do not add filters here.
+   ========================================================================== */

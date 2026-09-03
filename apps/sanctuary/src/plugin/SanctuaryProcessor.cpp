@@ -1,6 +1,8 @@
 // SanctuaryProcessor.cpp — see header.
 #include "SanctuaryProcessor.h"
-#include "SanctuaryEditor.h"
+#if ! SANCTUARY_HEADLESS
+ #include "SanctuaryEditor.h"
+#endif
 #include "../engine/Factory.h"
 
 namespace sanctuary {
@@ -35,6 +37,8 @@ SanctuaryProcessor::SanctuaryProcessor()
     for (int i = 0; i < 4; ++i) macroParams_[(size_t) i] = apvts.getRawParameterValue ("macro" + juce::String (i + 1));
 
     for (auto d : { songsDir(), setsDir(), surfacesDir(), stageDir() }) d.createDirectory();
+    settings.fromVar (readJsonFile (settingsFile()));
+    serviceStartMs_ = lastAutosaveMs_ = juce::Time::getMillisecondCounterHiRes();
     library.rescan();
     ensureFactoryContent();
     reloadSongsFromDisk();
@@ -54,6 +58,7 @@ SanctuaryProcessor::SanctuaryProcessor()
     // default: the first set on disk, so the app is playable on launch
     auto sets = setsOnDisk();
     if (! sets.empty()) loadSet (sets.front());
+    applySettings();
 
     startTimerHz (30);
 }
@@ -87,7 +92,7 @@ void SanctuaryProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     expressionGain_.reset (sampleRate, 0.05);
     masterLimiter.prepare (sampleRate, samplesPerBlock);
     setLatencySamples (masterLimiter.latencySamples());
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < kSlots; ++i)
     {
         for (auto& ch : chains_[(size_t) i]) { ch.eng.prepare (sampleRate, samplesPerBlock); ch.rack.prepare (sampleRate, samplesPerBlock); }
         volSm_[(size_t) i].reset (sampleRate, 0.02);
@@ -98,6 +103,7 @@ void SanctuaryProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     masterRack_.prepare (sampleRate, samplesPerBlock);
     drone.prepare (sampleRate, samplesPerBlock);
     chords.prepare (sampleRate);
+    pads.prepare (sampleRate, padsDir());
     syncAllToDsp();
 }
 
@@ -114,6 +120,8 @@ void SanctuaryProcessor::handleMidi (const juce::MidiMessage& m, int /*offset*/)
     {
         auto& r = routes_[(size_t) i];
         if (! r.enabled.load()) return false;
+        const auto solo = soloMask_.load (std::memory_order_relaxed);
+        if (solo != 0 && ! ((solo >> i) & 1u)) return false;
         const int c = r.channel.load();
         if (c != 0 && ch != 0 && c != ch) return false;
         if (note < r.keyLo.load() || note > r.keyHi.load()) return false;
@@ -140,7 +148,8 @@ void SanctuaryProcessor::handleMidi (const juce::MidiMessage& m, int /*offset*/)
             return;
         }
         chords.noteOn (note + wheel);
-        for (int i = 0; i < 4; ++i)
+        heldNotes[(size_t) (note >> 6)].fetch_or (1ull << (note & 63), std::memory_order_relaxed);
+        for (int i = 0; i < kSlots; ++i)
             if (slotTakes (i, note, vel))
                 for (auto& c : chains_[(size_t) i])
                     if (c.live.load()) c.eng.noteOn (slotNote (i, note), vel);
@@ -149,7 +158,8 @@ void SanctuaryProcessor::handleMidi (const juce::MidiMessage& m, int /*offset*/)
     {
         const int note = m.getNoteNumber();
         chords.noteOff (note + wheel);
-        for (int i = 0; i < 4; ++i)
+        heldNotes[(size_t) (note >> 6)].fetch_and (~(1ull << (note & 63)), std::memory_order_relaxed);
+        for (int i = 0; i < kSlots; ++i)
             if (slotTakes (i, note, 0))
                 for (auto& c : chains_[(size_t) i])
                     if (c.running.load()) c.eng.noteOff (slotNote (i, note));   // retiring chains too
@@ -157,11 +167,11 @@ void SanctuaryProcessor::handleMidi (const juce::MidiMessage& m, int /*offset*/)
     else if (m.isAllNotesOff() || m.isAllSoundOff())
     {
         for (auto& s : chains_) for (auto& c : s) c.eng.allNotesOff (m.isAllNotesOff());
-        chords.allOff();
+        chords.allOff(); heldNotes[0].store (0); heldNotes[1].store (0);
     }
     else if (m.isPitchWheel())
     {
-        const float semis = ((float) m.getPitchWheelValue() - 8192.0f) / 8192.0f * 2.0f;
+        const float semis = ((float) m.getPitchWheelValue() - 8192.0f) / 8192.0f * bendRange_.load();
         for (auto& s : chains_) for (auto& c : s) if (c.running.load()) c.eng.setPitchBend (semis);
     }
     else if (m.isProgramChange())
@@ -183,7 +193,7 @@ void SanctuaryProcessor::handleMidi (const juce::MidiMessage& m, int /*offset*/)
         else if (cc == 1)
         {
             const float n = (float) val / 127.0f;
-            for (int i = 0; i < 4; ++i)
+            for (int i = 0; i < kSlots; ++i)
                 for (auto& c : chains_[(size_t) i])
                 {
                     if (! c.live.load()) continue;
@@ -309,7 +319,7 @@ void SanctuaryProcessor::renderChunk (juce::AudioBuffer<float>& buffer, int star
     const float retireGain = juce::Decibels::decibelsToGain (kRetireDb);
     int voices = 0;
 
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < kSlots; ++i)
     {
         slotView.clear();
         bool anything = false;
@@ -365,6 +375,13 @@ void SanctuaryProcessor::renderChunk (juce::AudioBuffer<float>& buffer, int star
     if (start == 0) totalVoices.store (voices);
 
     masterRack_.process (outView, bpm_.load());
+
+    // performance pads: a ninth slot, straight to Main, ignoring the Wheel
+    {
+        const double beatLen = sr_ * 60.0 / juce::jmax (20.0, bpm_.load()) * (eighthMeter_ ? 0.5 : 1.0);
+        const double toBar = ((double) (beatsPerBar_ - beatIndex_) * beatLen) - beatSamplePos_;
+        pads.render (outView, len, (int) juce::jmax (0.0, toBar));
+    }
 
     // drone: own bus when the host exposes it, else the main bus (§8)
     const bool droneBus = getBusCount (false) > 1 && getBus (false, 1)->isEnabled();
@@ -434,6 +451,14 @@ void SanctuaryProcessor::handleSurfaceEvent (int cc, int note, int value, int ch
     if (surfaces.empty()) return;
     auto& surf = currentSurface();
 
+    if (learnControl_.isNotEmpty())
+    {
+        for (auto& c : surf.controls)
+            if (c.id == learnControl_) { c.cc = cc; c.note = note; c.channel = 0; }
+        learnControl_.clear();
+        saveSurfaces(); refreshPadMask(); learnChanged.sendChangeMessage();
+        return;
+    }
     // learn: bind the incoming control (creating a control entry if the surface has none)
     if (learnTarget_.isNotEmpty())
     {
@@ -446,10 +471,12 @@ void SanctuaryProcessor::handleSurfaceEvent (int cc, int note, int value, int ch
             surf.controls.push_back ({ id, cc >= 0 ? ControlKind::knob : ControlKind::pad, cc, note, 0, id, cc >= 0 ? ControlMode::absolute : ControlMode::momentary });
         }
         surf.bind (id, learnTarget_);
+        lastAction = "Learned " + learnTarget_ + " \xe2\x86\x90 " + id;
         learnTarget_.clear();
         saveSurfaces();
         refreshPadMask();
         learnChanged.sendChangeMessage();
+        stageChanged.sendChangeMessage();
         return;
     }
 
@@ -469,12 +496,7 @@ void SanctuaryProcessor::handleSurfaceEvent (int cc, int note, int value, int ch
         target = paths[idx];
     }
 
-    if (isActionTarget (target))
-    {
-        const bool press = value >= 64;
-        if (press) triggerAction (target);
-        return;
-    }
+    if (isActionTarget (target)) { triggerAction (target, value >= 64); return; }
     const auto pi = pathInfo (rig, target);
     if (! pi.valid) return;
     if (pi.kind == ParamKind::Bool && (sc->mode == ControlMode::toggle || sc->kind == ControlKind::button || sc->kind == ControlKind::pad || sc->kind == ControlKind::pedal))
@@ -605,13 +627,22 @@ void SanctuaryProcessor::writeToCurrentMoment (const juce::String& path, float n
     else diff[path] = norm;
 }
 
-bool SanctuaryProcessor::triggerAction (const juce::String& a)
+bool SanctuaryProcessor::triggerAction (const juce::String& a, bool down)
 {
+    if (a.startsWith ("pad."))
+    {
+        static const char* names[] = { "riser", "impact", "shimmer", "subdrop", "reverse", "sweep" };
+        for (int i = 0; i < 6; ++i) if (a.substring (4) == names[i]) { firePad (i, down); return true; }
+        return false;
+    }
+    if (! down) return isActionTarget (a);
+    if (a == "stage.reset") { reset(); return true; }
+    if (a == "stage.rehearse") { rehearsal = ! rehearsal; stageChanged.sendChangeMessage(); return true; }
     if (a == "stage.nextMoment") { nextMoment(); return true; }
     if (a == "stage.prevMoment") { prevMoment(); return true; }
     if (a == "stage.nextSong") { nextSong(); return true; }
     if (a == "stage.prevSong") { prevSong(); return true; }
-    if (a == "stage.panic") { panic(); return true; }
+    if (a == "stage.panic") { reset(); return true; }
     if (a == "stage.droneToggle") { toggleDrone(); return true; }
     if (a == "stage.deck") { deck = ! deck; stageChanged.sendChangeMessage(); return true; }
     if (a == "wheel.soundIn.up") { nudgeSoundIn (1); return true; }
@@ -756,7 +787,7 @@ void SanctuaryProcessor::refreshPadMask()
 
 void SanctuaryProcessor::syncRoutes()
 {
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < kSlots; ++i)
     {
         auto& s = rig.slots[(size_t) i]; auto& r = routes_[(size_t) i];
         r.keyLo.store (s.keyLo); r.keyHi.store (s.keyHi); r.velLo.store (s.velLo); r.velHi.store (s.velHi);
@@ -768,7 +799,7 @@ void SanctuaryProcessor::syncRoutes()
 
 void SanctuaryProcessor::applyRigToDsp (const Rig& newRig, bool songChange)
 {
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < kSlots; ++i)
     {
         auto& pair = chains_[(size_t) i];
         int liveIdx = -1;
@@ -832,7 +863,7 @@ void SanctuaryProcessor::gotoMoment (int index, bool glide)
     Rig to = s->rigForMoment (index);
     // structure (bundles, ranges, racks) always comes from the live rig — a Moment
     // only changes VALUES; keep any live structural edits
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < kSlots; ++i)
     {
         auto& ts = to.slots[(size_t) i]; auto& fs = from.slots[(size_t) i];
         ts.bundleDir = fs.bundleDir; ts.bundleName = fs.bundleName; ts.world = fs.world; ts.label = fs.label;
@@ -924,17 +955,20 @@ float SanctuaryProcessor::glideProgress() const
     return (float) juce::jlimit (0.0, 1.0, (juce::Time::getMillisecondCounterHiRes() - glideStartMs_) / glideDurMs_);
 }
 
-void SanctuaryProcessor::panic()
+void SanctuaryProcessor::reset()
 {
     for (auto& s : chains_) for (auto& c : s) { c.eng.sustainPedal (false); c.eng.allNotesOff (true); }
-    chords.allOff();
+    chords.allOff(); heldNotes[0].store (0); heldNotes[1].store (0);
+    const float fade = (float) settings.getNum ("resetDroneFade");
     if (rig.drone.on)
     {
-        DroneSettings d = rig.drone; d.on = false; d.fallSeconds = 1.0f;
+        DroneSettings d = rig.drone; d.on = false; d.fallSeconds = juce::jmax (0.2f, fade);
         drone.setSettings (d);
         rig.drone.on = false;
         rigChanged.sendChangeMessage();
     }
+    lastAction = "RESET \xe2\x80\x94 notes off, drone fades " + juce::String (fade, 1) + " s, FX tails kept";
+    stageChanged.sendChangeMessage();
 }
 void SanctuaryProcessor::toggleDrone() { setPath ("drone.on", rig.drone.on ? 0.0f : 1.0f); }
 
@@ -1254,7 +1288,7 @@ void SanctuaryProcessor::writeSession()
     o->setProperty ("playIn", playIn_); o->setProperty ("soundIn", soundIn_);
     o->setProperty ("droneOn", rig.drone.on); o->setProperty ("tempo", bpm_.load());
     o->setProperty ("time", juce::Time::getCurrentTime().toISO8601 (true));
-    writeJsonFile (sessionFile(), juce::var (o));
+    if (settings.getBool ("autosave")) { writeJsonFile (sessionFile(), juce::var (o)); lastAutosaveMs_ = juce::Time::getMillisecondCounterHiRes(); }
 }
 void SanctuaryProcessor::resumeSession()
 {
@@ -1290,6 +1324,7 @@ void SanctuaryProcessor::getStateInformation (juce::MemoryBlock& dest)
     if (auto* s = currentSong()) o->setProperty ("song", s->toVar());
     o->setProperty ("surfaceIndex", surfaceIndex);
     o->setProperty ("followHost", followHost_); o->setProperty ("clickToMain", clickToMain_);
+    o->setProperty ("settings", settings.toVar()); o->setProperty ("rehearsal", rehearsal);
     auto* hp = new juce::DynamicObject();
     for (auto* p : getParameters())
         if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p)) hp->setProperty (rp->paramID, rp->getValue());
@@ -1304,6 +1339,8 @@ void SanctuaryProcessor::setStateInformation (const void* data, int size)
     if (v.hasProperty ("song")) { auto s = Song::fromVar (v["song"]); songs[s.id] = s; }
     if (v.hasProperty ("set")) { set = Set::fromVar (v["set"]); }
     followHost_ = (bool) v.getProperty ("followHost", false); clickToMain_ = (bool) v.getProperty ("clickToMain", false);
+    if (v.hasProperty ("settings")) { settings.fromVar (v["settings"]); applySettings(); }
+    rehearsal = (bool) v.getProperty ("rehearsal", false);
     surfaceIndex = (int) v.getProperty ("surfaceIndex", 0);
     refreshPadMask();
     const int si = (int) v.getProperty ("songIndex", -1);
@@ -1321,6 +1358,85 @@ void SanctuaryProcessor::setStateInformation (const void* data, int size)
 }
 
 //==============================================================================
+void SanctuaryProcessor::setSolo (int slot, bool on)
+{
+    auto m = soloMask_.load();
+    if (on) m |= 1u << slot; else m &= ~(1u << slot);
+    soloMask_.store (m);
+    rigChanged.sendChangeMessage();
+}
+
+void SanctuaryProcessor::captureRigIntoMoment (int index)
+{
+    auto* s = currentSongMutable(); if (s == nullptr || index < 0 || index >= (int) s->moments.size()) return;
+    if (index == 0) { s->baseRig = rig; for (auto& m : s->moments) m.diff.clear(); }
+    else
+    {
+        auto& diff = s->moments[(size_t) index].diff; diff.clear();
+        for (auto& path : allPaths (rig))
+        {
+            const auto pi = pathInfo (rig, path); if (! pi.valid) continue;
+            const float a = normFromValue (pi, rigGet (s->baseRig, path).value_or (pi.min));
+            const float b = normFromValue (pi, rigGet (rig, path).value_or (pi.min));
+            if (std::abs (a - b) > 1e-4f) diff[path] = b;
+        }
+    }
+    lastAction = "Rig captured into \"" + s->moments[(size_t) index].name + "\"";
+    stageChanged.sendChangeMessage();
+}
+void SanctuaryProcessor::revertMomentEntry (int index, const juce::String& path)
+{
+    auto* s = currentSongMutable(); if (s == nullptr || index < 0 || index >= (int) s->moments.size()) return;
+    s->moments[(size_t) index].diff.erase (path);
+    if (index == momentIndex) { const auto pi = pathInfo (rig, path); if (pi.valid) setPath (path, rigGet (s->baseRig, path).value_or (pi.min), false); }
+    stageChanged.sendChangeMessage();
+}
+double SanctuaryProcessor::glideBarsRemaining() const
+{
+    if (glides_.empty() || glideDurMs_ <= 0.0) return 0.0;
+    const double left = juce::jmax (0.0, glideDurMs_ - (juce::Time::getMillisecondCounterHiRes() - glideStartMs_));
+    return left / 1000.0 / (beatSeconds() * beatsPerBar());
+}
+
+// ------------------------------------------------------------------ settings
+const std::map<juce::String, juce::var>& Settings::defaults()
+{
+    static const std::map<juce::String, juce::var> d {
+        { "limiter", true }, { "droneBus", "auto" }, { "clickBus", "bus" }, { "clickToMain", false },
+        { "pcSelectsSong", true }, { "pcOut", false }, { "sustainCarries", true }, { "bendRange", 2 },
+        { "pedal1", "stage.nextMoment" }, { "pedal2", "stage.droneToggle" },
+        { "preloadNext", true }, { "residencyMB", 512 },
+        { "voiceLimit", 64 }, { "rackReleaseMs", 500 }, { "cpuGuard", true }, { "glideRate", 30 },
+        { "autosave", true }, { "rehearseWritesNothing", true }, { "resetDroneFade", 1.0 }, { "confirmLeaveSet", true },
+        { "tempoSource", "song" }, { "countIn", 1 }, { "accentBeat1", true }, { "clickSound", "wood" },
+        { "deckTypeSize", "large" }, { "slotColours", "jewel" }, { "metersOnStage", true }, { "keyRangesDefault", false }, { "onScreenKeyboard", true } };
+    return d;
+}
+juce::var Settings::toVar() const
+{
+    auto* o = new juce::DynamicObject();
+    for (auto& [k, v] : defaults()) o->setProperty (k, get (k));
+    for (auto& [k, v] : values) o->setProperty (k, v);
+    return juce::var (o);
+}
+void Settings::fromVar (const juce::var& v)
+{
+    values.clear();
+    if (auto* o = v.getDynamicObject()) for (auto& p : o->getProperties()) values[p.name.toString()] = p.value;
+}
+void SanctuaryProcessor::saveSettings() { writeJsonFile (settingsFile(), settings.toVar()); applySettings(); }
+void SanctuaryProcessor::applySettings()
+{
+    bendRange_.store ((float) settings.getNum ("bendRange"));
+    clickToMain_ = settings.getBool ("clickToMain");
+    followHost_ = settings.getStr ("tempoSource") == "host";
+    if (auto* p = apvts.getParameter ("limiter")) p->setValueNotifyingHost (settings.getBool ("limiter") ? 1.0f : 0.0f);
+    // pedals are Surface bindings on every surface's pedal1/pedal2 roles
+    for (auto& s : surfaces) { s.bind ("pedal1", settings.getStr ("pedal1")); s.bind ("pedal2", settings.getStr ("pedal2")); }
+    refreshPadMask();
+    rigChanged.sendChangeMessage();
+}
+
 int SanctuaryProcessor::activeVoicesInSlot (int slot) const
 {
     int n = 0; for (auto& c : chains_[(size_t) slot]) n += c.eng.activeVoices(); return n;
@@ -1330,7 +1446,11 @@ int SanctuaryProcessor::runningChains (int slot) const
     int n = 0; for (auto& c : chains_[(size_t) slot]) if (c.running.load()) ++n; return n;
 }
 
+#if SANCTUARY_HEADLESS
+juce::AudioProcessorEditor* SanctuaryProcessor::createEditor() { return nullptr; }
+#else
 juce::AudioProcessorEditor* SanctuaryProcessor::createEditor() { return new SanctuaryEditor (*this); }
+#endif
 
 } // namespace sanctuary
 

@@ -2,7 +2,7 @@
 
 **Design ground truth: [`sanctuary-stage-ui.html`](sanctuary-stage-ui.html)** (open it in a browser; every control in it works).
 
-This document tells you what to build. The HTML is a *behavioural* mockup, not a source to port. Do not embed a WebView, do not translate CSS. Read the mockup to learn layout, proportion, state and feedback, then build it in JUCE against `StageModel.h`.
+**Implementation note (September 2026):** the owner chose to run this HTML directly as the application UI inside JUCE's WebView (`apps/sanctuary/resources/ui/index.html`), with a native bridge to the engine, rather than re-drawing it in JUCE. The layout, tokens and behaviour below still describe what the page must do; §2 (widgets) is satisfied by the page's own script. See DECISIONS-sanctuary.md.
 
 Companion documents: [`SANCTUARY-BUILD-SPEC.md`](SANCTUARY-BUILD-SPEC.md) is the product spec and wins on any conflict about *behaviour*; this document wins on *appearance and layout*.
 

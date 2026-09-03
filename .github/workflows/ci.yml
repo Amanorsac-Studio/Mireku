@@ -130,6 +130,12 @@ jobs:
         run: |
           npm run build -w @jm/jmi-format
           npm run generate:quick -w @jm/placeholder-gen
+      - name: WebView2 SDK (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          nuget install Microsoft.Web.WebView2 -Version 1.0.2903.40 -OutputDirectory ":USERPROFILE.nugetwv2"
+          Copy-Item -Recurse ":USERPROFILE.nugetwv2Microsoft.Web.WebView2.1.0.2903.40" ":USERPROFILE.nugetpackagesmicrosoft.web.webview2.0.2903.40" -Force
       - name: Configure
         run: cmake -S apps/sanctuary -B apps/sanctuary/build -DCMAKE_BUILD_TYPE=Release
       - name: Build

@@ -65,6 +65,9 @@ inline int wheelSemitones (int playIn, int soundIn)
 //==============================================================================
 // Slot + Rig
 //==============================================================================
+/// Slots per Rig (UI spec §3: "up to eight"). The first four are the JM worlds by default.
+inline constexpr int kSlots = 8;
+
 struct AmpEnv { float attackMs = 2, decayMs = 0, sustain = 100, releaseMs = 250; };
 
 struct SlotSpec
@@ -153,7 +156,7 @@ struct DroneSettings
 //==============================================================================
 struct Rig
 {
-    std::array<SlotSpec, 4> slots;
+    std::array<SlotSpec, kSlots> slots;
     FxRackState masterRack;
     std::array<MacroSpec, 4> macros { MacroSpec { "MACRO 1", {} }, MacroSpec { "MACRO 2", {} },
                                       MacroSpec { "MACRO 3", {} }, MacroSpec { "MACRO 4", {} } };
@@ -163,11 +166,11 @@ struct Rig
 
     Rig()
     {
-        for (int i = 0; i < 4; ++i)
+        for (int i = 0; i < kSlots; ++i)
         {
-            slots[(size_t) i].world = i;
-            slots[(size_t) i].engineParams = jm::defaultEngineParams (i);
-            slots[(size_t) i].rack = jm::buildDefaultRack (i);
+            slots[(size_t) i].world = i % 4;
+            slots[(size_t) i].engineParams = jm::defaultEngineParams (i % 4);
+            slots[(size_t) i].rack = jm::buildDefaultRack (i % 4);
         }
     }
 };
@@ -215,7 +218,7 @@ inline float valueFromNorm (const PathInfo& pi, float n)
     return pi.min + (pi.max - pi.min) * n;
 }
 
-inline const char* slotLetter (int i) { static const char* l[] = { "A", "B", "C", "D" }; return l[juce::jlimit (0, 3, i)]; }
+inline const char* slotLetter (int i) { static const char* l[] = { "A", "B", "C", "D", "E", "F", "G", "H" }; return l[juce::jlimit (0, kSlots - 1, i)]; }
 
 inline PathInfo pathInfo (const Rig& rig, const juce::String& path)
 {
@@ -246,7 +249,7 @@ inline PathInfo pathInfo (const Rig& rig, const juce::String& path)
     if (head.startsWith ("slot") && parts.size() >= 2)
     {
         const int i = head.substring (4).getIntValue();
-        if (i < 0 || i > 3) return pi;
+        if (i < 0 || i >= kSlots) return pi;
         auto& s = rig.slots[(size_t) i];
         const juce::String group = juce::String ("Slot ") + slotLetter (i);
         if (parts[1] == "engine" && parts.size() == 3)
@@ -316,7 +319,7 @@ inline std::optional<float> rigGet (const Rig& rig, const juce::String& path)
     if (head.startsWith ("slot") && parts.size() >= 2)
     {
         const int i = head.substring (4).getIntValue();
-        if (i < 0 || i > 3) return std::nullopt;
+        if (i < 0 || i >= kSlots) return std::nullopt;
         auto& s = rig.slots[(size_t) i];
         if (parts[1] == "engine" && parts.size() == 3)
         {
@@ -383,7 +386,7 @@ inline bool rigSet (Rig& rig, const juce::String& path, float v)
     if (head.startsWith ("slot") && parts.size() >= 2)
     {
         const int i = head.substring (4).getIntValue();
-        if (i < 0 || i > 3) return false;
+        if (i < 0 || i >= kSlots) return false;
         auto& s = rig.slots[(size_t) i];
         if (parts[1] == "engine" && parts.size() == 3)
         {
@@ -434,7 +437,7 @@ inline bool rigSet (Rig& rig, const juce::String& path, float v)
 inline juce::StringArray allPaths (const Rig& rig)
 {
     juce::StringArray out;
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < kSlots; ++i)
     {
         auto& s = rig.slots[(size_t) i];
         const juce::String p = "slot" + juce::String (i);
@@ -585,8 +588,8 @@ inline Rig rigFromVar (const juce::var& v)
     Rig r;
     if (! v.isObject()) return r;
     if (auto* slots = v.getProperty ("slots", juce::var()).getArray())
-        for (int i = 0; i < juce::jmin (4, slots->size()); ++i)
-            r.slots[(size_t) i] = slotFromVar (slots->getReference (i), i);
+        for (int i = 0; i < juce::jmin (kSlots, slots->size()); ++i)
+            r.slots[(size_t) i] = slotFromVar (slots->getReference (i), i % 4);
     if (v.hasProperty ("masterRack")) r.masterRack = rackFromVar (v["masterRack"]);
     if (auto* macros = v.getProperty ("macros", juce::var()).getArray())
         for (int i = 0; i < juce::jmin (4, macros->size()); ++i)
@@ -663,6 +666,7 @@ struct Song
     bool minor = false;
     double tempo = 72.0;
     juce::String meter = "4/4";
+    int runtimeSec = 0;               // shown in the set rail; 0 = unknown
     juce::StringArray tags;
     juce::String notes;
     juce::uint32 colour = 0xff3B7BFF;
@@ -687,7 +691,7 @@ struct Song
         auto* meta = new juce::DynamicObject();
         meta->setProperty ("title", title); meta->setProperty ("artist", artist);
         meta->setProperty ("songKey", songKey); meta->setProperty ("minor", minor);
-        meta->setProperty ("tempo", tempo); meta->setProperty ("meter", meter);
+        meta->setProperty ("tempo", tempo); meta->setProperty ("meter", meter); meta->setProperty ("runtimeSec", runtimeSec);
         juce::Array<juce::var> t; for (auto& s : tags) t.add (s); meta->setProperty ("tags", t);
         meta->setProperty ("notes", notes); meta->setProperty ("colour", juce::String::toHexString ((int) colour));
         o->setProperty ("meta", juce::var (meta));
@@ -714,6 +718,7 @@ struct Song
         s.minor = (bool) meta.getProperty ("minor", false);
         s.tempo = juce::jlimit (40.0, 240.0, (double) meta.getProperty ("tempo", 72.0));
         s.meter = meta.getProperty ("meter", "4/4").toString();
+        s.runtimeSec = juce::jlimit (0, 7200, (int) meta.getProperty ("runtimeSec", 0));
         s.tags.clear();
         if (auto* t = meta.getProperty ("tags", juce::var()).getArray()) for (auto& x : *t) s.tags.add (x.toString());
         s.notes = meta.getProperty ("notes", "").toString();
@@ -757,7 +762,7 @@ struct Song
         for (int i = 0; i < 4; ++i) if (! baseRig.macros[(size_t) i].links.empty()) add ("macro" + juce::String (i + 1));
         for (auto& m : moments) for (auto& [p, _] : m.diff) add (p);
         add ("drone.level");
-        for (int i = 0; i < 4; ++i) if (baseRig.slots[(size_t) i].hasSound()) add ("slot" + juce::String (i) + ".vol");
+        for (int i = 0; i < kSlots; ++i) if (baseRig.slots[(size_t) i].hasSound()) add ("slot" + juce::String (i) + ".vol");
         add ("drone.brightness");
         return out;
     }
@@ -938,7 +943,9 @@ inline const juce::StringArray& actionTargets()
                                        "stage.deck", "stage.panic", "stage.droneToggle",
                                        "wheel.soundIn.up", "wheel.soundIn.down", "tempo.tap",
                                        "stage.moment1", "stage.moment2", "stage.moment3", "stage.moment4",
-                                       "stage.moment5", "stage.moment6", "stage.moment7", "stage.moment8" };
+                                       "stage.moment5", "stage.moment6", "stage.moment7", "stage.moment8",
+                                       "pad.riser", "pad.impact", "pad.shimmer", "pad.subdrop", "pad.reverse", "pad.sweep",
+                                       "stage.reset", "stage.rehearse" };
     return a;
 }
 inline bool isActionTarget (const juce::String& t) { return actionTargets().contains (t); }

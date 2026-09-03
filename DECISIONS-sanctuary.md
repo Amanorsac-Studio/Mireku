@@ -39,3 +39,15 @@ Sanctuary (Amanorsac Studio) lives in `apps/sanctuary`. Spec: [docs/SANCTUARY-BU
 - Organ world (needs a shared `.jmi` schema change, which would touch `packages/jmi-format` used by both products). The gospel factory song uses EP + FM.
 - Set-pack sharing carries JSON only (no audio) and resolves bundles by name, muting slots whose bundle is missing.
 - pluginval run is part of CI, not this repo's ctest (same as JM Signature).
+
+## UI rebuild (September 2026): the mockup is the UI
+
+- **The HTML mockup runs live in a WebView.** `docs/sanctuary-stage-ui.html` was the design ground truth; instead of re-drawing it in JUCE the app hosts it in `juce::WebBrowserComponent` (WebView2 on Windows, WKWebView on macOS) from `apps/sanctuary/resources/ui/index.html`, with a native bridge in `SanctuaryEditor.cpp`. The owner chose this over a native redraw for an exact match and faster iteration; the UI spec's "do not embed a WebView" line is superseded by that decision. The audio thread is untouched: the bridge reads atomics and calls the same message-thread API the Surfaces use.
+- **Bridge protocol.** C++ → page: a `state` event (full model JSON, on every change and once a second) and a `tick` event at 30 Hz (meters, beat, glide, chord, held keys, pads). Page → C++: one native function `cmd(name, args)`. Every knob, fader and switch in the page writes through `setPath`, so Surfaces, macros, Moments and the UI share one path space.
+- **Windows needs the WebView2 SDK at build time.** CMake stages `Microsoft.Web.WebView2` from the NuGet cache into the build tree because JUCE's find script expects a folder *containing* a `*Microsoft.Web.WebView2*` directory. CI runs `nuget install` first. At run time the Evergreen WebView2 runtime that ships with Windows 10/11 is used.
+- **Eight slots.** `kSlots = 8` in the model; the first four default to the JM worlds. The mixer shows only slots that have a sound, plus *Add Slot*.
+- **Performance pads** (UI spec §7.1) are a ninth internal slot (`engine/Pads.h`): six one-shot / synced / hold pads from `Library/Pads/<name>.wav`, synthesised stand-ins when the files are missing, quantised to the next bar for SYNC pads, routed to Main after the master rack, ignoring the Wheel. Surface targets `pad.riser` … `pad.sweep`.
+- **Solo** is a processor-level mask checked in MIDI routing (soloed slots take notes; others do not), so it never touches a slot's saved enable state.
+- **Settings** are a generic key → value map with defaults, persisted to `settings.json` and inside the plugin state. The engine reads pitch-bend range, click-to-main, tempo source, limiter, autosave, RESET fade and the pedal roles; the rest are stored for the UI.
+- **RESET replaces PANIC**: same action, drone fade time from Settings, and it writes what it did to the status line.
+- **Song runtime** (`runtimeSec`) was added to the Song model for the set rail and total; unknown shows blank.

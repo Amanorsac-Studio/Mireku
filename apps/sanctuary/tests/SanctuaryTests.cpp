@@ -32,7 +32,7 @@ static void testPaths()
     CHECK (pathInfo (r, "slot0.fx0.drive").valid, "slot0.fx0.drive (EP preamp) is a path");
     CHECK (pathInfo (r, "slot0.fx0.bypass").kind == ParamKind::Bool, "bypass is a bool");
     CHECK (! pathInfo (r, "slot0.fx9.mix").valid, "out-of-range unit index is not a path");
-    CHECK (! pathInfo (r, "slot7.vol").valid, "slot7 is not a path");
+    CHECK (pathInfo (r, "slot7.vol").valid && ! pathInfo (r, "slot8.vol").valid, "eight slots: slot7 is a path, slot8 is not");
     CHECK (pathInfo (r, "drone.brightness").group == "Drone", "drone paths grouped");
     CHECK (rigSet (r, "slot1.vol", -12.0f) && rigGet (r, "slot1.vol") == -12.0f, "vol set/get");
     CHECK (rigSet (r, "drone.on", 1.0f) && r.drone.on, "drone.on set");

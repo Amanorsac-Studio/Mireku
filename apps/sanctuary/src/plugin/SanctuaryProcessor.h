@@ -1,9 +1,10 @@
 // SanctuaryProcessor.h — Sanctuary (Amanorsac Studio) audio processor.
 //
-// Four sound slots, each a DOUBLE-BUFFERED chain (sampler + FX rack) so a Song
+// Eight sound slots, each a triple-buffered chain (sampler + FX rack) so a Song
 // change never cuts a voice or a tail (spec §4.2); a master rack + limiter; the
-// Drone engine; the Wheel; tempo + click; chord detection; Surface bindings;
-// the Stage controller (Set → Song → Moment) and crash-recovery session file.
+// Drone engine; the six performance pads; the Wheel; tempo + click; chord
+// detection; Surface bindings; the Stage controller (Set → Song → Moment);
+// settings; and the crash-recovery session file.
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_audio_utils/juce_audio_utils.h>
@@ -14,11 +15,12 @@
 #include "../engine/StageModel.h"
 #include "../engine/Drone.h"
 #include "../engine/ChordDetect.h"
+#include "../engine/Pads.h"
 
 namespace sanctuary {
 
 //==============================================================================
-/// One half of a slot's double buffer.
+/// One third of a slot's chain ring.
 struct SlotChain
 {
     jm::SamplerEngine eng;
@@ -47,11 +49,32 @@ struct Glide
     bool discreteAtEnd = false;         // slot disable happens at the END
 };
 
+/// Settings (UI spec §4 Settings). Generic key → value, persisted to settings.json,
+/// with typed accessors for the few the engine reads.
+struct Settings
+{
+    std::map<juce::String, juce::var> values;
+    static const std::map<juce::String, juce::var>& defaults();
+    juce::var get (const juce::String& k) const
+    {
+        auto it = values.find (k); if (it != values.end()) return it->second;
+        auto d = defaults().find (k); return d == defaults().end() ? juce::var() : d->second;
+    }
+    bool getBool (const juce::String& k) const { return (bool) get (k); }
+    double getNum (const juce::String& k) const { return (double) get (k); }
+    juce::String getStr (const juce::String& k) const { return get (k).toString(); }
+    void set (const juce::String& k, const juce::var& v) { values[k] = v; }
+    juce::var toVar() const;
+    void fromVar (const juce::var& v);
+};
+
 //==============================================================================
 class SanctuaryProcessor : public juce::AudioProcessor,
                            private juce::Timer
 {
 public:
+    static constexpr int kChains = 3;
+
     SanctuaryProcessor();
     ~SanctuaryProcessor() override;
 
@@ -84,12 +107,15 @@ public:
     static juce::File stageDir()    { return appDataDir().getChildFile ("Stage"); }
     static juce::File sessionFile() { return stageDir().getChildFile ("session.json"); }
     static juce::File runningLock() { return stageDir().getChildFile ("running.lock"); }
+    static juce::File settingsFile(){ return appDataDir().getChildFile ("settings.json"); }
+    juce::File padsDir() const      { return library.libraryDir().getChildFile ("Pads"); }
 
     // ---------------------------------------------------------- public model
     juce::AudioProcessorValueTreeState apvts;
     jm::Library library;
     jm::MasterLimiter masterLimiter;
     juce::MidiKeyboardState keyboardState;
+    Settings settings;
 
     /// The live Rig: what the DSP is playing right now (base + Moment + edits).
     Rig rig;
@@ -105,19 +131,22 @@ public:
     bool rehearsal = false;
     bool deck = false;
     juce::String sessionName;           // "Resume where you were" candidate (empty = none)
+    juce::String lastAction;            // status line: what the last RESET / learn did
 
     // meters / status (UI reads)
     std::atomic<float> masterPeakL { 0 }, masterPeakR { 0 };
     std::atomic<float> cpuLoad { 0 };
     std::atomic<int> totalVoices { 0 };
-    std::array<std::atomic<float>, 4> slotPeak {};
+    std::array<std::atomic<float>, kSlots> slotPeak {};
     std::atomic<int> overruns { 0 };
     std::atomic<double> beatPhase { 0.0 };   // 0..beatsPerBar, for the beat light
     std::atomic<int> lastIncomingCc { -1 }, lastIncomingNote { -1 };
     std::atomic<bool> hostTempo { false };
+    std::array<std::atomic<juce::uint64>, 2> heldNotes {};   // incoming (untransposed) keys, for the keyboard display
 
     DroneEngine drone;
     ChordDetector chords;
+    PadEngine pads;
 
     // ---------------------------------------------------------- stage control (message thread)
     void loadSet (const Set& s);
@@ -127,12 +156,16 @@ public:
     void gotoMoment (int index, bool glide = true);
     void nextMoment();
     void prevMoment();
-    void panic();
+    /// RESET (UI spec §3): all notes off, release deferred sustain, fade the drone over the configured seconds, keep FX tails.
+    void reset();
+    void panic() { reset(); }
     void toggleDrone();
     const Song* currentSong() const;
     Song* currentSongMutable();
     const Song* nextSongInSet() const;
     juce::String currentSongTitle() const { auto* s = currentSong(); return s ? s->title : juce::String ("No song"); }
+    double secondsSinceAutosave() const { return (juce::Time::getMillisecondCounterHiRes() - lastAutosaveMs_) / 1000.0; }
+    double serviceElapsedSeconds() const { return (juce::Time::getMillisecondCounterHiRes() - serviceStartMs_) / 1000.0; }
 
     // wheel (§6.1)
     int playIn() const { return playIn_; }
@@ -140,6 +173,7 @@ public:
     void setPlayIn (int pc);
     void setSoundIn (int pc);
     void nudgeSoundIn (int semis) { setSoundIn (((soundIn_ + semis) % 12 + 12) % 12); }
+    void nudgePlayIn (int semis) { setPlayIn (((playIn_ + semis) % 12 + 12) % 12); }
     int wheelShift() const { return wheelSemitones (playIn_, soundIn_); }
 
     // tempo (§6.3)
@@ -154,15 +188,14 @@ public:
     bool followHostTempo() const { return followHost_; }
     double beatSeconds() const;
     int beatsPerBar() const;
+    int currentBeat() const { return (int) beatPhase.load(); }
 
     // ---------------------------------------------------------- parameters (message thread)
-    /// Write a RAW value to a path: updates `rig` AND the live DSP. Returns false for unknown paths.
     bool setPath (const juce::String& path, float raw, bool writeToMoment = true);
     bool setPathNorm (const juce::String& path, float norm, bool writeToMoment = true);
     std::optional<float> getPath (const juce::String& path) const { return rigGet (rig, path); }
     float getPathNorm (const juce::String& path) const;
-    /// Trigger an ACTION target (stage.nextMoment, tempo.tap …). Returns false if unknown.
-    bool triggerAction (const juce::String& action);
+    bool triggerAction (const juce::String& action, bool down = true);
     void applyMacro (int index);
 
     // slot editing
@@ -171,6 +204,13 @@ public:
     void setSlotRange (int slot, int keyLo, int keyHi, int velLo, int velHi, int octave, int channel, bool ignoreWheel);
     void setSlotRack (int slot, const FxRackState& rack);
     void setMasterRack (const FxRackState& rack);
+    void setSolo (int slot, bool on);
+    bool isSolo (int slot) const { return (soloMask_.load() >> slot) & 1u; }
+    /// Number of slots the UI shows: slots that have a sound, plus none of the empty tail.
+    int usedSlots() const { int n = 0; for (int i = 0; i < kSlots; ++i) if (rig.slots[(size_t) i].hasSound()) n = i + 1; return n; }
+
+    // pads
+    void firePad (int i, bool down) { pads.trigger (i, down); }
 
     // song / set persistence
     void newSongFromRig (const juce::String& title);
@@ -189,13 +229,22 @@ public:
     // surfaces (§7)
     void saveSurfaces();
     Surface& currentSurface();
-    /// Learn: the next CC/note that arrives is bound to `target`.
-    void armLearn (const juce::String& target) { learnTarget_ = target; }
-    void cancelLearn() { learnTarget_.clear(); }
+    void armLearn (const juce::String& target) { learnTarget_ = target; learnChanged.sendChangeMessage(); }
+    void cancelLearn() { learnTarget_.clear(); learnChanged.sendChangeMessage(); }
     bool learnArmed() const { return learnTarget_.isNotEmpty(); }
     juce::String learnTarget() const { return learnTarget_; }
     juce::String bindingFor (const juce::String& target) const;
     void unbindTarget (const juce::String& target);
+    /// Learn for a specific surface control (Surfaces page): next CC/note re-maps that control's hardware id.
+    void armLearnControl (const juce::String& controlId) { learnControl_ = controlId; learnChanged.sendChangeMessage(); }
+    juce::String learnControl() const { return learnControl_; }
+    /// Header "Learn MIDI": the next UI control touched becomes the learn target.
+    bool learnPick = false;
+    void refreshPadMask();
+
+    // settings
+    void saveSettings();
+    void applySettings();
 
     // session (§9)
     bool sessionAvailable() const { return sessionAvailable_; }
@@ -209,10 +258,12 @@ public:
     void renameMoment (int index, const juce::String& name);
     void setMomentTransition (int index, float bars);
     void moveMoment (int from, int to);
+    void captureRigIntoMoment (int index);
+    void revertMomentEntry (int index, const juce::String& path);
     bool glideActive() const { return ! glides_.empty(); }
     float glideProgress() const;
+    double glideBarsRemaining() const;
 
-    // UI wheels / keyboard
     void sendUiMidi (const juce::MidiMessage& m);
     std::vector<jm::BundleInfo> bundlesForWorld (int w) const { return library.bundlesForWorld (w); }
 
@@ -220,17 +271,11 @@ public:
     juce::ChangeBroadcaster rigChanged;     // parameter values / slot structure
     juce::ChangeBroadcaster learnChanged;
 
-    // introspection (tests)
     int activeVoicesInSlot (int slot) const;
     int runningChains (int slot) const;
     ChordResult currentChord() const { return chords.result(); }
-
-    /// Sync the whole `rig` into DSP (after a state load).
     void syncAllToDsp();
-    /// Tests: run one message-thread tick (glides, drone follow, surface events) without a message loop.
     void tick() { timerCallback(); }
-
-    struct FactoryContent;              // Factory.h
     void ensureFactoryContent();
 
 private:
@@ -239,7 +284,7 @@ private:
     void renderChunk (juce::AudioBuffer<float>& buffer, int start, int len);
     void renderClick (juce::AudioBuffer<float>* clickBus, juce::AudioBuffer<float>& main, int n);
     void applyRigToDsp (const Rig& newRig, bool songChange);
-    void syncSlotToChain (int slot, SlotChain& ch, const SlotSpec& s, bool clickless);
+    void syncSlotToChain (int slot, SlotChain& ch, const SlotSpec& s, bool liveHandover = false);
     void syncRoutes();
     void pushDroneSettings();
     void updateDroneTarget();
@@ -249,15 +294,12 @@ private:
     void writeToCurrentMoment (const juce::String& path, float norm);
     jm::BundlePtr bundleFor (const juce::String& dir);
     void preloadSong (const Song& s);
-    juce::String resolveSongId (int setIndex) const;
     void handleSurfaceEvent (int cc, int note, int value, int channel);
     void drainSurfaceFifo();
-    void selectSurfaceForDevice();
 
-    static constexpr int kChains = 3;   // live + up to two retiring tails per slot
-    std::array<std::array<SlotChain, kChains>, 4> chains_;
-    std::array<SlotRoute, 4> routes_;
-    std::array<juce::SmoothedValue<float>, 4> volSm_, panSm_;
+    std::array<std::array<SlotChain, kChains>, kSlots> chains_;
+    std::array<SlotRoute, kSlots> routes_;
+    std::array<juce::SmoothedValue<float>, kSlots> volSm_, panSm_;
     jm::FxRackDsp masterRack_;
     juce::AudioBuffer<float> slotBuf_, chainBuf_;
     juce::MidiBuffer uiMidi_;
@@ -270,34 +312,32 @@ private:
     std::array<std::atomic<float>*, 4> macroParams_ {};
     std::array<float, 4> lastMacro_ { -1, -1, -1, -1 };
     std::array<bool, 4> macroDirty_ { false, false, false, false };
-    int beatIndex_ = 0;
-    // audio-thread view of which notes are Surface pads (never the keyboard)
-    std::array<std::atomic<juce::uint64>, 2> padNoteMask_ {};
-    // per-slot mod-wheel destination inside the live rack: unit index (−1 none) + param index
-    std::array<std::atomic<int>, 4> modUnit_ {}, modParam_ {};
-    void refreshPadMask();
-    const Surface* currentSurfaceConst() const { return surfaces.empty() ? nullptr : &surfaces[(size_t) juce::jlimit (0, (int) surfaces.size() - 1, surfaceIndex)]; }
     juce::SmoothedValue<float> masterGain_ { 1.0f }, expressionGain_ { 1.0f };
 
     std::atomic<int> wheelShift_ { 0 }, transpose_ { 0 }, octave_ { 0 };
+    std::atomic<juce::uint32> soloMask_ { 0 };
+    std::atomic<float> bendRange_ { 2.0f };
     int playIn_ = 0, soundIn_ = 0;
     std::atomic<double> bpm_ { 72.0 };
     std::atomic<bool> clickOn_ { false };
     bool clickToMain_ = false, followHost_ = false;
     int beatsPerBar_ = 4; bool eighthMeter_ = false;
-    double beatSamplePos_ = 0.0;        // audio-thread beat clock
+    double beatSamplePos_ = 0.0;
+    int beatIndex_ = 0;
     int clickSamplesLeft_ = 0; float clickFreq_ = 1000.0f; double clickPhase_ = 0.0;
     std::vector<double> taps_;
 
-    // surface events → message thread
     struct SurfEvent { int cc, note, value, channel; };
     juce::AbstractFifo surfFifo_ { 512 };
     std::array<SurfEvent, 512> surfEvents_ {};
-    juce::String learnTarget_;
+    juce::String learnTarget_, learnControl_;
     std::atomic<int> pcRequest_ { -1 };
     struct RoutedEv { juce::uint8 b0, b1, b2; };
     juce::AbstractFifo uiFifo_ { 256 };
     std::array<RoutedEv, 256> uiEvents_ {};
+    std::array<std::atomic<juce::uint64>, 2> padNoteMask_ {};
+    std::array<std::atomic<int>, kSlots> modUnit_ {}, modParam_ {};
+    const Surface* currentSurfaceConst() const { return surfaces.empty() ? nullptr : &surfaces[(size_t) juce::jlimit (0, (int) surfaces.size() - 1, surfaceIndex)]; }
 
     std::vector<Glide> glides_;
     double glideStartMs_ = 0, glideDurMs_ = 0;
@@ -306,7 +346,6 @@ private:
     std::mutex loadMutex_;
     juce::ThreadPool preloadPool_ { 1 };
 
-    // drone follow (message thread)
     int lastChordRoot_ = -1; ChordQuality lastChordQ_ = ChordQuality::none;
     double chordSeenMs_ = 0, lastChordChangeMs_ = 0;
     int pendingRoot_ = -1; ChordQuality pendingQ_ = ChordQuality::none;
@@ -314,6 +353,7 @@ private:
     bool sessionAvailable_ = false;
     juce::var sessionVar_;
     bool stateLoaded_ = false;
+    double lastAutosaveMs_ = 0, serviceStartMs_ = 0;
 
     JUCE_DECLARE_WEAK_REFERENCEABLE (SanctuaryProcessor)
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SanctuaryProcessor)

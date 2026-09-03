@@ -20,7 +20,7 @@ class SanctuaryWindow final : public juce::StandaloneFilterWindow
 {
 public:
     SanctuaryWindow (const juce::String& title, juce::PropertySet* settings, bool firstLaunch)
-        : juce::StandaloneFilterWindow (title, Theme::bg, settings, false), settings_ (settings)
+        : juce::StandaloneFilterWindow (title, juce::Colour (0xff04060D), settings, false), settings_ (settings)
     {
         for (auto* c : getChildren())
             if (auto* b = dynamic_cast<juce::TextButton*> (c))

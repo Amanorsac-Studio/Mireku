@@ -1,11 +1,13 @@
-// SanctuaryEditor.h — the window: header (brand, set, master), STAGE / EDIT pages,
-// the DECK overlay, bottom bar (keyboard, panic, deck), session-resume banner.
+// SanctuaryEditor.h — the window is a WebView showing resources/ui/index.html
+// (the design mockup, made live). This class is the BRIDGE: it serialises the
+// processor's model into a `state` event, streams meters/beat/chord in a `tick`
+// event at 30 Hz, and executes `cmd(name, args)` calls from the page.
+//
+// Nothing here touches the audio thread: it reads atomics and calls the same
+// message-thread API the Surfaces use.
 #pragma once
 #include "SanctuaryProcessor.h"
-#include "../ui/Widgets.h"
-#include "../ui/StageView.h"
-#include "../ui/DeckView.h"
-#include "../ui/EditView.h"
+#include <juce_gui_extra/juce_gui_extra.h>
 
 namespace sanctuary {
 
@@ -19,7 +21,6 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
-    bool keyPressed (const juce::KeyPress&) override;
 
     /// Standalone installs its device dialog here before any editor exists.
     static std::function<void()>& audioSettingsHook() { static std::function<void()> f; return f; }
@@ -27,23 +28,20 @@ public:
 private:
     void timerCallback() override;
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
-    void showPage (int page);   // 0 stage, 1 edit
-    void updateDeck();
+
+    juce::var buildState() const;
+    juce::var buildTick() const;
+    juce::var runCommand (const juce::String& name, const juce::var& a);
+    void pushState();
+
+    std::optional<juce::WebBrowserComponent::Resource> provideResource (const juce::String& url);
 
     SanctuaryProcessor& proc_;
-    SanctuaryLookAndFeel lnf_;
-    StageView stage_;
-    EditView edit_;
-    std::unique_ptr<DeckView> deck_;
-    juce::MidiKeyboardComponent keyboard_;
-    bool keyboardVisible_ = false;
-
-    FlatButton stageBtn_ { "Stage" }, editBtn_ { "Edit" }, deckBtn_ { "Deck" }, panicBtn_ { "Panic" }, kbBtn_ { "Keyboard" };
-    FlatButton resumeBtn_ { "Resume where I was" }, discardBtn_ { "Start fresh" };
-    juce::Slider master_;
-    Meter meterL_, meterR_;
-    juce::Rectangle<int> header_, bottom_, banner_, status_;
-    int page_ = 0;
+    std::unique_ptr<juce::WebBrowserComponent> web_;
+    bool stateDirty_ = true;
+    int tickCount_ = 0;
+    int splitSlot_ = -1;                // Slots page "Split…": waiting for a key press
+    std::unique_ptr<juce::FileChooser> chooser_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SanctuaryEditor)
 };

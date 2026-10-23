@@ -262,6 +262,16 @@ public:
     {
         const float depth = p (1) / 100.0f, fbAmt = p (2) / 100.0f;
         const int stages = 2 * ((int) p (3) + 1);
+        // CLIENT REQUEST — Mix (wet/dry), appended to the registry at index 4.
+        // The unit used to sum `0.5f * (dry + wet)` unconditionally; the
+        // registry default of 50 gives wetG = dryG = 0.5f EXACTLY (50/100 is
+        // exact in binary, and 0.5*a + 0.5*b is the same rounding as
+        // 0.5*(a+b) for any normal a, b), so an old preset — which carries no
+        // "mix" key and therefore loads at the default — is bit-identical.
+        // The feedback path deliberately does NOT see the mix: the recirculated
+        // sample is the all-pass output, exactly as before, so changing Mix
+        // cannot change the wet signal or the loop's stability.
+        const float wetG = juce::jlimit (0.0f, 1.0f, p (4) / 100.0f), dryG = 1.0f - wetG;
         lfo_.setRate (p (0), sr_);
         auto* L = b.getWritePointer (0);
         auto* R = b.getNumChannels() > 1 ? b.getWritePointer (1) : L;
@@ -283,7 +293,7 @@ public:
                     x = y;
                 }
                 fb_[ch] = x;
-                *s = 0.5f * (*s + x);
+                *s = dryG * *s + wetG * x;
             }
         }
     }
@@ -302,6 +312,11 @@ public:
     void process (juce::AudioBuffer<float>& b, double) override
     {
         const float depth = p (1) / 100.0f, fb = p (2) / 100.0f, manual = p (3);
+        // CLIENT REQUEST — Mix, appended at index 4. Same reasoning as the
+        // phaser: the unit summed `0.5f * (dry + wet)`, so the default of 50
+        // reproduces it exactly, and the feedback taps (fbL_/fbR_) are read
+        // from the delay line BEFORE the blend, so Mix never touches the loop.
+        const float wetG = juce::jlimit (0.0f, 1.0f, p (4) / 100.0f), dryG = 1.0f - wetG;
         lfo_.setRate (p (0), sr_);
         auto* L = b.getWritePointer (0);
         auto* R = b.getNumChannels() > 1 ? b.getWritePointer (1) : L;
@@ -313,8 +328,8 @@ public:
             dl_.push (guard_.shape (L[i] + fbL_ * fb), guard_.shape (R[i] + fbR_ * fb));
             fbL_ = dl_.read (0, dMs * msToSamp);
             fbR_ = dl_.read (1, dMs * msToSamp);
-            L[i] = 0.5f * (L[i] + fbL_);
-            R[i] = 0.5f * (R[i] + fbR_);
+            L[i] = dryG * L[i] + wetG * fbL_;
+            R[i] = dryG * R[i] + wetG * fbR_;
         }
     }
 private:

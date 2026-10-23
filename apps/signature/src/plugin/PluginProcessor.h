@@ -5,6 +5,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "../engine/Sampler.h"
 #include "../engine/AppState.h"
+#include "../engine/Authoring.h"
 #include "../engine/Limiter.h"
 #include "../engine/MidiRouting.h"
 
@@ -94,12 +95,77 @@ public:
     /// See DECISIONS-signature.md, "Client review round 8".
     void makeSlotAudible (int slot);
     bool applyUserPresetToSlot (int slot, const juce::File& jsonFile);
-    void saveUserPreset (int slot, const juce::String& name);
     juce::var slotPresetToVar (int slot, const juce::String& name) const;
 
-    void savePerformancePreset (const juce::String& name);
     bool loadPerformancePreset (const juce::File& f);
     static juce::File performancePresetDir() { return Library::userPresetDir().getChildFile ("Performance"); }
+    /// Already scanned as factory content by the browser; in AUTHORING mode it
+    /// is also where a performance snapshot is SAVED.
+    static juce::File factoryPerformanceDir() { return performancePresetDir().getChildFile ("Factory"); }
+
+    //================================================================ AUTHORING MODE
+    // One SAVE gesture, two meanings, decided by the mode (engine/Authoring.h):
+    //
+    //   AUTHORING   patch     -> <bundle>.jmi/presets/<name>.json   (ships with the instrument)
+    //               snapshot  -> Presets/Performance/Factory/<name>.json
+    //   RELEASE     patch     -> Presets/<world>/<name>.json        (today's behaviour)
+    //               snapshot  -> Presets/Performance/<name>.json
+    //
+    // Both calls REPORT where the save landed and what it captured, so the UI
+    // can state it instead of implying it. Neither ever fails silently: if the
+    // bundle cannot be written (read-only library, empty slot, missing bundle)
+    // the patch is still saved — to the user folder — and the outcome says so.
+    struct SaveOutcome
+    {
+        bool ok = false;
+        authoring::SaveDest dest = authoring::SaveDest::worldUserFolder;
+        juce::File file;
+        juce::String message;      ///< one line for the UI: where it went
+        juce::String note;         ///< non-fatal remark (backup written, value clamped, fallback)
+        bool fellBack = false;     ///< authoring mode wanted the bundle and could not have it
+    };
+
+    SaveOutcome saveInstrumentPreset (int slot, const juce::String& name);
+    SaveOutcome savePerformanceSnapshot (const juce::String& name);
+
+    /// Pre-existing names, kept so every old call site and test still compiles.
+    void saveUserPreset (int slot, const juce::String& name) { saveInstrumentPreset (slot, name); }
+    void savePerformancePreset (const juce::String& name) { savePerformanceSnapshot (name); }
+
+    /// The .jmi folder a slot is playing, or File() when the slot is empty.
+    juce::File bundleDirForSlot (int slot) const;
+    /// The slot a model page edits (the same rule as ui/Panels.h slotForWorld).
+    int slotForModelPage (int page) const;
+
+    //---------------------------------------------------- the modulation boundary
+    // Modulation (LFOs, the mod matrix, the arpeggiator) is deliberately NOT in
+    // the .jmi preset schema — that format is shared with JM Capture, which has
+    // no modulation. So a patch CANNOT carry the artist's modulation work, and
+    // the one thing this feature must not do is let him save a patch and
+    // silently lose an hour of it. This struct is what the save control reads to
+    // say, before he commits, exactly what is and is not being captured.
+    struct ModCapture
+    {
+        int rowsOnSlot = 0;          ///< active matrix rows whose destination is in this slot
+        int rowsElsewhere = 0;       ///< active rows pointing outside it (master FX, other slots)
+        int macroLinksOnSlot = 0;    ///< macro links landing in this slot
+        int lfosInUse = 0;           ///< distinct LFOs feeding the active rows
+        bool arpOnSlot = false;      ///< the global arp is enabled for this slot
+
+        bool anyOnSlot() const { return rowsOnSlot > 0 || macroLinksOnSlot > 0 || arpOnSlot; }
+        bool any() const { return anyOnSlot() || rowsElsewhere > 0; }
+        /// "2 mod routings, 1 macro link and the arpeggiator" — human, not jargon.
+        juce::String phrase() const;
+    };
+    ModCapture modCaptureForSlot (int slot) const;
+
+    /// What the SAVE control promises, for `page` (0..3 = model page, 4 = PERFORM).
+    /// Both are built here rather than in the UI so the self-check can assert the
+    /// exact words the artist will read.
+    juce::String saveDestinationLine (int page) const;
+    /// Empty when nothing would be lost; otherwise names what a patch cannot
+    /// hold and what to save instead. Only ever non-empty on a model page.
+    juce::String modBoundaryLine (int page) const;
     /// Client review round 3 (G): the PERFORM page's browser was empty because
     /// no factory performance folder ever shipped. Written once on first run.
     void ensureFactoryPerformancePresets();

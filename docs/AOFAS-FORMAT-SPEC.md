@@ -193,6 +193,57 @@ It exists so a library browser can list instruments with **no key at all**. It
 contains **no audio, no zone map, no loop points, no preset data** — nothing that
 has value to a thief. Readers must ignore unknown fields (forward compatibility).
 
+#### Catalogue and licensing fields (additive; a v1.0 file omits them)
+
+Files packed from 2026-09-03 also carry the Amanorsac catalogue block. These are
+**optional additions to the same card object** — no binary layout changed, no
+version was bumped, and a reader written against the original §5.2 keeps working
+because it ignores what it does not recognise.
+
+```jsonc
+{
+  "…": "the v1.0 fields above, unchanged",
+
+  "category": "grand-piano",          // one of the fixed set below
+  "tags": ["worship", "bright"],      // free-form family labels
+  "licensing": {
+    "license": {                      // the library AS SHIPPED
+      "id": "proprietary",            // SPDX id where one exists
+      "name": "…",
+      "url": "…",
+      "requiresAttribution": true,
+      "attribution": "the exact credit line an app must display"
+    },
+    "sources": [                      // every upstream library used; may be []
+      {
+        "library": "Salamander Grand Piano V3",
+        "url": "https://github.com/sfzinstruments/SalamanderGrandPiano",
+        "retrieved": "2026-09-03",
+        "modifications": "trimmed, looped, re-tuned",
+        "license": { "id": "CC-BY-3.0", "requiresAttribution": true, "attribution": "…" }
+      }
+    ]
+  }
+}
+```
+
+`category` is one of: `grand-piano`, `felt-piano`, `upright-piano`,
+`electric-piano`, `strings`, `pad`, `shimmer`, `synth`, `bells-mallets`,
+`other`. Everything finer than that is a tag.
+
+**Why licensing is in the plaintext card and not in the sealed index.** Some
+source material — CC BY libraries in particular — obliges the product to display
+a credit. Attribution locked inside an encrypted payload is attribution nobody
+can read, which defeats the obligation it exists to satisfy. A player, a credits
+screen or a licence audit must be able to list what it owes **without holding
+any key**. Editing those lines is still not possible undetected, because the
+card's hash is bound into the index AAD (§6.1).
+
+A player that displays library credits should read `licensing` and show every
+`attribution` string whose `requiresAttribution` is true. A `license.id` of
+`UNVERIFIED` marks a library whose provenance has not been established: it plays
+normally for internal work, and it **must not be shipped**.
+
 The card is unencrypted but **not unprotected**: `SHA-256(card bytes)` is fed
 into the index AAD (§6.1), so editing the card breaks index decryption. A reader
 that decrypts the index successfully has thereby proven the card it read is the
@@ -229,6 +280,12 @@ handed those objects unchanged.
   ]
 }
 ```
+
+The index may also carry an optional `provenance` member — which upstream
+source each sample came from (`streamSources`, keyed by stream path, indexing
+the card's `licensing.sources`) and free-text processing `notes`. This is the
+working detail an audit needs, and unlike the credits it is sealed: only the
+credits have to be public.
 
 A reader **must ignore members it does not recognise**, at the top level and in
 a stream record. The v1 packer emits one such member, `_pad`: a run of spaces
@@ -543,6 +600,7 @@ library, so that a failure is diagnosable.
 | Version | Date | Change |
 |---|---|---|
 | 1 | 2026-09-02 | Initial specification. ChaCha20-Poly1305, 64 KiB chunks, HKDF-SHA256, plaintext public card, embedded `.jmi` payload. |
+| 1 | 2026-09-03 | **Additive only, no version bump, no layout change:** optional `category`, `tags` and `licensing` in the public card (§5.2); optional `provenance` in the index (§5.3). Existing readers are unaffected — they already ignore unknown members. |
 
 ### Reserved for v2 (no format break required)
 

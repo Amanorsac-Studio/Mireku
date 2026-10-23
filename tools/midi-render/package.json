@@ -1,0 +1,16 @@
+{
+  "name": "@amanorsac/midi-render",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Generates the MIDI you render in a DAW, then slices the rendered WAVs into .jmi bundles",
+  "scripts": {
+    "generate": "node src/generate.mjs",
+    "slice": "node src/slice.mjs"
+  },
+  "dependencies": {
+    "@jm/jmi-format": "*",
+    "@wasm-audio-decoders/flac": "^0.2.11",
+    "libflacjs": "^5.6.0"
+  }
+}

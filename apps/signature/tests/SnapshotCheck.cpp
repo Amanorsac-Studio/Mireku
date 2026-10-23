@@ -83,9 +83,72 @@ static void savePng (juce::Component& c, const juce::String& name)
     }
 }
 
-int main()
+//==============================================================================
+// AUTHORING MODE — real-library probe (NOT a CTest; its result depends on which
+// bundles are on the machine, exactly like JMSignatureDevices).
+//
+//   JMSignatureSnapshot --probe-bundle <path-to.jmi> <preset name>
+//
+// It performs the REAL authoring save into a REAL bundle through the same
+// writeBundlePreset guard the app uses, prints where it went, and then
+// `npx jmi validate <bundle>` proves the bundle is still valid. That is the
+// risky path, so it is proven against the client's own content rather than a
+// fixture.  --undo-probe removes the preset again and restores any .bak.
+static int probeBundle (const juce::String& bundlePath, const juce::String& presetName, bool undo)
+{
+    juce::File bundle (bundlePath);
+    if (! authoring::looksLikeBundle (bundle))
+    { std::printf ("not a .jmi bundle: %s\n", bundlePath.toRawUTF8()); return 2; }
+
+    auto target = bundle.getChildFile ("presets")
+                        .getChildFile (juce::File::createLegalFileName (presetName) + ".json");
+    if (undo)
+    {
+        auto bak = target.getSiblingFile (target.getFileName() + ".bak");
+        target.deleteFile();
+        if (bak.existsAsFile()) { bak.copyFileTo (target); bak.deleteFile(); }
+        std::printf ("removed %s (and restored any .bak)\n", target.getFullPathName().toRawUTF8());
+        std::printf ("ledger left in place: %s\n",
+                     authoring::ledgerFile (bundle).getFullPathName().toRawUTF8());
+        return 0;
+    }
+
+    JMSignatureProcessor proc;
+    proc.state.library.setLibraryDirTransient (bundle.getParentDirectory());
+    proc.state.library.setModeTransient (authoring::Mode::authoring);
+    for (auto& b : proc.state.library.bundles())
+        if (b.dir == bundle) proc.loadBundleIntoSlot (0, b);
+    if (proc.engines[0].bundle() == nullptr)
+    { std::printf ("could not load the bundle into a slot\n"); return 2; }
+
+    std::printf ("bundle   : %s\n", bundle.getFullPathName().toRawUTF8());
+    std::printf ("presets  : %d before\n",
+                 bundle.getChildFile ("presets").findChildFiles (juce::File::findFiles, false, "*.json").size());
+    auto out = proc.saveInstrumentPreset (0, presetName);
+    std::printf ("result   : %s\n", out.ok ? "OK" : "FAILED");
+    std::printf ("dest     : %s\n", authoring::saveDestLabel (out.dest));
+    std::printf ("file     : %s\n", out.file.getFullPathName().toRawUTF8());
+    std::printf ("message  : %s\n", out.message.toRawUTF8());
+    if (out.note.isNotEmpty()) std::printf ("note     : %s\n", out.note.toRawUTF8());
+    std::printf ("presets  : %d after\n",
+                 bundle.getChildFile ("presets").findChildFiles (juce::File::findFiles, false, "*.json").size());
+    std::printf ("ledger   : %s\n", authoring::ledgerFile (bundle).getFullPathName().toRawUTF8());
+    std::printf ("now run  : npx jmi validate \"%s\"\n", bundle.getFullPathName().toRawUTF8());
+    return out.ok && out.dest == authoring::SaveDest::bundleFactory ? 0 : 1;
+}
+
+int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI init;
+    if (argc >= 3 && juce::String (argv[1]) == "--probe-bundle")
+        return probeBundle (juce::String::fromUTF8 (argv[2]),
+                            argc >= 4 ? juce::String::fromUTF8 (argv[3]) : juce::String ("Authoring Probe"),
+                            false);
+    if (argc >= 3 && juce::String (argv[1]) == "--undo-probe")
+        return probeBundle (juce::String::fromUTF8 (argv[2]),
+                            argc >= 4 ? juce::String::fromUTF8 (argv[3]) : juce::String ("Authoring Probe"),
+                            true);
+
     std::printf ("JM Signature — client review round 2 self-check (1536x1024)\n"
                  "===========================================================\n");
 
@@ -1064,12 +1127,16 @@ int main()
         auto slotPreset = proc.slotPresetToVar (0, "probe");
         CHECK (! slotPreset.hasProperty ("mod"),
                "a slot/.jmi-schema preset carries NO modulation (spec decision 4)");
-        proc.savePerformancePreset ("ModProbe");
-        auto pf = JMSignatureProcessor::performancePresetDir().getChildFile ("ModProbe.json");
+        // AUTHORING MODE: the destination now depends on the mode, so take the
+        // file from the save's own report rather than assuming the user folder.
+        // Assuming it left ModProbe.json behind in the FACTORY folder on any run
+        // that happened to be in authoring mode.
+        auto pf = proc.savePerformanceSnapshot ("ModProbe").file;
         CHECK (pf.existsAsFile()
                && juce::JSON::parse (pf.loadFileAsString()).hasProperty ("mod"),
                "a performance preset DOES carry modulation");
         pf.deleteFile();
+        pf.getSiblingFile (pf.getFileName() + ".bak").deleteFile();
 
         proc.state.mod = ModState {};
         proc.publishModulation();
@@ -1367,13 +1434,13 @@ int main()
         auto slotPreset = proc.slotPresetToVar (0, "arpProbe");
         CHECK (! slotPreset.hasProperty ("mod") && ! slotPreset.hasProperty ("arp"),
                "a slot/.jmi-schema preset carries NO arp (spec decision 4)");
-        proc.savePerformancePreset ("ArpProbe");
-        auto pf = JMSignatureProcessor::performancePresetDir().getChildFile ("ArpProbe.json");
+        auto pf = proc.savePerformanceSnapshot ("ArpProbe").file;   // (mode-correct: see MOD (5))
         const auto pv = pf.existsAsFile() ? juce::JSON::parse (pf.loadFileAsString()) : juce::var();
         CHECK (pf.existsAsFile()
                && pv.getProperty ("mod", juce::var()).hasProperty ("arp"),
                "a performance preset DOES carry the arp");
         pf.deleteFile();
+        pf.getSiblingFile (pf.getFileName() + ".bak").deleteFile();
 
         // arp.rate and arp.gate are matrix destinations
         CHECK (proc.isModulatableDest ("arp.rate") && proc.isModulatableDest ("arp.gate"),
@@ -2438,6 +2505,603 @@ int main()
         libRoot.deleteRecursively();
         proc.state.libraryNotice.clear();
         for (auto& e : proc.engines) e.allNotesOff (false);
+    }
+
+    //==========================================================================
+    // AUTHORING MODE
+    //
+    // The app is sent to the artist, who crafts presets and modulation setups,
+    // and comes back to the developer, who solidifies them as shipping factory
+    // content. So the SAME save gesture has two meanings, and the three things
+    // that can go wrong are all tested here against a REAL bundle on disk:
+    //
+    //   * the save lands in the wrong place (factory vs. user);
+    //   * a write into a bundle leaves that bundle invalid — which would stop
+    //     it loading in JM Signature AND in JM Capture;
+    //   * the artist saves a patch and silently loses his modulation work,
+    //     because the .jmi preset schema cannot carry it.
+    //
+    // The last one is the reason the save control states its destination and
+    // its contents; those sentences are asserted here word for word, because a
+    // boundary nobody can read is not a boundary.
+    //==========================================================================
+    {
+        std::printf ("\n==========================================================\n"
+                     "AUTHORING MODE\n"
+                     "==========================================================\n");
+
+        const auto scratch = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                 .getChildFile ("JMSignatureAuthoringCheck");
+        scratch.deleteRecursively();
+        const auto libRoot = scratch.getChildFile ("Library");
+        const auto presetRoot = scratch.getChildFile ("Presets");
+        libRoot.createDirectory();
+        presetRoot.createDirectory();
+
+        // A small but REAL bundle: instrument.json + one PCM sample, the same
+        // fixture shape the round-8 block uses, so writing into presets/ is the
+        // genuine path and not a mock.
+        juce::WavAudioFormat authWav;
+        auto makeBundle = [&] (const juce::String& name, const char* world, double hz)
+        {
+            auto dir = libRoot.getChildFile (name + ".jmi");
+            dir.getChildFile ("samples").createDirectory();
+            auto wf = dir.getChildFile ("samples").getChildFile ("tone.wav");
+            const int len = 48000;
+            juce::AudioBuffer<float> b (1, len);
+            for (int s = 0; s < len; ++s)
+                b.setSample (0, s, 0.5f * (float) std::sin (2.0 * juce::MathConstants<double>::pi
+                                                            * hz * (double) s / 48000.0));
+            if (auto out = wf.createOutputStream())
+                if (auto* w = authWav.createWriterFor (out.release(), 48000.0, 1, 16, {}, 0))
+                { w->writeFromAudioSampleBuffer (b, 0, len); delete w; }
+            juce::String js;
+            js << "{\"formatVersion\":1,\"meta\":{\"name\":\"" << name << "\",\"world\":\"" << world
+               << "\",\"author\":\"authoring fixture\",\"createdAt\":\"2026-10-22T00:00:00Z\","
+                  "\"captureMode\":\"auto\",\"channels\":\"mono\",\"sampleRate\":48000,\"bitDepth\":16,"
+                  "\"notes\":\"\"},\"soundType\":\"sustaining\",\"zones\":[{\"rootNote\":60,"
+                  "\"keyRangeLo\":0,\"keyRangeHi\":127,\"velRangeLo\":1,\"velRangeHi\":127,"
+                  "\"roundRobins\":[{\"file\":\"samples/tone.wav\",\"peakDb\":-6.0,\"lengthMs\":1000}]}]}";
+            dir.getChildFile ("instrument.json").replaceWithText (js);
+            return dir;
+        };
+        const auto epBundle = makeBundle ("AuthEP", "rhodes-ep", 220.0);
+        makeBundle ("AuthMks", "mks", 330.0);
+
+        // Every presets/*.json in a bundle must pass the .jmi preset schema or
+        // `npx jmi validate` fails and jmi::loadInstrument drops the preset.
+        // This is the C++ mirror of that check, run over the whole bundle.
+        auto bundleIsValid = [] (const juce::File& dir, juce::String& why)
+        {
+            why.clear();
+            jmi::Instrument inst;
+            std::string err;
+            std::vector<std::string> files;
+            for (auto& f : dir.getChildFile ("presets")
+                              .findChildFiles (juce::File::findFiles, false, "*.json"))
+                files.push_back (f.getFullPathName().toStdString());
+            std::sort (files.begin(), files.end());
+            if (! jmi::loadInstrument (dir.getFullPathName().toStdString(), inst, err, &files))
+            { why = "loadInstrument: " + juce::String (err); return false; }
+            if (inst.presets.size() != files.size())
+            { why = "a preset file was skipped as unparseable"; return false; }
+            for (auto& f : dir.getChildFile ("presets")
+                              .findChildFiles (juce::File::findFiles, false, "*.json"))
+            {
+                auto chk = authoring::checkBundlePresetVar (juce::JSON::parse (f.loadFileAsString()));
+                if (! chk.ok)
+                { why = f.getFileName() + ": " + chk.errors.joinIntoString ("; "); return false; }
+            }
+            return true;
+        };
+
+        proc.state.library.setLibraryDirTransient (libRoot);
+        for (auto& e : proc.engines) e.setBundle (nullptr);
+        proc.state.currentPage = 0;
+        for (auto& b : proc.state.library.bundles())
+            if (b.dir == epBundle) proc.loadBundleIntoSlot (0, b);
+
+        // ---------------------------------------------------------------------
+        std::printf ("\n== AUTHORING (1) the mode: default, parse, and what it says on screen ==\n");
+        {
+            CHECK (authoring::modeFromId ("") == authoring::Mode::authoring
+                   && authoring::modeFromId ("authoring") == authoring::Mode::authoring
+                   && authoring::modeFromId ("release") == authoring::Mode::release
+                   && authoring::modeFromId ("RELEASE") == authoring::Mode::release,
+                   "an absent or unrecognised mode means AUTHORING (the app has not been told it ships yet)");
+            CHECK (authoring::modeBadge (authoring::Mode::authoring).containsIgnoreCase ("FACTORY")
+                   && authoring::modeBadge (authoring::Mode::release).isEmpty(),
+                   "authoring mode carries an on-screen badge; release mode deliberately carries none");
+            // The suite is pinned to release by JM_AUTHORING_MODE (see
+            // CMakeLists), which is also the proof that the transient override
+            // works: the developer's own settings.json never reaches the test.
+            CHECK (! proc.state.library.isAuthoring(),
+                   "JM_AUTHORING_MODE pins the mode for this process without touching settings.json");
+            // The C++ schema mirror must not drift from the JSON schema that
+            // `npx jmi validate` actually uses — that drift is the one failure
+            // that would let a bad preset into a bundle undetected.
+            {
+                auto schema = juce::JSON::parse (juce::File (JM_JMI_SCHEMA_DIR)
+                                                     .getChildFile ("preset.schema.json")
+                                                     .loadFileAsString());
+                auto fxEnum = schema.getProperty ("properties", juce::var())
+                                    .getProperty ("fxRack", juce::var())
+                                    .getProperty ("items", juce::var())
+                                    .getProperty ("properties", juce::var())
+                                    .getProperty ("type", juce::var())
+                                    .getProperty ("enum", juce::var());
+                juce::StringArray fromSchema;
+                if (auto* a = fxEnum.getArray()) for (auto& v : *a) fromSchema.add (v.toString());
+                auto required = schema.getProperty ("required", juce::var());
+                juce::StringArray req;
+                if (auto* a = required.getArray()) for (auto& v : *a) req.add (v.toString());
+                fromSchema.sort (false);
+                auto mirrored = authoring::allowedFxTypeIds();
+                mirrored.sort (false);
+                std::printf ("  schema fx types: %d, mirrored: %d\n", fromSchema.size(), mirrored.size());
+                CHECK (! fromSchema.isEmpty() && fromSchema == mirrored,
+                       "the C++ preset-schema mirror lists exactly the FX types preset.schema.json does");
+                CHECK (req.contains ("formatVersion") && req.contains ("name") && req.contains ("engine")
+                       && req.contains ("fxRack") && req.contains ("ampEnvelope")
+                       && (bool) schema.getProperty ("additionalProperties", true) == false,
+                       "and the schema is still strict about required + additional properties");
+            }
+
+            jm::Library probe;
+            probe.setModeTransient (authoring::Mode::release);
+            CHECK (! probe.isAuthoring(), "a Library can be put into release mode");
+            probe.setModeTransient (authoring::Mode::authoring);
+            CHECK (probe.isAuthoring(), "...and back");
+        }
+
+        // ---------------------------------------------------------------------
+        std::printf ("\n== AUTHORING (2) a save in AUTHORING mode lands in the bundle's FACTORY presets ==\n");
+        {
+            proc.state.library.setModeTransient (authoring::Mode::authoring);
+            proc.state.slots[0].engineParams["tine"] = 77.0f;
+            proc.state.slots[0].ampEnv.releaseMs = 640.0f;
+
+            auto out = proc.saveInstrumentPreset (0, "Warm Tine");
+            std::printf ("  -> %s\n     %s\n", out.file.getFullPathName().toRawUTF8(),
+                         out.message.toRawUTF8());
+            CHECK (out.ok && out.dest == authoring::SaveDest::bundleFactory,
+                   "the save reports that it created FACTORY content");
+            CHECK (out.file.existsAsFile()
+                   && out.file.getParentDirectory() == epBundle.getChildFile ("presets"),
+                   "and the file really is inside the instrument bundle that ships");
+            CHECK (out.message.containsIgnoreCase ("FACTORY"),
+                   "the message names the destination, so nobody has to guess");
+
+            juce::String why;
+            CHECK (bundleIsValid (epBundle, why),
+                   "WRITING INTO A REAL BUNDLE LEAVES IT VALID (the risky path)");
+            if (why.isNotEmpty()) std::printf ("  bundle invalid: %s\n", why.toRawUTF8());
+
+            auto v = juce::JSON::parse (out.file.loadFileAsString());
+            CHECK ((int) v.getProperty ("formatVersion", 0) == 1,
+                   "the written preset carries formatVersion (the schema requires it)");
+            CHECK (std::abs ((double) v.getProperty ("engine", juce::var()).getProperty ("tine", 0.0) - 77.0) < 1.0e-6,
+                   "the patch the artist dialled in is what was written");
+            CHECK (! v.hasProperty ("mod") && ! v.hasProperty ("provenance"),
+                   "and NOTHING else: one extra property would fail the strict schema");
+
+            CHECK (authoring::ledgerFile (epBundle).existsAsFile()
+                   && authoring::ledgerClaims (epBundle, out.file.getFileName()),
+                   "provenance is recorded in the bundle's authoring.json sidecar");
+            auto led = authoring::readLedger (epBundle);
+            CHECK (! led.empty() && led[0].appVersion == juce::String (authoring::kAppVersion)
+                   && led[0].savedAt.isNotEmpty(),
+                   "the ledger says WHICH app version wrote it and WHEN");
+            CHECK (! authoring::ledgerFile (epBundle).getParentDirectory()
+                        .getFileName().equalsIgnoreCase ("presets"),
+                   "the sidecar is NOT in presets/ — every file there is schema-checked");
+
+            PresetBrowserPanel br (proc);
+            proc.state.currentPage = 0;
+            br.rebuild();
+            bool listed = false;
+            for (int i = 0; i < br.rowCount(); ++i) if (br.rowName (i) == "Warm Tine") listed = true;
+            CHECK (listed, "the new factory patch appears in the browser immediately");
+
+            auto again = proc.saveInstrumentPreset (0, "Warm Tine");
+            CHECK (again.ok && again.note.containsIgnoreCase ("bak"),
+                   "overwriting a factory patch keeps the previous version beside it");
+            CHECK (bundleIsValid (epBundle, why), "and the bundle is still valid after the overwrite");
+        }
+
+        // ---------------------------------------------------------------------
+        std::printf ("\n== AUTHORING (3) the SAME save in RELEASE mode lands in the USER folder ==\n");
+        {
+            proc.state.library.setModeTransient (authoring::Mode::release);
+            const int before = epBundle.getChildFile ("presets")
+                                       .findChildFiles (juce::File::findFiles, false, "*.json").size();
+            auto out = proc.saveInstrumentPreset (0, "Shipped Behaviour");
+            std::printf ("  -> %s\n     %s\n", out.file.getFullPathName().toRawUTF8(),
+                         out.message.toRawUTF8());
+            CHECK (out.ok && out.dest == authoring::SaveDest::worldUserFolder,
+                   "in release mode a save is a USER preset — today's behaviour, unchanged");
+            CHECK (out.file.getParentDirectory() == proc.worldPresetDir (0),
+                   "it goes to Presets/<world>/");
+            CHECK (epBundle.getChildFile ("presets")
+                           .findChildFiles (juce::File::findFiles, false, "*.json").size() == before,
+                   "and the shipped product NEVER writes into the customer's bundle");
+            out.file.deleteFile();
+            proc.state.library.setModeTransient (authoring::Mode::authoring);
+        }
+
+        // ---------------------------------------------------------------------
+        std::printf ("\n== AUTHORING (4) a performance preset round-trips the WHOLE modulation setup ==\n");
+        {
+            proc.state.library.setModeTransient (authoring::Mode::authoring);
+
+            auto& md = proc.state.mod;
+            md = ModState {};
+            md.rowCount = 6;
+            md.lfos[0].shape = (int) LfoShape::triangle; md.lfos[0].sync = 0;
+            md.lfos[0].rateHz = 3.25f; md.lfos[0].phaseDeg = 135.0f; md.lfos[0].fadeSec = 2.25f;
+            md.lfos[1].shape = (int) LfoShape::smoothRandom; md.lfos[1].sync = 1;
+            md.lfos[1].division = 17; md.lfos[1].retrigger = 2;
+            md.rows[0].source = ModSource::lfo1; md.rows[0].destPath = "slot0.engine.tine";
+            md.rows[0].depth = 0.63f; md.rows[0].min = 0.1f; md.rows[0].max = 0.9f;
+            md.rows[0].curve = 1.7f; md.rows[0].invert = true; md.rows[0].enabled = true;
+            md.rows[1].source = ModSource::lfo2; md.rows[1].destPath = "host.slotPan0";
+            md.rows[1].depth = -0.42f; md.rows[1].enabled = true;
+            md.rows[2].source = ModSource::velocity; md.rows[2].destPath = "slot0.engine.body";
+            md.rows[2].depth = 0.31f; md.rows[2].enabled = true;
+            md.arp.enabled = 1; md.arp.slotMask = 0x01; md.arp.mode = 3; md.arp.sync = 1;
+            md.arp.division = 9; md.arp.gate = 72.0f; md.arp.octaves = 3; md.arp.octDir = 2;
+            md.arp.swing = 18.0f; md.arp.hold = 1; md.arp.velMode = 2; md.arp.fixedVel = 88;
+            md.arp.accentMask = 0x05; md.arp.inclusive = 1;
+            proc.state.macros[2].name = "JAMES SWELL";
+            proc.state.macros[2].targets.clear();
+            {
+                MacroTarget mt;
+                mt.path = "slot0.engine.space"; mt.min = 0.2f; mt.max = 0.95f;
+                mt.depth = -0.8f; mt.curve = 2.2f; mt.invert = true;
+                proc.state.macros[2].targets.push_back (mt);
+            }
+            proc.publishModulation();
+            proc.publishArp();
+
+            auto out = proc.savePerformanceSnapshot ("James Live Set");
+            std::printf ("  -> %s\n     %s\n", out.file.getFullPathName().toRawUTF8(),
+                         out.message.toRawUTF8());
+            CHECK (out.ok && out.dest == authoring::SaveDest::performanceFactory,
+                   "in authoring mode a performance snapshot becomes FACTORY performance content");
+            CHECK (out.file.getParentDirectory() == JMSignatureProcessor::factoryPerformanceDir(),
+                   "it lands in Presets/Performance/Factory, which the browser already scans as factory");
+
+            auto onDisk = juce::JSON::parse (out.file.loadFileAsString());
+            CHECK (onDisk.hasProperty ("mod") && onDisk.hasProperty ("macros")
+                   && onDisk.getProperty ("mod", juce::var()).hasProperty ("arp"),
+                   "the file really carries the modulation, the macros and the arpeggiator");
+
+            proc.state.mod = ModState {};
+            proc.state.macros[2] = Macro { "MACRO 3", {} };
+            proc.publishModulation();
+            proc.publishArp();
+            CHECK (proc.loadPerformancePreset (out.file), "the factory snapshot loads");
+
+            auto& r0 = proc.state.mod.rows[0];
+            CHECK (r0.source == ModSource::lfo1 && r0.destPath == "slot0.engine.tine"
+                   && std::abs (r0.depth - 0.63f) < 1.0e-5f
+                   && std::abs (r0.min - 0.1f) < 1.0e-5f && std::abs (r0.max - 0.9f) < 1.0e-5f
+                   && std::abs (r0.curve - 1.7f) < 1.0e-5f && r0.invert && r0.enabled,
+                   "a matrix row comes back with its source, destination, range, depth, curve and invert");
+            CHECK (proc.state.mod.rows[1].source == ModSource::lfo2
+                   && std::abs (proc.state.mod.rows[1].depth + 0.42f) < 1.0e-5f
+                   && proc.state.mod.rows[2].source == ModSource::velocity,
+                   "and so do the other rows, in order");
+            auto& l0 = proc.state.mod.lfos[0];
+            CHECK (l0.shape == (int) LfoShape::triangle && l0.sync == 0
+                   && std::abs (l0.rateHz - 3.25f) < 1.0e-4f
+                   && std::abs (l0.phaseDeg - 135.0f) < 1.0e-3f
+                   && std::abs (l0.fadeSec - 2.25f) < 1.0e-4f,
+                   "an LFO comes back with its shape, rate, phase and fade");
+            CHECK (proc.state.mod.lfos[1].shape == (int) LfoShape::smoothRandom
+                   && proc.state.mod.lfos[1].division == 17
+                   && proc.state.mod.lfos[1].retrigger == 2,
+                   "and the synced LFO with its division and retrigger mode");
+            auto& ar = proc.state.mod.arp;
+            CHECK (ar.enabled == 1 && ar.slotMask == 0x01 && ar.mode == 3 && ar.division == 9
+                   && std::abs (ar.gate - 72.0f) < 1.0e-3f && ar.octaves == 3 && ar.octDir == 2
+                   && std::abs (ar.swing - 18.0f) < 1.0e-3f && ar.hold == 1 && ar.velMode == 2
+                   && ar.fixedVel == 88 && ar.accentMask == 0x05 && ar.inclusive == 1,
+                   "the ARPEGGIATOR comes back whole — every one of its fourteen settings");
+            CHECK (proc.state.macros[2].name == "JAMES SWELL"
+                   && proc.state.macros[2].targets.size() == 1
+                   && proc.state.macros[2].targets[0].path == "slot0.engine.space"
+                   && std::abs (proc.state.macros[2].targets[0].depth + 0.8f) < 1.0e-5f
+                   && proc.state.macros[2].targets[0].invert,
+                   "and the macro keeps its name and its bipolar, curved, inverted link");
+        }
+
+        // ---------------------------------------------------------------------
+        std::printf ("\n== AUTHORING (5) an instrument preset does NOT silently claim to hold modulation ==\n");
+        {
+            proc.state.currentPage = 0;
+            auto cap = proc.modCaptureForSlot (0);
+            std::printf ("  slot A carries: %s  (rows elsewhere: %d, LFOs in use: %d)\n",
+                         cap.phrase().toRawUTF8(), cap.rowsElsewhere, cap.lfosInUse);
+            CHECK (cap.anyOnSlot() && cap.rowsOnSlot >= 2 && cap.macroLinksOnSlot >= 1 && cap.arpOnSlot,
+                   "the processor can see exactly what modulation the slot is carrying");
+
+            auto patch = proc.slotPresetToVar (0, "mod probe");
+            CHECK (! patch.hasProperty ("mod") && ! patch.hasProperty ("macros")
+                   && ! patch.hasProperty ("arp"),
+                   "a patch carries NO modulation — the .jmi schema is shared with JM Capture");
+
+            const auto warn = proc.modBoundaryLine (0);
+            std::printf ("  the save control reads:\n    \"%s\"\n    \"%s\"\n",
+                         proc.saveDestinationLine (0).toRawUTF8(), warn.toRawUTF8());
+            CHECK (warn.isNotEmpty(), "so the save control says so BEFORE the click, not after");
+            CHECK (warn.containsIgnoreCase ("cannot hold")
+                   && warn.containsIgnoreCase ("modulation routing")
+                   && warn.containsIgnoreCase ("arpeggiator"),
+                   "it names what would be lost, in the artist's terms");
+            CHECK (warn.containsIgnoreCase ("PERFORMANCE"), "and names the save that WOULD keep it");
+            CHECK (proc.saveDestinationLine (0).containsIgnoreCase ("FACTORY")
+                   && proc.saveDestinationLine (0).containsIgnoreCase (epBundle.getFileName()),
+                   "the destination line names the bundle the patch is going into");
+
+            PresetBrowserPanel br (proc);
+            br.setBounds (0, 0, Theme::L::browserW, Theme::L::browserH);
+            br.rebuild();
+            CHECK (br.boundaryText() == warn && br.alternativeSaveOffered(),
+                   "the browser shows that line and OFFERS \"SAVE PERFORMANCE INSTEAD\"");
+
+            br.setSaveName ("Kept By The Button");
+            br.pressSave (true);                       // the one-click escape
+            auto kept = JMSignatureProcessor::factoryPerformanceDir()
+                            .getChildFile ("Kept By The Button.json");
+            CHECK (kept.existsAsFile()
+                   && juce::JSON::parse (kept.loadFileAsString()).hasProperty ("mod"),
+                   "one click on it saves a snapshot that DOES carry the modulation");
+            kept.deleteFile();
+
+            auto keep = proc.state.mod;
+            auto keepMacro = proc.state.macros[2];
+            proc.state.mod = ModState {};
+            proc.state.macros[2] = Macro { "MACRO 3", {} };
+            proc.publishModulation();
+            proc.publishArp();
+            CHECK (proc.modBoundaryLine (0).isEmpty(),
+                   "with nothing to lose the warning is absent — it never cries wolf");
+            PresetBrowserPanel quiet (proc);
+            quiet.setBounds (0, 0, Theme::L::browserW, Theme::L::browserH);
+            quiet.rebuild();
+            CHECK (! quiet.alternativeSaveOffered(), "and the alternative save is not offered either");
+
+            // The model page's overlay browser is short, so the block collapses
+            // what it is not showing instead of eating the preset list.
+            {
+                const juce::Rectangle<int> overlay (0, 0, Theme::L::mpSurfW - 120,
+                                                    Theme::L::mpSurfH - 32);
+                PresetBrowserPanel narrow (proc, true);
+                narrow.setBounds (overlay);
+                narrow.rebuild();
+                const int quietList = narrow.listBounds().getHeight();
+                proc.state.mod = keep;
+                proc.state.macros[2] = keepMacro;
+                proc.publishModulation();
+                proc.publishArp();
+                narrow.rebuild();
+                const int warnedList = narrow.listBounds().getHeight();
+                std::printf ("  compact browser list: %d px with no warning, %d px with one\n",
+                             quietList, warnedList);
+                CHECK (quietList > warnedList && warnedList > 120,
+                       "the compact browser gives the warning its room only when there is a warning");
+                savePng (narrow, "authoring-compact-browser.png");
+            }
+            proc.state.mod = keep;
+            proc.state.macros[2] = keepMacro;
+            proc.publishModulation();
+            proc.publishArp();
+        }
+
+        // ---------------------------------------------------------------------
+        std::printf ("\n== AUTHORING (6) a bundle that cannot take the save never loses the work ==\n");
+        {
+            proc.state.library.setModeTransient (authoring::Mode::authoring);
+            proc.engines[2].setBundle (nullptr);
+            proc.state.slots[2].bundleDir.clear();
+            proc.state.slots[2].world = 2;
+            auto out = proc.saveInstrumentPreset (2, "No Bundle Here");
+            std::printf ("  -> %s\n     %s\n     note: %s\n",
+                         out.file.getFullPathName().toRawUTF8(), out.message.toRawUTF8(),
+                         out.note.toRawUTF8());
+            CHECK (out.ok && out.dest == authoring::SaveDest::worldUserFolder && out.fellBack,
+                   "with no bundle to write into, the patch is still SAVED (to the user folder)");
+            CHECK (out.note.isNotEmpty(), "and the fallback is stated, not silent");
+            CHECK (proc.saveDestinationLine (2).containsIgnoreCase ("no instrument loaded"),
+                   "the save control warned about it beforehand too");
+            out.file.deleteFile();
+
+            auto notABundle = scratch.getChildFile ("NotABundle.jmi");
+            notABundle.createDirectory();
+            auto wr = authoring::writeBundlePreset (notABundle, "nope", proc.slotPresetToVar (0, "nope"));
+            CHECK (! wr.ok && wr.message.containsIgnoreCase ("not a .jmi bundle"),
+                   "a folder with no instrument.json is refused, not half-written into");
+            CHECK (! notABundle.getChildFile ("presets").exists(),
+                   "and nothing at all was created inside it");
+
+            auto bad = proc.slotPresetToVar (0, "bad");
+            bad.getDynamicObject()->setProperty ("surprise", 1);
+            auto wrBad = authoring::writeBundlePreset (epBundle, "Refused", bad);
+            CHECK (! wrBad.ok && wrBad.message.containsIgnoreCase ("does not fit"),
+                   "a patch carrying anything the schema forbids is refused before the bundle is touched");
+            CHECK (! epBundle.getChildFile ("presets").getChildFile ("Refused.json").exists(),
+                   "so no file appears");
+            juce::String why;
+            CHECK (bundleIsValid (epBundle, why), "and the bundle is untouched and still valid");
+        }
+
+        // ---------------------------------------------------------------------
+        std::printf ("\n== AUTHORING (7) COLLECT gathers everything, IMPORT puts it back faithfully ==\n");
+        {
+            presetRoot.getChildFile ("Performance").getChildFile ("Factory").createDirectory();
+            presetRoot.getChildFile ("rhodes-ep").createDirectory();
+            presetRoot.getChildFile ("Performance").getChildFile ("Factory")
+                      .getChildFile ("Set One.json")
+                      .replaceWithText (JMSignatureProcessor::factoryPerformanceDir()
+                                            .getChildFile ("James Live Set.json").loadFileAsString());
+            presetRoot.getChildFile ("Performance").getChildFile ("Loose Idea.json")
+                      .replaceWithText ("{\"name\":\"Loose Idea\"}");
+            presetRoot.getChildFile ("rhodes-ep").getChildFile ("Sketch.json")
+                      .replaceWithText (juce::JSON::toString (proc.slotPresetToVar (0, "Sketch"), false));
+            auto settingsCopy = scratch.getChildFile ("settings.json");
+            settingsCopy.replaceWithText ("{\"mode\":\"authoring\",\"favorites\":[]}");
+
+            auto dest = scratch.getChildFile ("Collected");
+            auto res = authoring::collect (libRoot, presetRoot, settingsCopy, dest,
+                                           authoring::Mode::authoring);
+            std::printf ("  %s\n", res.message.toRawUTF8());
+            for (auto& l : res.lines) std::printf ("    %s\n", l.toRawUTF8());
+            CHECK (res.ok && res.manifest.existsAsFile(), "COLLECT writes a manifest");
+
+            auto man = juce::JSON::parse (res.manifest.loadFileAsString());
+            CHECK (man.getProperty ("kind", "").toString() == "jm-signature-authoring-collection"
+                   && man.getProperty ("appVersion", "").toString() == juce::String (authoring::kAppVersion)
+                   && man.getProperty ("exportedAt", "").toString().isNotEmpty()
+                   && man.getProperty ("mode", "").toString() == "authoring",
+                   "with provenance: app version, when, which mode, which machine");
+            CHECK (man.getProperty ("note", "").toString().containsIgnoreCase ("modulation"),
+                   "and it says out loud that modulation lives only in the performance snapshots");
+
+            auto* entries = man.getProperty ("entries", juce::var()).getArray();
+            CHECK (entries != nullptr, "the manifest lists entries");
+            int nBundle = 0, nPerfF = 0, nPerfU = 0, nWorld = 0, nSettings = 0, nAuthored = 0;
+            bool everyFilePresent = true, everyHashRight = true;
+            if (entries != nullptr)
+                for (auto& e : *entries)
+                {
+                    const auto kind = e.getProperty ("kind", "").toString();
+                    if (kind == "bundlePreset") ++nBundle;
+                    else if (kind == "performanceFactory") ++nPerfF;
+                    else if (kind == "performanceUser") ++nPerfU;
+                    else if (kind == "worldPreset") ++nWorld;
+                    else if (kind == "settings") ++nSettings;
+                    if ((bool) e.getProperty ("authored", false)) ++nAuthored;
+                    auto f = dest.getChildFile (e.getProperty ("path", "").toString());
+                    if (! f.existsAsFile()) everyFilePresent = false;
+                    else if (authoring::contentHash (f) != e.getProperty ("hash", "").toString())
+                        everyHashRight = false;
+                }
+            std::printf ("  entries: %d bundle preset(s), %d factory + %d user performance, "
+                         "%d world preset(s), %d settings; %d marked authored-here\n",
+                         nBundle, nPerfF, nPerfU, nWorld, nSettings, nAuthored);
+            CHECK (nBundle >= 1 && nPerfF == 1 && nPerfU == 1 && nWorld == 1 && nSettings == 1,
+                   "every kind of thing the artist can produce is collected");
+            CHECK (everyFilePresent, "every manifest entry has its file in the collection");
+            CHECK (everyHashRight, "and every file matches the checksum the manifest recorded");
+            CHECK (nAuthored >= 2,
+                   "the ledger lets the manifest mark what was authored HERE, apart from what shipped");
+
+            // ------- the round trip: wipe the destination, then import
+            auto stolen = epBundle.getChildFile ("presets").getChildFile ("Warm Tine.json");
+            const auto stolenHash = authoring::contentHash (stolen);
+            stolen.deleteFile();
+            presetRoot.getChildFile ("Performance").getChildFile ("Factory")
+                      .getChildFile ("Set One.json").deleteFile();
+            presetRoot.getChildFile ("rhodes-ep").getChildFile ("Sketch.json").deleteFile();
+
+            auto imp = authoring::importCollection (dest, libRoot, presetRoot);
+            std::printf ("  %s\n", imp.message.toRawUTF8());
+            for (auto& l : imp.lines) std::printf ("    %s\n", l.toRawUTF8());
+            CHECK (imp.ok, "IMPORT reports no skips");
+            CHECK (imp.applied >= 3, "it put the deleted files back");
+            CHECK (imp.identical >= 1,
+                   "and recognised the ones that were already identical instead of churning them");
+            CHECK (stolen.existsAsFile() && authoring::contentHash (stolen) == stolenHash,
+                   "a FACTORY patch comes back byte for byte, inside its bundle");
+            CHECK (presetRoot.getChildFile ("Performance").getChildFile ("Factory")
+                             .getChildFile ("Set One.json").existsAsFile(),
+                   "so does the factory performance snapshot");
+            CHECK (presetRoot.getChildFile ("rhodes-ep").getChildFile ("Sketch.json").existsAsFile(),
+                   "and the world user preset");
+            juce::String why;
+            CHECK (bundleIsValid (epBundle, why), "and the bundle an import wrote into is still valid");
+            if (why.isNotEmpty()) std::printf ("  bundle invalid: %s\n", why.toRawUTF8());
+
+            {   // a tampered collection is refused per entry, not applied blindly
+                auto victim = dest.getChildFile ("performance/Factory/Set One.json");
+                victim.replaceWithText (victim.loadFileAsString() + " ");
+                auto tampered = authoring::importCollection (dest, libRoot, presetRoot);
+                CHECK (! tampered.ok && tampered.skipped >= 1,
+                       "a file whose checksum no longer matches the manifest is SKIPPED and reported");
+            }
+            {   // ...and a bundle this library does not have is reported, not invented
+                auto alien = dest.getChildFile ("bundles/Nonexistent.jmi/presets/x.json");
+                alien.getParentDirectory().createDirectory();
+                alien.replaceWithText (juce::JSON::toString (proc.slotPresetToVar (0, "x"), false));
+                if (auto* arr = man.getProperty ("entries", juce::var()).getArray())
+                {
+                    auto* eo = new juce::DynamicObject();
+                    eo->setProperty ("kind", "bundlePreset");
+                    eo->setProperty ("path", "bundles/Nonexistent.jmi/presets/x.json");
+                    eo->setProperty ("bundle", "Nonexistent.jmi");
+                    eo->setProperty ("hash", authoring::contentHash (alien));
+                    arr->add (juce::var (eo));
+                    res.manifest.replaceWithText (juce::JSON::toString (man, false));
+                }
+                auto partial = authoring::importCollection (dest, libRoot, presetRoot);
+                bool said = false;
+                for (auto& l : partial.lines)
+                    if (l.containsIgnoreCase ("Nonexistent.jmi")
+                        && l.containsIgnoreCase ("not in this library")) said = true;
+                CHECK (said, "a preset for a bundle this library does not have is named, not guessed at");
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        std::printf ("\n== AUTHORING (8) the mode on screen ==\n");
+        {
+            auto shoot = [&] (authoring::Mode mode, const char* tag)
+            {
+                proc.state.library.setModeTransient (mode);
+                proc.state.currentPage = 0;
+                auto* ed = dynamic_cast<JMSignatureEditor*> (proc.createEditor());
+                ed->setSize (Theme::M::designW, Theme::M::designH);
+                ed->setVisible (true);
+                if (auto* br = findOne<PresetBrowserPanel> (*ed)) br->rebuild();
+                savePng (*ed, juce::String ("authoring-") + tag + "-full.png");
+                if (auto* bar = findOne<BottomBar> (*ed))
+                    saveImage (ed->createComponentSnapshot (ed->getLocalArea (bar, bar->getLocalBounds()),
+                                                            false, 2.0f),
+                               juce::String ("authoring-") + tag + "-statusbar.png");
+                if (auto* br = findOne<PresetBrowserPanel> (*ed))
+                {
+                    auto region = ed->getLocalArea (br, br->getLocalBounds())
+                                      .withTrimmedTop (Theme::L::brListY + Theme::L::brListH - 40)
+                                      .withHeight (160)
+                                      .getIntersection (ed->getLocalBounds());
+                    saveImage (ed->createComponentSnapshot (region, false, 3.0f),
+                               juce::String ("authoring-") + tag + "-save-block.png");
+                }
+                delete ed;
+            };
+            shoot (authoring::Mode::authoring, "mode-on");
+            shoot (authoring::Mode::release, "mode-off");
+            proc.state.library.setModeTransient (authoring::Mode::authoring);
+
+            AuthoringPanel panel (proc);
+            panel.setSize (AuthoringPanel::kWidth, AuthoringPanel::kHeight);
+            panel.setVisible (true);
+            CHECK (panel.authoringSelected(), "the panel shows AUTHORING selected while the mode is on");
+            CHECK (panel.logText().containsIgnoreCase ("CANNOT carry modulation"),
+                   "and states the format boundary in the panel too");
+            savePng (panel, "authoring-panel.png");
+        }
+
+        // leave the machine as we found it
+        JMSignatureProcessor::factoryPerformanceDir().getChildFile ("James Live Set.json").deleteFile();
+        JMSignatureProcessor::factoryPerformanceDir().getChildFile ("James Live Set.json.bak").deleteFile();
+        proc.state.mod = ModState {};
+        proc.state.macros[2] = Macro { "MACRO 3", {} };
+        proc.publishModulation();
+        proc.publishArp();
+        proc.state.library.setLibraryDirTransient (juce::File (JM_LIBRARY_TESTDATA));
+        scratch.deleteRecursively();
     }
 
     juce::LookAndFeel::setDefaultLookAndFeel (nullptr);

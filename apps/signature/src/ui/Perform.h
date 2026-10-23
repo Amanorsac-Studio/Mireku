@@ -892,6 +892,13 @@ private:
         m.addItem (2, "Preferences...");
         m.addItem (3, "Rescan Library");
         m.addSeparator();
+        // AUTHORING MODE: the mode switch and the round trip (collect/import).
+        // The item names the mode in force, so the menu itself is one more place
+        // the answer is never "I'm not sure which build this is".
+        m.addSectionHeader ("Authoring");
+        m.addItem (5, proc_.state.library.isAuthoring() ? "Authoring mode (ON - saves go to factory)..."
+                                                        : "Authoring mode (off - release build)...");
+        m.addSeparator();
         m.addSectionHeader ("Licence");
         m.addItem (4, proc_.state.library.hasLicenseKey() ? "Licence (active)..." : "Activate licence...");
         m.showMenuAsync (styledMenu (m, *gearBtn_), [this] (int r)
@@ -905,6 +912,12 @@ private:
             }
             else if (r == 3) { proc_.state.library.rescan(); proc_.stateChanged.sendChangeMessage(); }
             else if (r == 4) showLicence();
+            else if (r == 5)
+            {
+                if (auto* host = OverlayHost::find (this))
+                    host->showOverlay (std::make_unique<AuthoringPanel> (proc_),
+                                       AuthoringPanel::kWidth, AuthoringPanel::kHeight);
+            }
         });
     }
 
@@ -1150,9 +1163,34 @@ public:
         {
             g.setColour (Theme::warnRed.withAlpha (0.9f));
             g.setFont (Theme::value (11.0f));
-            g.drawText (proc_.state.libraryNotice, 250, 0, getWidth() - 750, getHeight(),
+            // (ends short of the authoring plate below, which is drawn after it)
+            g.drawText (proc_.state.libraryNotice, 250, 0, getWidth() - 836, getHeight(),
                         juce::Justification::centredLeft, true);
             g.setFont (Theme::value (13.0f));
+        }
+
+        //======================================================= AUTHORING MODE
+        // Nene must never ship a build that is silently still in authoring
+        // mode, and James must never wonder where his save went. The bottom bar
+        // is the one strip that is on screen on every page, so the mode lives
+        // here as an amber plate that cannot be mistaken for chrome. RELEASE
+        // mode draws NOTHING extra: the shipped product should look like the
+        // product, and absence of the plate is the all-clear.
+        if (proc_.state.library.isAuthoring())
+        {
+            auto plate = juce::Rectangle<float> ((float) getWidth() - 576.0f, r.getCentreY() - 13.0f,
+                                                 252.0f, 26.0f);
+            g.setColour (Theme::warnRed.withAlpha (0.16f));
+            g.fillRoundedRectangle (plate, 5.0f);
+            g.setColour (Theme::warnRed);
+            g.drawRoundedRectangle (plate.reduced (0.5f), 5.0f, 1.4f);
+            g.fillEllipse (plate.getX() + 9.0f, plate.getCentreY() - 4.0f, 8.0f, 8.0f);
+            auto f = Theme::display (11.5f);
+            f.setExtraKerningFactor (0.06f);
+            g.setFont (f);
+            g.drawFittedText (authoring::modeBadge (proc_.state.library.mode()),
+                              plate.withTrimmedLeft (24.0f).toNearestInt(),
+                              juce::Justification::centredLeft, 1, 0.8f);
         }
 
         const float cpu = proc_.cpuLoad.load();

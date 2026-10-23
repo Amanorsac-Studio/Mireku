@@ -1,0 +1,396 @@
+<body>
+<header>
+  <div class="brand">
+    <div class="mark" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 11 Q8 1 14 11" fill="none" stroke="#e3a447" stroke-width="2" stroke-linecap="round"/><circle cx="2" cy="11" r="1.6" fill="#f2ece4"/><circle cx="14" cy="11" r="1.6" fill="#f2ece4"/></svg></div>
+    <div><b>TOP END</b><small>AMANORSAC STUDIO</small></div>
+  </div>
+  <div class="preset">
+    <button class="step" id="btnPrev" aria-label="Previous scene"><svg width="14" height="14" viewBox="0 0 14 14"><path d="M9 2 4 7l5 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <button class="pname" id="presetPill" aria-label="Presets"><b id="rigName">—</b><span id="rigSub">&nbsp;</span></button>
+    <button class="step" id="btnNext" aria-label="Next scene"><svg width="14" height="14" viewBox="0 0 14 14"><path d="m5 2 5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+  </div>
+  <div class="right">
+    <span class="testtag" id="testTag" hidden></span>
+    <button class="btn primary" id="btnSave" hidden>Save</button>
+    <button class="chip bypass" id="btnBypass" aria-pressed="false" title="Bypass All (X)">Bypass</button>
+    <button class="chip" id="btnTuner" aria-label="Tuner"><svg width="14" height="14" viewBox="0 0 14 14"><path d="M7 2v6M3 12h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="7" cy="9.5" r="1.4" fill="currentColor"/></svg><span class="num" id="tunerChip">Tune</span></button>
+    <div class="chip tempo"><button class="val" id="bpmBtn"><span class="num" id="bpm">120</span><small class="cap">BPM</small></button><button class="tap" id="btnTap">TAP</button></div>
+    <div class="chip lat" id="latChip"><span class="cap" id="latDrv">AUDIO</span><span class="num" id="latMs">—</span></div>
+    <button class="chip" id="btnReset" aria-label="Reset: silence everything now">Reset</button>
+  </div>
+</header>
+<nav class="tabs" id="tabs">
+  <button class="on" data-view="rig">Rig</button>
+  <button data-view="learn">Learn</button>
+  <button data-view="cover">Cover</button>
+  <button data-view="library">Library</button>
+  <button data-view="settings">Settings</button>
+</nav>
+
+<main>
+  <!-- ═══════════ RIG ═══════════ -->
+  <section class="view on" id="view-rig">
+    <div class="rigL">
+      <div class="card board">
+        <div class="boardfit" id="boardFit"><div class="chain" id="chain"></div></div>
+        <div class="boardhint"><span class="cap">Tap the switch to stomp · tap the pedal to edit · hold for more</span><span class="cap" id="boardCount"></span></div>
+      </div>
+      <div class="amp" id="ampBox"></div>
+    </div>
+    <div class="rigR">
+      <div class="card scenes">
+        <div class="head">
+          <h2 id="setTitle">Presets</h2>
+          <div class="row" style="display:flex;gap:6px;align-items:center;min-width:0">
+            <select id="songSel" aria-label="Set"></select>
+            <button class="btn small" id="btnNewSet">New set</button>
+          </div>
+        </div>
+        <div class="scenegrid" id="scenes"></div>
+        <div class="pager" id="scenePager"></div>
+      </div>
+      <div class="card looper">
+        <div class="head"><h2>Looper</h2><button class="btn small ghost" id="loopExport">Export</button></div>
+        <div class="tr">
+          <button class="tbtn" id="loopRec">REC</button>
+          <button class="tbtn" id="loopStop">STOP</button>
+          <button class="tbtn" id="loopUndo">UNDO</button>
+          <button class="tbtn" id="loopClear">CLEAR</button>
+        </div>
+        <div class="loopinfo">
+          <svg viewBox="0 0 100 100" aria-hidden="true">
+            <circle cx="50" cy="50" r="42" fill="none" stroke="#2c2722" stroke-width="10"/>
+            <circle id="loopArc" cx="50" cy="50" r="42" fill="none" stroke="#e3a447" stroke-width="10" stroke-linecap="round" stroke-dasharray="264" stroke-dashoffset="264" transform="rotate(-90 50 50)"/>
+          </svg>
+          <div style="min-width:0">
+            <div class="st" id="loopState">Idle</div>
+            <div class="len" id="loopLen">—</div>
+            <div class="layers" id="loopLayers"></div>
+          </div>
+        </div>
+        <div class="loopbar">
+          <select id="loopSig" aria-label="Time signature"></select>
+          <div class="seg" id="loopBars" role="radiogroup" aria-label="Loop length"><button data-n="0">Free</button><button data-n="4" aria-label="4 bars">4<span class="u"> bars</span></button><button data-n="8" aria-label="8 bars">8<span class="u"> bars</span></button><button data-n="16" aria-label="16 bars">16<span class="u"> bars</span></button></div>
+        </div>
+        <div class="clickbar">
+          <button class="btn small" id="clkOn" aria-pressed="false">Click</button>
+          <div class="beatdots" id="clkDots" aria-hidden="true"></div>
+          <div class="seg" id="clkCount" role="radiogroup" aria-label="Count-in before recording">
+            <button data-n="0">No count</button><button data-n="1">1 bar</button><button data-n="2">2 bars</button>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="head" style="margin-bottom:8px"><h2>Output</h2><span class="tag" id="limTag">Limiter</span></div>
+        <div class="meters">
+          <div class="mrow"><span class="cap">IN</span><div class="meter" id="mIn"><b></b></div><span class="num" id="mInV">—</span></div>
+          <div class="mrow"><span class="cap">OUT</span><div class="meter" id="mOut"><b></b></div><span class="num" id="mOutV">—</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ LEARN ═══════════ -->
+  <section class="view" id="view-learn">
+    <div class="lrow">
+      <div class="card now">
+        <div class="ring" id="nRing"><svg viewBox="0 0 176 176" id="nRingSvg" aria-hidden="true"></svg><div class="c"><b id="nChord">—</b><span id="nBeat">&nbsp;</span></div></div>
+        <div class="shape" id="nShape" aria-label="Chord shape"></div>
+        <div class="nowmeta">
+          <div><span class="cap">Key</span><b id="nKey">—</b><span class="cap" id="nKeyNotes" style="text-transform:none;letter-spacing:.04em">&nbsp;</span></div>
+          <div><span class="cap">You</span><b id="nLive" class="live">—</b></div>
+          <div><span class="cap">Next</span><div class="next" id="nNext"></div></div>
+        </div>
+      </div>
+      <div class="card side" id="lSide">
+        <div class="head">
+          <h2 id="lSideTitle">Stems</h2>
+          <div class="seg" id="lSideSeg" hidden><button data-k="stems" class="on">Stems</button><button data-k="video">Video</button></div>
+          <span class="cap" id="lStemHint">Tap to mute · S to solo · drag for level</span>
+        </div>
+        <div id="lStems" style="flex:1;display:flex;flex-direction:column;min-height:0">
+          <div class="stemrow" id="lStemTiles"></div>
+          <div class="stemfoot">
+            <span class="msg" id="lStemMsg">Separate the song to mute your part and play along.</span>
+            <div class="bar" id="lStemBusyBar" hidden><b id="lStemBusyB"></b></div>
+            <button class="btn small" id="lStemGo">Separate stems</button>
+            <button class="btn small ghost" id="lStemCancel" hidden>Cancel</button>
+            <button class="btn small" id="lStemAlong" hidden>Mute guitar</button>
+          </div>
+        </div>
+        <div class="vidwrap" id="lMedia" hidden><video id="lVideo" playsinline preload="auto"></video></div>
+      </div>
+    </div>
+
+    <div class="card tl" id="lTl">
+      <div class="songbar">
+        <span class="art" aria-hidden="true"></span>
+        <div class="seg" id="lSource"><button data-k="song" class="on">Songs</button><button data-k="yt">YouTube</button></div>
+        <select class="lesson" id="lLesson" aria-label="Song"></select>
+        <div class="meta"><span class="cap" id="lMeta">&nbsp;</span></div>
+        <button class="btn" id="lTempo" title="Tempo and bars">Tempo</button>
+        <div class="seg" id="lDetail" aria-label="Chord detail"><button data-k="bars" class="on">Bars</button><button data-k="beats">Beats</button></div>
+        <select id="lKeyRoot" aria-label="Key"></select>
+        <select id="lKeyScale" aria-label="Scale"></select>
+        <button class="btn" id="lImport">Import</button>
+        <button class="btn" id="lMore" aria-label="Song options">•••</button>
+        <input type="file" id="lFile" accept="audio/*,video/*,.mp3,.wav,.m4a,.aac,.flac,.ogg,.mp4,.mov,.m4v,.webm" hidden>
+      </div>
+      <div id="lSongArea">
+        <div class="overview" id="lOverview"><canvas id="lOverCanvas"></canvas></div>
+        <div class="lane" id="lLane"><canvas id="lLaneCanvas"></canvas></div>
+        <div class="legend" id="lLegend"></div>
+      </div>
+      <div class="ytwrap" id="lYt" hidden>
+        <div class="ytnav">
+          <button class="btn small" data-yt="back" aria-label="Back">◀</button>
+          <button class="btn small" data-yt="forward" aria-label="Forward">▶</button>
+          <button class="btn small" data-yt="reload" aria-label="Reload">⟳</button>
+          <button class="btn small" data-yt="home">Home</button>
+          <input class="field" id="lYtSearch" placeholder="Search YouTube or paste a link">
+          <button class="btn small primary" id="lYtGo">Go</button>
+        </div>
+        <div class="ytarea" id="lYtArea"></div>
+      </div>
+      <div class="tbar">
+        <button class="ib" id="tStart" aria-label="Back to start"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M3 3v10M13 3 6 8l7 5z" fill="currentColor" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></button>
+        <button class="ib" id="tBack" aria-label="Back 5 seconds"><svg width="18" height="18" viewBox="0 0 18 18"><path d="M4 9a5 5 0 1 0 1.6-3.7M4 3v3h3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><text x="9.5" y="11.6" text-anchor="middle" font-size="6.5" font-family="JetBrains Mono" fill="currentColor">5</text></svg></button>
+        <button class="ib play" id="tPlay" aria-label="Play"><svg id="tPlayIcon" width="18" height="18" viewBox="0 0 18 18"><path d="M5 3l10 6-10 6z" fill="currentColor"/></svg></button>
+        <button class="ib" id="tFwd" aria-label="Forward 5 seconds"><svg width="18" height="18" viewBox="0 0 18 18"><path d="M14 9a5 5 0 1 1-1.6-3.7M14 3v3h-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><text x="8.5" y="11.6" text-anchor="middle" font-size="6.5" font-family="JetBrains Mono" fill="currentColor">5</text></svg></button>
+        <span class="time" id="tTime">0:00 <em>/ 0:00</em></span>
+        <div class="grp"><span class="cap">Speed</span><div class="stepper"><button id="tSlow" aria-label="Slower">−</button><span class="num" id="tRate">100%</span><button id="tFast" aria-label="Faster">+</button></div></div>
+        <div class="grp"><span class="cap">Pitch</span><div class="stepper"><button id="tDown" aria-label="Down a semitone">−</button><span class="num" id="tPitch">0 st</span><button id="tUp" aria-label="Up a semitone">+</button></div></div>
+        <div class="grp"><button class="btn" id="tA" style="width:44px;padding:0">A</button><button class="btn" id="tB" style="width:44px;padding:0">B</button>
+          <button class="ib" id="tLoop" aria-label="Loop A to B"><svg width="18" height="18" viewBox="0 0 18 18"><path d="M3 8V7a3 3 0 0 1 3-3h8m-2-2 2 2-2 2M15 10v1a3 3 0 0 1-3 3H4m2 2-2-2 2-2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
+        <div class="grp"><button class="swt" id="tCount"><i></i>Count-in</button><button class="swt" id="tClick"><i></i>Click</button></div>
+      </div>
+    </div>
+
+    <div class="card neck">
+      <div class="head">
+        <h2>Fretboard</h2>
+        <div class="seg" id="lShow"><button data-k="me" class="on">Me</button><button data-k="tones">Chord tones</button><button data-k="scale">Scale</button><button data-k="notes">Song</button><button data-k="tab">Tab</button></div>
+      </div>
+      <div class="canvaswrap"><canvas id="lNeck"></canvas></div>
+    </div>
+
+    <div class="lempty" id="lEmpty" hidden>
+      <h3>Import a song or a video</h3>
+      <p>MP3, WAV, M4A, FLAC, MP4, MOV. Top End finds the chords, the key and the beat.</p>
+      <div style="display:flex;gap:8px"><button class="btn primary" id="lImport2">Choose a file</button><button class="btn" id="lGoYt">Use YouTube</button></div>
+    </div>
+    <div class="lprog" id="lProg" hidden><div class="t" id="lProgT">Listening…</div><div class="bar"><b id="lProgB"></b></div></div>
+  </section>
+
+  <!-- ═══════════ COVER ═══════════ -->
+  <section class="view" id="view-cover">
+    <div class="card cbar">
+      <div class="songbar">
+        <span class="art" aria-hidden="true"></span>
+        <select class="lesson" id="cSong" aria-label="Song"></select>
+        <div class="meta"><span class="cap" id="cMeta">&nbsp;</span></div>
+        <div class="seg" id="cCount" role="radiogroup" aria-label="Count-in"><button data-n="0">No count</button><button data-n="1">1 bar</button><button data-n="2">2 bars</button></div>
+        <button class="btn" id="cTiming">Timing</button>
+        <button class="swt" id="cClick"><i></i>Click</button>
+      </div>
+    </div>
+
+    <div class="card ctl2" id="cTl">
+      <div class="head">
+        <h2>Song</h2>
+        <span class="cap" id="cHint">Tap the waveform to place the playhead</span>
+      </div>
+      <div class="cwave" id="cWave"><canvas id="cWaveCanvas"></canvas></div>
+      <div class="ctake" id="cTakeLane"><canvas id="cTakeCanvas"></canvas><span class="cap" id="cTakeLabel">Take</span></div>
+      <div class="takes" id="cTakes"></div>
+      <div class="tbar">
+        <button class="ib" id="cStart" aria-label="Back to start"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M3 3v10M13 3 6 8l7 5z" fill="currentColor" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></button>
+        <button class="ib play" id="cPlay" aria-label="Play"><svg id="cPlayIcon" width="18" height="18" viewBox="0 0 18 18"><path d="M5 3l10 6-10 6z" fill="currentColor"/></svg></button>
+        <button class="ib rec" id="cRec" aria-label="Record a take"><svg width="18" height="18" viewBox="0 0 18 18"><circle cx="9" cy="9" r="5.5" fill="currentColor"/></svg></button>
+        <span class="time" id="cTime">0:00 <em>/ 0:00</em></span>
+        <div class="grp"><span class="cap">Punch</span><button class="btn" id="cIn" style="padding:0 12px">In</button><button class="btn" id="cOut" style="padding:0 12px">Out</button>
+          <button class="ib" id="cPunchClear" aria-label="Clear the punch range"><svg width="14" height="14" viewBox="0 0 14 14"><path d="m3 3 8 8M11 3l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button></div>
+        <span class="cap" id="cLat" style="margin-left:auto;text-transform:none;letter-spacing:.02em"></span>
+        <button class="btn primary" id="cExport">Export</button>
+      </div>
+    </div>
+
+    <div class="card cmix">
+      <div class="head"><h2>Mix</h2><div class="mixtools" id="cMixTools"></div><span class="cap mixhint">Tap a part to take it in or out · drag for level</span></div>
+      <div class="stemrow" id="cTiles"></div>
+    </div>
+
+    <div class="lempty" id="cEmpty" hidden>
+      <h3 id="cEmptyT">No song loaded</h3>
+      <p id="cEmptyP">Choose a song you have opened in Learn. A separated song plays as stems, so any part can be muted.</p>
+      <div style="display:flex;gap:8px"><button class="btn primary" id="cGoLearn">Open Learn</button></div>
+    </div>
+    <div class="lprog" id="cProg" hidden><div class="t" id="cProgT">Preparing the song</div><div class="bar"><b id="cProgB"></b></div><button class="btn small" id="cProgCancel" hidden>Cancel</button></div>
+  </section>
+
+  <!-- ═══════════ LIBRARY ═══════════ -->
+  <section class="view" id="view-library">
+    <div class="card libL">
+      <div class="search"><svg width="14" height="14" viewBox="0 0 14 14"><circle cx="6" cy="6" r="4.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="m9.2 9.2 3.3 3.3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><input id="libSearch" placeholder="Search presets, sets, songs" aria-label="Search"></div>
+      <div class="seg" id="libSeg"><button data-k="presets" class="on">Presets</button><button data-k="sets">Sets</button><button data-k="songs">Songs</button><button data-k="captures">Captures</button></div>
+      <div class="newrow"><button class="btn" id="libNewPreset">+ New preset</button><button class="btn" id="libNewSet">+ New set</button><button class="btn" id="libShare">Share presets</button></div>
+      <div class="list" id="libList"></div>
+      <div class="pager" id="libPager"></div>
+    </div>
+    <div class="card libR" id="libDetail"></div>
+  </section>
+
+  <!-- ═══════════ SETTINGS ═══════════ -->
+  <section class="view" id="view-settings">
+    <div class="card snav" id="snav">
+      <button data-p="audio" class="on">Audio <span id="snavLat"></span></button>
+      <button data-p="click">Click <span id="clkTag">Off</span></button>
+      <button data-p="feet">Footswitches &amp; MIDI</button>
+      <button data-p="tuner">Tuner <span id="snavRef">440</span></button>
+      <button data-p="lib">Library &amp; backup</button>
+      <button data-p="about">About &amp; help</button>
+    </div>
+    <div style="min-height:0;position:relative">
+      <div class="spanel on card" id="sp-audio">
+        <div class="head"><h2>Audio</h2><span class="cap" id="audDrvCap"></span></div>
+        <div class="audio" id="audioPanel">
+          <div>
+            <div class="field2"><span class="cap">Audio device</span><select id="audDev" aria-label="Audio device"></select><span class="audwarn" id="audWrap" hidden>Generic driver: it may not reach the interface. Press Lowest safe latency, or select the interface’s own driver.</span></div>
+            <div class="field2" id="audInDevRow"><span class="cap">Input device</span><select id="audInDev" aria-label="Input device"></select></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+              <div class="field2"><span class="cap">Instrument input</span><select id="audInCh" aria-label="Instrument input"></select></div>
+              <div class="field2"><span class="cap">Output</span><select id="audOutCh" aria-label="Output"></select></div>
+            </div>
+            <div class="field2"><span class="cap">Sample rate</span><div class="chips" id="audRateChips"></div></div>
+            <div class="field2"><span class="cap">Buffer size</span><div class="chips" id="audBufChips"></div></div>
+            <div class="help">Smaller buffers lower the latency and raise the load. If dropouts occur, select the next size up.</div>
+            <div class="help" style="margin-top:6px">If the instrument is heard twice — dry and processed — turn off direct monitoring on the interface (its hardware mix or front-panel switch).</div>
+            <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+              <button class="btn primary" id="btnAudLowest">Lowest safe latency</button>
+              <button class="btn" id="btnAudPanel" hidden>Driver panel</button>
+            </div>
+            <div class="cap noisecap" style="margin-top:16px">Noise</div>
+            <div class="kv"><span>Noise floor<br><small class="cap" style="text-transform:none;letter-spacing:.02em">Measured while nothing is played</small></span><b class="num" id="audFloor">—</b></div>
+            <div class="kv"><span>Auto gate<br><small class="cap" style="text-transform:none;letter-spacing:.02em">The gate threshold follows the noise floor</small></span><button class="swt" id="gateAutoSw" aria-label="Auto gate"><i></i></button></div>
+            <div class="kv"><span>Hum filter<br><small class="cap" style="text-transform:none;letter-spacing:.02em">Narrow cuts at the mains frequency and its harmonics</small></span><div class="seg" id="humSeg" role="radiogroup" aria-label="Hum filter"><button data-hz="0" class="on">Off</button><button data-hz="50">50 Hz</button><button data-hz="60">60 Hz</button></div></div>
+          </div>
+          <div class="lat">
+            <span class="cap">Round trip</span>
+            <div class="big" id="audBig">—<small>ms</small></div>
+            <div class="ok" id="audFeel"><i></i><span>&nbsp;</span></div>
+            <div class="split" id="audSplit"></div>
+            <div class="splitk" id="audSplitK"></div>
+            <div class="kv" style="margin-top:10px"><span>Processing load</span><b id="audCpu">—</b></div>
+            <div class="kv"><span>Dropouts this session</span><b id="audXr">—</b></div>
+            <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
+              <div style="display:flex;justify-content:space-between;align-items:center"><span class="cap">Input check · play hard</span><span class="clipl" id="audClip">CLIP</span></div>
+              <div class="inmeter"><div class="bar"><b id="audInB"></b></div><span class="num" id="audInV" style="font-size:12px;color:var(--muted)">—</span></div>
+              <div id="audTrim" class="ctls" style="margin-top:10px"></div>
+
+            </div>
+          </div>
+        </div>
+        <div class="help" id="audNote" style="margin-top:8px"></div>
+      </div>
+
+      <div class="spanel card" id="sp-click">
+        <div class="head"><h2>Click</h2><span class="cap">Global — scene changes never switch it off</span></div>
+        <div class="audio">
+          <div>
+            <div class="field2"><span class="cap">Send to</span><select id="clkOut" aria-label="Send the click to"><option value="0">Main mix</option><option value="1">Its own output</option><option value="2">Both</option></select></div>
+            <div class="field2" id="clkPairRow"><span class="cap">Output pair</span><select id="clkPair" aria-label="Click output pair"></select></div>
+            <div class="field2"><span class="cap">Time signature</span><select id="clkBeatsSel" aria-label="Time signature"></select></div>
+            <div class="field2"><span class="cap">Loop length</span><select id="clkLoopBars" aria-label="Loop length"><option value="0">Free: ends where REC is pressed</option><option value="1">1 bar</option><option value="2">2 bars</option><option value="4">4 bars</option><option value="8">8 bars</option><option value="16">16 bars</option></select></div>
+            <div class="field2"><span class="cap">Subdivide</span><select id="clkSub" aria-label="Subdivide"><option value="0">Quarter notes</option><option value="1">Eighth notes</option></select></div>
+            <div class="field2"><span class="cap">Accent the one</span><select id="clkAccent" aria-label="Accent the one"><option value="1">On</option><option value="0">Off</option></select></div>
+          </div>
+          <div>
+            <div class="field2"><span class="cap">Level</span><div style="display:flex;align-items:center;gap:10px"><input type="range" id="clkLevel" min="-40" max="6" step="1" style="flex:1;accent-color:var(--amber);height:30px" aria-label="Click level"><span class="num" id="clkLevelV" style="min-width:52px;text-align:right">−6 dB</span></div></div>
+            <div class="field2"><span class="cap">Sound</span><div class="seg" id="clkSound" role="radiogroup" aria-label="Click sound"><button data-n="0">Click</button><button data-n="1">Wood</button><button data-n="2">Hat</button></div></div>
+            <div class="help" id="clkNote"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="spanel card" id="sp-feet">
+        <div class="head"><h2>Footswitches</h2><span class="cap">Type the MIDI CC your controller sends</span></div>
+        <div class="fsw" id="fswScenes"></div>
+        <div class="roles" id="switchRows" style="margin-top:12px"></div>
+        <div class="head" style="margin-top:14px"><h2>MIDI mappings</h2><span class="cap">Hold any knob, then MIDI Learn · an expression pedal goes on the Wah's Position</span></div>
+        <div id="bindRows"></div>
+      </div>
+
+      <div class="spanel card" id="sp-tuner">
+        <div class="head"><h2>Tuner</h2></div>
+        <div class="kv"><span>Reference pitch (A4)</span><div class="stepper"><button id="refDown" aria-label="Lower">−</button><b class="num" id="tunerRef" style="min-width:76px;text-align:center">440 Hz</b><button id="refUp" aria-label="Higher">+</button></div></div>
+        <div class="kv"><span>Mute the output while tuning</span><button class="swt" id="tunerMuteSw" aria-label="Mute while tuning"><i></i></button></div>
+        <div class="kv" id="tuningRow"><span>Tuning</span><b id="tuningName">Standard E · E A D G B E</b></div>
+      </div>
+
+      <div class="spanel card" id="sp-lib">
+        <div class="head"><h2>Library &amp; backup</h2></div>
+        <div class="kv"><span>Data folder</span><b id="dataDir" style="font-size:12px">Documents\Amanorsac Studio\Top End</b></div>
+        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+          <button class="btn" id="btnFolder">Open folder</button>
+          <button class="btn" id="btnRescan">Rescan</button>
+          <button class="btn primary" id="btnBackup">Back up everything</button>
+        </div>
+        <div class="help" style="margin-top:10px">A backup is one zip of your presets, sets, loops and IRs. Songs you imported stay in Top End; separated stems are left out because they are rebuilt from the song.</div>
+      </div>
+
+      <div class="spanel card" id="sp-about">
+        <div class="about">
+          <img class="lock" src="about-lockup.png" alt="Amanorsac Studio">
+          <div>
+            <div class="pn">Top End<span id="aboutVersion"></span></div>
+            <p>Guitar amp, pedalboard, looper and music tutor.</p>
+            <p id="aboutLicence">No licence key is needed for this build.</p>
+            <div class="links">
+              <button class="btn small" data-link="legal">Licence and terms</button>
+              <button class="btn small" data-link="privacy">Privacy</button>
+              <button class="btn small" data-link="support">hello@amanorsac.studio</button>
+              <button class="btn small" id="btnNotices">Third-party notices</button>
+            </div>
+          </div>
+        </div>
+        <dl class="helpdl" style="margin-top:16px">
+          <dt>Presets, sets and scenes</dt><dd>A preset is a whole rig. A set is an ordered list of presets; each is a scene, A to F on the footswitches.</dd>
+          <dt>The board</dt><dd>Tap a pedal's switch to turn it on or off; tap the pedal to edit it; hold it to move or remove it. Tap the amp's name to change model.</dd>
+          <dt>Knobs</dt><dd>Drag up or down. Double-click to reset; hold or right-click for MIDI Learn.</dd>
+          <dt>Learn</dt><dd>Import a song or a video: Top End finds the chords, the key and the beat. Separate it to mute the guitar and play along. A and B set a loop.</dd>
+          <dt>Keyboard</dt><dd><span class="kbd">Space</span> tap tempo · <span class="kbd">T</span> tuner · <span class="kbd">X</span> Bypass All · <span class="kbd">L</span> loop · <span class="kbd">← →</span> scenes · <span class="kbd">1–6</span> scenes A–F</dd>
+        </dl>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- tuner -->
+<div class="tuner" id="tuner">
+  <button class="btn close" id="tunerClose">Done</button>
+  <div class="tl"><span class="tag" id="tunerMuteTag">Output muted</span><span class="tag" id="tunerRefTag">A 440</span></div>
+  <div class="note" id="tNote">—</div>
+  <div class="sub" id="tSub">&nbsp;</div>
+  <div class="tbarx"><div class="ticks"></div><div class="center"></div><div class="needle" id="tNeedle" style="left:50%"></div></div>
+  <div class="cents" id="tCents">&nbsp;</div>
+  <div class="strings" id="tStrings"></div>
+</div>
+
+<div class="scrim" id="scrim"><div class="sheet" id="sheet"></div></div>
+<div class="menu" id="menu"></div>
+<div class="toast" id="toast"></div>
+
+<!-- Test builds only: asks for the key. Hidden, and never reachable, in a release build. -->
+<div class="gate" id="gate" hidden role="dialog" aria-modal="true" aria-labelledby="gateTitle">
+  <div class="box">
+    <img class="lock" src="about-lockup.png" alt="Amanorsac Studio">
+    <h1 id="gateTitle">Top End test build</h1>
+    <p id="gateText">Enter the test key you were sent. There is no sound until you do.</p>
+    <textarea id="gateKey" spellcheck="false" autocomplete="off" aria-label="Test key" placeholder="Paste the whole key here"></textarea>
+    <div class="msg" id="gateMsg" role="status"></div>
+    <div class="row">
+      <button class="btn primary" id="gateGo">Unlock</button>
+      <button class="btn ghost" data-link="support">hello@amanorsac.studio</button>
+    </div>
+  </div>
+</div>

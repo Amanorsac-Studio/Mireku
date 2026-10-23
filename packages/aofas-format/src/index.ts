@@ -1,4 +1,5 @@
 export * from './types.js';
+export * from './catalog.js';
 export * from './crypto.js';
 export * from './header.js';
 export * from './keyring.js';

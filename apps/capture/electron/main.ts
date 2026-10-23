@@ -21,6 +21,15 @@ import {
 } from '../src/engine/import/x7l';
 import { planImport } from '../src/engine/import/x7lPlan';
 import { convertInstrument, type ImportFs } from '../src/engine/import/x7lConvert';
+import { DROPPABLE_EXTENSIONS, extensionOf } from '../src/engine/import/audioFile';
+import {
+  planDrop,
+  scanDroppedFiles,
+  type DropReadFs,
+  type PlanDropOptions,
+  type ScannedFile,
+} from '../src/engine/import/dropPlan';
+import { convertDrop, type DropConvertFs } from '../src/engine/import/dropConvert';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -359,6 +368,145 @@ ipcMain.handle('import:convert', (e, req: ImportConvertRequest) => {
   }
   return { destDir: req.destDir, results };
 });
+
+/* ---------------- IPC: drag-and-drop audio import ---------------- */
+
+/**
+ * Dropping audio is a main-process job for the same reason the X7L import is:
+ * the files can be hundreds of megabytes and the whole point is that their PCM
+ * is copied byte-for-byte, so the audio never crosses IPC. Only the scan (one
+ * small record per file) and the plan do.
+ *
+ * Dropped paths are untrusted. The walk is depth- and count-bounded, follows
+ * no symlinks, and reads nothing that is not a `.wav`; the reader itself
+ * (`audioFile.ts`) bounds every chunk and refuses anything it cannot account
+ * for, so a malformed file is reported, never converted.
+ */
+const DROP_MAX_FILES = 2000;
+const DROP_MAX_DEPTH = 4;
+
+function expandAudioPaths(paths: string[]): { files: string[]; skipped: string[]; truncatedAt: number | null } {
+  const files: string[] = [];
+  const skipped: string[] = [];
+  let truncatedAt: number | null = null;
+
+  const isAudio = (p: string) => (DROPPABLE_EXTENSIONS as readonly string[]).includes(extensionOf(p));
+
+  const walk = (dir: string, depth: number): void => {
+    if (depth > DROP_MAX_DEPTH || truncatedAt !== null) return;
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      skipped.push(dir);
+      return;
+    }
+    for (const e of [...entries].sort((a, b) => a.name.localeCompare(b.name))) {
+      if (truncatedAt !== null) return;
+      const p = join(dir, e.name);
+      if (e.isSymbolicLink()) continue; // never follow a link out of the drop
+      if (e.isDirectory()) walk(p, depth + 1);
+      else if (e.isFile()) {
+        if (!isAudio(p)) continue; // quietly ignore artwork / readme / .DS_Store
+        if (files.length >= DROP_MAX_FILES) {
+          truncatedAt = DROP_MAX_FILES;
+          return;
+        }
+        files.push(p);
+      }
+    }
+  };
+
+  for (const p of paths) {
+    if (truncatedAt !== null) break;
+    let st;
+    try {
+      st = statSync(p);
+    } catch {
+      skipped.push(p);
+      continue;
+    }
+    if (st.isDirectory()) walk(p, 0);
+    else if (!isAudio(p)) skipped.push(p);
+    else if (files.length >= DROP_MAX_FILES) truncatedAt = DROP_MAX_FILES;
+    else files.push(p);
+  }
+  return { files, skipped, truncatedAt };
+}
+
+const dropReadFs: DropReadFs = {
+  readFile: (p) => new Uint8Array(readFileSync(p)),
+  baseName: (p) => basename(p),
+};
+
+ipcMain.handle('drop:scan', (_e, paths: string[]) => {
+  if (!Array.isArray(paths) || paths.length === 0) throw new Error('Nothing was dropped.');
+  const { files: expanded, skipped, truncatedAt } = expandAudioPaths(paths);
+  if (expanded.length === 0) {
+    throw new Error(
+      `No .wav files were found in what you dropped${skipped.length ? ` (${skipped.length} item(s) were not audio this importer reads)` : ''}.`,
+    );
+  }
+  const scanned = scanDroppedFiles(expanded, dropReadFs);
+  // A folder drop names the instrument; a loose set of files does not.
+  let folderName: string | null = null;
+  for (const p of paths) {
+    try {
+      if (statSync(p).isDirectory()) {
+        folderName = basename(p);
+        break;
+      }
+    } catch {
+      /* already recorded in `skipped` */
+    }
+  }
+  const totalBytes = scanned.reduce((n, f) => n + (f.audio?.dataBytes ?? 0), 0);
+  return { files: scanned, folderName, skipped, truncatedAt, totalBytes };
+});
+
+ipcMain.handle(
+  'drop:convert',
+  (e, req: { files: ScannedFile[]; options: PlanDropOptions; destDir: string; author?: string; zip?: boolean }) => {
+    const plan = planDrop(req.files, req.options ?? {});
+    if (!plan.usable) throw new Error('Nothing in this drop can be converted.');
+
+    const nodeFs: DropConvertFs = {
+      mkdir: (d) => mkdirSync(d, { recursive: true }),
+      writeFile: (p, data) => writeFileSync(p, typeof data === 'string' ? data : Buffer.from(data)),
+      join: (...parts) => join(...parts),
+      readFile: (p) => new Uint8Array(readFileSync(p)),
+    };
+
+    const every = Math.max(1, Math.floor(plan.sampleCount / 100));
+    const bundle = convertDrop(plan, req.destDir, nodeFs, {
+      author: req.author || 'JM Studios',
+      sourceLabel: dropSourceLabel(plan.sampleCount, req.options?.folderName ?? null),
+      onProgress: ({ done, total, file }) => {
+        if (done === total || done % every === 0) e.sender.send('drop:progress', { done, total, file });
+      },
+    });
+
+    const validation = validateBundle(bundle.bundlePath);
+    let zipPath: string | null = null;
+    if (req.zip) {
+      const zip = new AdmZip();
+      zip.addLocalFolder(bundle.bundlePath, plan.bundleName);
+      zipPath = `${bundle.bundlePath}.zip`;
+      zip.writeZip(zipPath);
+    }
+    return {
+      ...bundle,
+      zipPath,
+      valid: validation.valid,
+      issues: validation.issues,
+      stats: validation.stats ?? { sampleCount: 0, presetCount: 0, totalBytes: bundle.bytesWritten },
+    };
+  },
+);
+
+function dropSourceLabel(count: number, folderName: string | null): string {
+  return folderName ? `the folder "${folderName}" (${count} audio files)` : `${count} audio files`;
+}
 
 ipcMain.handle('dialog:chooseFile', async () => {
   const r = await dialog.showOpenDialog({

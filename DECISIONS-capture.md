@@ -1448,3 +1448,351 @@ instead of starting a second fade. `scheduleRestructure` is injectable so an
 No `.jmi` schema, parameter id, range or registry-unit-list change. Recording (Guided,
 Auto, the patch queue), the sampler and the WAV writer are untouched; the FX change is
 confined to the rack's structure handling and its view.
+
+---
+
+## CLIENT REQUEST — "put mix knob on all the time based effects" (2026-10-22)
+
+### 94. What the phaser and the flanger actually blended before
+`mix` is appended to **phaser** and **flanger** in the shared registry
+(`packages/jmi-format/src/fx-params.ts`), range 0..100, default **50** — the same id, range and
+default the plugin uses, so preset JSON stays portable. The default is 50 because that is the
+blend the DSP already produced; in the plugin it is bit-identical (`0.5f * (dry + wet)`, proved
+in Signature's `EngineTests`). In Capture the two units were doing something slightly different,
+and the honest numbers are:
+
+| unit | dry gain | wet gain | balance | level vs the plugin |
+|---|---|---|---|---|
+| Phaser  | 1.0 (bare `wetIn→wetOut` wire) | 1.0 | 50/50 | **+6 dB** (an unscaled `dry + wet` sum) |
+| Flanger | 1.0 | 0.7 | 59/41 | +4.6 dB |
+
+Both are now true crossfades (`dry = 1 - mix/100`, `wet = mix/100`), so mix 50 means the same
+thing in Capture as in the plugin and a ported preset finally sounds the same in both. That
+**does** change Capture's rendered level for these two units: the phaser drops 6 dB and the
+flanger's notches deepen slightly as its balance moves from 59/41 to 50/50. Taken deliberately,
+because (a) the registry exists so that one number means one thing in both apps, and (b)
+Capture's FX are monitoring-only — the rack's own label says *"Playback only — never printed
+into the samples"* — so no exported bundle, sample or deliverable can be affected by it. The
+plugin, whose rendered tone *is* the product, is bit-identical at the default.
+
+### 95. The Capture phaser's whole wet path was muted — a real bug, found by wiring Mix
+Setting the new Mix knob to 100 rendered **silence**, which uncovered a defect that predates
+this change. The phaser's feedback was wired `stageIn → allpass… → fb → stageIn`: a cycle with
+**no DelayNode in it**. The Web Audio spec requires at least one DelayNode in any cycle and
+mandates that an implementation *mute* a cycle without one — and because the muted sub-graph is
+the wet chain itself, Capture's phaser has been rendering its **dry input and nothing else**.
+`rate`, `depth`, `feedback` and `stages` all did nothing audible. Measured on the identical graph
+in `node-web-audio-api`: wet peak **0.0** without a DelayNode in the loop, **0.82** with one.
+(`fxStability` never caught it because a dry wire is trivially stable.)
+
+Fixed by putting one DelayNode in the loop at `delayTime` 0 — the shortest the spec allows
+inside a cycle, where it is rounded up to one render quantum (128 frames). That makes the loop a
+short comb rather than the plugin's per-sample recursion, which is simply the tightest Web Audio
+permits; the loop gain is still exactly `feedbackGain(feedback)` (< 1 everywhere, and an allpass
+chain is magnitude-flat), so stability is unchanged and `fxStability`'s phaser sweeps — which now
+exercise a live loop for the first time — pass. The flanger's cycle already contained its
+DelayNode and was fine.
+
+### 96. Tremolo/auto-pan and the widener deliberately get no Mix
+Tremolo is amplitude modulation, so blending its output back with dry is arithmetically what
+lowering `depth` already does; the widener is an M/S width control whose `width` (0..200) already
+passes through unity at 100, so dry is a point on its own range and a Mix knob would just move
+`width`. `epPreamp`, `vintageEq` and `compressor` are not time-based and were not touched.
+
+### 97. UI
+`FxRackView` renders **every** registry parameter, and `.jm-knob-row` is a 2-column auto-row CSS
+grid inside units that stretch to a common height, so the fifth knob simply adds a third row —
+the tape delay (8 params) and digital delay (9) have been laying out 4 and 5 rows all along. No
+CSS change was needed and none was made. (Signature's panel was a different story: it had a
+fixed 2x2 grid that silently hid the fifth parameter onward — see DECISIONS-signature.md §106.)
+
+### 98. The same change in `apps/amanorsac-studio`
+That app consumes the same `@jm/jmi-format` registry and carries a copy of `units.ts`, so the
+registry change alone would have given it a Mix knob with no DSP behind it. The identical two
+`applyParam` cases, the dry node and the feedback-cycle DelayNode were applied there too.
+
+### 99. Test evidence (2026-10-22)
+- `npm run build -w @jm/jmi-format` — clean. `npm run test -w @jm/jmi-format` — **43/43**
+  (18 new in `test/fx-defaults.test.ts`: mix present and 0..100 on all seven time-based units,
+  default 50 on the two new ones, the append-only parameter order, the two deliberate
+  omissions, and a legacy preset with no `mix` key validating and loading at 50).
+- `npm run test -w jm-capture` — **211 passed / 217**, 14 of 15 files. New file
+  `test/fxMix.test.ts` (8 tests): the registry default, a legacy preset loading at 50 without
+  disturbing the keys it does carry, mix 0 being the untouched dry signal at unity, and the
+  blend *measured* — the mix-50 render has to be the exact average of the mix-0 and mix-100
+  renders, which only holds if the control is a linear crossfade and the wet signal is
+  independent of mix (i.e. the feedback loop was left alone).
+- The one failing file and the one `typecheck` error are **pre-existing and unrelated**:
+  `svFilter` was added to the shared `FxType` in uncommitted work for `apps/amanorsac-studio`
+  without a case in Capture's `createFxUnit`, so that function is non-exhaustive
+  (`units.ts(894)`) and `fxStability`'s "every type" loop gets `undefined` for `svFilter`.
+  `git show HEAD:packages/jmi-format/src/types.ts` has no `svFilter`, so neither is caused by
+  this change.
+- `npm run build -w jm-capture` — renderer + electron main/preload, exit 0. Electron was **not**
+  launched.
+
+## Drag-and-drop audio import — a dropped folder becomes a playable instrument, untouched (2026-10-22)
+
+**CLIENT REQUEST:** "drop sample files onto the app and get a playable instrument, with the
+audio untouched" — no recording, no resampling, no requantising, no normalising. If he already
+owns the audio, sampling it through an audio path would only degrade it.
+
+This is the X7L importer's second source, not a second importer: it reuses the same three-beat
+flow (*choose → look at what is inside → convert*), the same injected-filesystem converter
+shape, the same `bundleFolderName` / `sampleFileName` conventions, the same `captureMode`
+decision, and the same refusal to guess at anything it cannot corroborate. What is genuinely
+new is the **mapping problem**: an `.X7L` carries a key map, and a folder of WAVs does not.
+
+### 100. Two different jobs, kept apart: header reading and decoding
+`src/engine/import/audioFile.ts` splits the file in two.
+
+- `readAudioFile` reads **headers only** and returns `{ sampleRate, bitDepth, channels, frames,
+  encoding, dataOffset, dataBytes }`. The conversion path uses nothing else: it writes a fresh
+  canonical 44-byte RIFF header (`pcmWavHeader`, generalised from the X7L importer's
+  `pcm16MonoWavHeader` to any channel count and depth) and copies `[dataOffset, dataOffset +
+  dataBytes)` verbatim.
+- `decodeChannels` turns PCM into `Float32Array` for **analysis only** — pitch, loops, level.
+  Its output never reaches a sample file. `measurePcm` does not even decode: it walks the
+  integer PCM in place for peak, tail RMS and the loudest-200 ms body RMS, with the same
+  -144 dB floor as `measureKeyzone`, so `peakDb` means the same thing whichever importer wrote
+  a bundle.
+
+Keeping these apart is what makes "untouched" checkable rather than aspirational: there is
+exactly one sample-file write on the conversion path and its payload is a header plus a
+`subarray` of the source bytes.
+
+### 101. Dropped files are untrusted, so the reader is a refusal engine
+The chunk walk is bounds-checked at every step; a chunk that claims more bytes than remain is
+rejected (except `data`, which is clamped to what is actually there and reported), and the
+reader refuses a missing `fmt`/`data` chunk, a compressed format tag, zero channels, a zero or
+absurd sample rate, a bit depth it does not read, an empty `data` chunk, and a file too short
+to be a WAV. `WAVE_FORMAT_EXTENSIBLE` is resolved properly through its SubFormat GUID rather
+than assumed to be PCM. Eight distinct malformed inputs are asserted in the tests.
+
+Non-WAV extensions are refused **with the reason**, not silently skipped: `.mp3`/`.m4a`/`.ogg`
+because a lossy file cannot be imported untouched by definition, and `.flac`/`.aif`/`.w64`
+because this importer has not been verified against them — the same rule `.X8L` is held to.
+
+One bad file never loses the drop: `scanDroppedFiles` records the reason on that file and
+carries on, and the plan converts everything else.
+
+### 102. The mapping — what is parsed from a name, and the rules that are judgement calls
+`src/engine/import/dropNames.ts`. Conventions parsed, all asserted in the tests:
+
+| name | note | velocity | round robin |
+|---|---|---|---|
+| `C3_v2_rr1.wav` (the `.jmi` convention) | C3 | layer 2 | 1 |
+| `Piano_C3_mf.wav` | C3 | mf | — |
+| `Strings_A#2_v3_rr1.wav` | A#2 | layer 3 | 1 |
+| `Rhodes-Db4-ff-2.wav` | Db4 (flat) | ff | 2 (trailing number) |
+| `Wurli Bb1 pp.wav` (spaces) | Bb1 | pp | — |
+| `MKS20_F#5_vel100_take3.wav` | F#5 | velocity 100 | 3 |
+| `Choir_layer4_G2.wav` (reordered) | G2 | layer 4 | — |
+| `Pad_c4_soft.wav` (lowercase, word) | C4 | soft | — |
+| `EP-60-velo2.wav` | MIDI 60, *unconfirmed* | layer 2 | — |
+| `kick.wav` | none → detector | — | — |
+
+Separators are `_ - . space ( ) [ ] { } +` in any mixture; `A#2` and `Cs3` survive tokenising.
+Dynamics run `pppp` to `ffff` plus `soft/quiet/mid/med/medium/hard/loud/strong`; layer prefixes
+are `v vel velo vl lyr layer` and, as a last resort only, `L` (ambiguous with a left-channel
+marker, so it is marked low-confidence and never beats a real match).
+
+Four rules are judgement calls and are stated in the code and on screen:
+
+1. **A letter+digit token is a note, a bare letter is a dynamic.** `f3` is F3; `f` is forte.
+2. **The last note token wins.** `Model-D5-C3-mf` files under C3 and is flagged ambiguous.
+3. **A bare integer is a note only when no note name was found**, only in 12 to 120, and always
+   at low confidence. `EP-60` is as likely a model number as middle C — which is why it is
+   corroborated against the detector (section 103).
+4. **`v`/`vel` + a number <= 16 is a layer index; > 16 is a velocity value** (16 because that is
+   the schema's `velocityMap` cap).
+
+`C4 = 60`, matching `midiToNoteName`. Sets written to the Yamaha/Roland `C3 = 60` convention are
+handled by a semitone offset the detector *suggests* (section 103), never by guessing.
+
+### 103. Pitch detection is what turns a pile of files into an instrument
+The existing YIN detector (`dsp/pitch.ts`, built for the wrong-note guard) is run on **every**
+readable file, over a 3-second prefix — the detector already analyses 12% to 75% of what it is
+given, so a prefix is the stable portion and reading the rest only costs time. Three jobs:
+
+- **Fallback.** A name with no pitch in it gets its root from the audio. This is the difference
+  between an unusable folder and an instrument.
+- **Corroboration.** A low-confidence name (a bare MIDI number) that the audio contradicts by
+  more than a semitone loses: the audio wins and the row says `detected`. This is the same
+  principle as the X7L importer letting a level measurement override the catalogue's layer
+  order.
+- **The octave convention.** `suggestOffset` compares every confident name against its detection;
+  when at least three agree *and all of them* differ by the same non-zero multiple of 12, the
+  set is written to the other octave convention and the screen offers the shift as one click.
+  A single odd file is never enough — that is a wrong note, not a convention.
+
+A file with neither a name pitch nor a detectable one (a crash cymbal, a noise hit) is **left
+out with a reason**, not given a root note at random.
+
+Measured on the client's own material (`C:\Users\amano\Documents\JM Signature\Library`):
+
+- EP2 end to end, 110 files, 10 of them renamed to carry no pitch at all: **all 10 roots
+  recovered by the detector**, and on the 104 files that kept their note in the name the
+  detector agreed with the name **104 out of 104, mean |deviation| 0.567 cents**.
+- MKS20's 24 loudest samples renamed to `unnamed_takeNNN.wav`: 100% detected, every one landing
+  on the right note, confidence 1.00.
+
+### 104. A bundle holds one format, and the honest way to get there
+`.jmi` permits 44100/48000/88200/96000 Hz and 16/24/32-bit, mono or stereo, and the validator
+checks every sample against `meta`. Dropped sets are routinely mixed, so `censusFormats` groups
+the files, names the bundle's format (largest schema-legal group; ties to the higher rate, then
+depth, then channel count), and classifies every file against it as `passthrough`,
+`convertible` or `rate-mismatch`.
+
+- **Nothing is converted by default.** The odd ones out are listed as *left out*, with the
+  reason, on the row. Converting is a toggle the user turns on, and every converted file is
+  named on its row, in the plan's notes, and in the bundle's `meta.notes`.
+- **Sample rate is never changed.** Bit depth and channel count can be converted and described
+  honestly; resampling cannot, and resampling is exactly what the client asked not to have. A
+  file at the wrong rate is therefore *refused* — and because that would silently discard half
+  of a 44.1/48 kHz split, **the bundle's format is a control**: pick the other group and the
+  other half converts instead.
+- **Formats outside the schema** (22.05 kHz, 8-bit, 32-bit float, more than 2 channels) are
+  reported with the specific objection. 32-bit float is the interesting one: the depth is legal
+  but the validator requires integer PCM, so a float file can only enter a bundle by being
+  converted, and the screen says so.
+- Bit-depth conversion **rounds and does not dither**. A dither adds noise to audio the client
+  asked to leave alone; nobody importing a 32-bit file into a 24-bit bundle is asking for noise
+  shaping. Channel count folds by averaging or duplicating.
+
+### 105. Velocity layers — sixteen, not four, and the same fold
+The X7L importer's `MAX_VELOCITY_LAYERS` is 4 and its comment says the schema caps `velocityMap`
+at four. **The schema in this repo says sixteen** (`velocityMap.maxItems: 16`,
+`layer.maximum: 16`, and `VelocityLayer.layer` is documented "up to 16"); the constant is stale,
+widened by later work and not followed through. The drop importer uses the schema's real cap,
+and `x7lPlan.ts` was deliberately **not** edited — changing it would alter how existing X7L
+imports fold their fifth layer, which is not this change's business. *Flagged for the X7L
+owner.*
+
+Above sixteen, `foldLayers` repeatedly pairs the **two adjacent layers closest in measured
+level** as round robins until the count fits — the same rule and the same promise (no audio is
+dropped) as the five-into-four fold, generalised. Window edges are an even split of 1 to 127
+across the resulting count, so the map still tiles with no gap at any layer count 1 to 16.
+
+Layers are discovered from the names and ordered by their own sense (`pp < p < mp < mf < f <
+ff`, layer index, velocity value), with the **measured body level** of each group shown beside
+it so a wrong order is visible. Files with no velocity marking form an "Unspecified" group; when
+some files have velocity and some do not, that is a warning on screen, not a silent decision.
+
+### 106. Key ranges, sound type and loops
+Key ranges come from `export.ts`'s existing `keyRanges` — midpoints between adjacent roots, with
+the outermost zones reaching 0 and 127 so no key is unmapped. (The summary therefore reports
+**Roots**, the sampled span, rather than the tiled range, which is always C-1 to G9 and tells
+the user nothing.)
+
+`detectSoundType` in `processing.ts` probes RMS at 3 s and 8 s, which assumes a held Guided
+capture; dropped one-shots are usually shorter than that. `decideSoundType` therefore uses the
+tail-against-body level `measurePcm` already computed — a sample whose final 5% has fallen more
+than 35 dB below its loudest 200 ms has decayed — decided over the set by majority, with the
+rule that fired written into `meta.notes`. On sustaining material only, `detectLoop` runs per
+sample as it is written, with its 4 to 10 s search window scaled to the file. **A sample with no
+stable loop stays a one-shot** (`loop: null`) rather than being given a fabricated one, and that
+is reported as a warning.
+
+### 107. `captureMode` — the same answer as the X7L importer, not a second one
+`meta.captureMode` still admits only `"guided" | "auto"`, an import is still neither, and
+`packages/jmi-format` is still not changed unilaterally. Imported bundles record `"auto"` and
+put the truth in `meta.notes`. The flag raised at section 82 stands and now has two importers
+behind it: if `"import"` is wanted as a first-class value it is a one-line schema change plus
+the `CaptureMode` union and a Signature reader check — a shared-format decision, not an
+importer's.
+
+### 108. Electron: `File.path` is gone, and the audio never crosses IPC
+`File.path` was removed in Electron 32, so the preload exposes `pathForDroppedFile(file)`
+returning `webUtils.getPathForFile(file)` (the documented replacement) and the renderer gets a
+plain string. Paths go to the main process, which expands folders itself: the walk is
+depth-bounded (4), count-bounded (2000, reported when it truncates), **never follows
+symlinks**, and reads nothing that is not a `.wav`. Artwork, readmes and `.DS_Store` are ignored
+without comment; anything dropped that is not audio is counted and reported.
+
+`drop:scan` returns one small record per file. `drop:convert` takes the scan and the user's
+options and **re-plans in the main process** — `planDrop` is pure, so the renderer's preview and
+the main process's conversion are the same function on the same input, and the plan (which can
+be thousands of entries) never has to cross IPC. The audio never crosses it at all.
+
+### 109. Where it lives
+- `src/engine/import/audioFile.ts` — the WAV reader, `pcmWavHeader`, `decodeChannels`
+  (analysis only), `measurePcm`.
+- `src/engine/import/dropNames.ts` — tokenising and name parsing, with confidence.
+- `src/engine/import/dropPlan.ts` — scan, format census, mapping, velocity windows,
+  `instrument.json`. Browser-safe, so the renderer re-plans on every correction with no IPC.
+- `src/engine/import/dropConvert.ts` — executes a plan against the **injected** file system, so
+  the client's real sample sets convert under vitest exactly as they do in Electron.
+- `electron/main.ts` — `drop:scan`, `drop:convert` (progress via `drop:progress`); follows the
+  existing `import:*` pattern, validates every bundle with `validateBundle`, optional zip.
+- `electron/preload.ts` — `pathForDroppedFile`, `scanDrop`, `convertDrop`, `onDropProgress`.
+- `src/ui/import/DropImport.tsx` — the drop flow. `src/ui/import/ImportScreen.tsx` now hosts two
+  sources behind a `Segmented` strip, with the **whole screen** a drop target: dropping audio
+  while the `.X7L` tab is showing switches to Audio Files. The X7L screen's markup is unchanged,
+  lifted into its own component.
+
+### 110. Styling
+Built from the existing family primitives only — `Panel`, `Button`, `Toggle`, `Field`, `Input`,
+`Select` (the CHROME `Listbox`), `Segmented`, `ChromeDialog`, `GoldDivider`, `Flourish`,
+`.jm-readout`, `.jm-plaque`, `.jm-queue-row*`, `.jm-queue-chip`, `.jm-queue-bar`, `.jm-warning`.
+Six new rules were added to `styles.css` (`.jm-drop-target`, `.jm-drop-rule`, `.jm-drop-hint`,
+`.jm-map-scroll`, `.jm-map-row`) and **every colour, size, radius and tracking in them is a
+`tokens.ts` CSS variable** — there is no colour or size literal in the new component or the new
+CSS. The drop affordance is a gold recess and a dashed gold rule, never a browser-blue
+highlight. `document.querySelectorAll('select').length === 0` on the live screen.
+
+The mapping table is a recessed well the rows scroll inside, so three hundred dropped files do
+not push the Convert button off the screen, and each row's reason **wraps rather than
+ellipsising** — a refusal clipped at the ellipsis is a refusal the user cannot act on. Per-row
+corrections open a `ChromeDialog` rather than putting three hundred listboxes on the page.
+
+### 111. Verification (2026-10-22)
+- `npm run build -w jm-capture` — renderer + electron main/preload, exit 0. Electron was **not**
+  launched (the client has the apps open).
+- `npm run typecheck -w jm-capture` — the electron project is clean; the renderer project has
+  only the **pre-existing** `units.ts(894)` non-exhaustive-switch error already logged at
+  section 99 (`svFilter` added to the shared `FxType` in uncommitted work with no case in
+  Capture's `createFxUnit`). Nothing in this change touches it.
+- `npm run test -w jm-capture` — **267 passed, 5 skipped, 1 failed** across 16 files. The 211
+  that existed before are all still green and the one failure is the same pre-existing
+  `fxStability > svFilter` case logged at section 99. New file `test/dropImport.test.ts`,
+  **56 tests**: name parsing across twelve conventions and six rejection cases, eight
+  malformed-WAV refusals, `WAVE_FORMAT_EXTENSIBLE`, the pitch fallback and the
+  octave-convention suggestion, mixed rate/depth/channel census and the per-file verdicts,
+  schema objections, 32-bit float conversion, window tiling at every layer count 1 to 16, the
+  above-sixteen fold, key-range tiling, destination-name collisions, per-file overrides, loop
+  detection on sustaining material and its absence on one-shots, the bit-perfect assertion, and
+  full conversions asserting `validateBundle` passes with zero errors.
+- **The client's own library, end to end.** `MKS20.jmi`, `EP2.jmi` and `Piano.jmi` samples were
+  copied out to scratch folders and re-imported as if dropped. All three round-trip: the format
+  comes back identical (44.1/16/mono, 44.1/16/mono, 48/24/**stereo**), nothing is converted,
+  nothing is left out, the roots, layer count and zone count match the original
+  `instrument.json`, every bundle passes `validateBundle` with zero errors, and **every sample's
+  PCM payload is byte-identical to the source**.
+- **A deliberately messy drop**, staged from EP2: 114 files — 63 keeping the `.jmi` convention,
+  37 renamed to `EP2_{Note}_{dyn}_rr{n}.wav`, 10 with the pitch stripped out of the name
+  entirely, and 4 Piano samples at 48 kHz / 24-bit / stereo. Result: 110 samples, **110
+  passthrough, 0 converted**, 4 left out (the rate mismatch, with the reason), 10 roots from the
+  detector, 103 zones, 8 velocity layers, scan 3.7 s, conversion 1.1 s.
+  `node packages/jmi-format/dist/cli.js validate` gives
+  `110 samples / 2 presets / 63.1 MB / VALID`. Byte comparison: **110 identical, 0 different,
+  66,143,968 bytes of PCM copied unchanged.**
+- Screens shot against the live Vite dev server through a headless-Chrome CDP harness, with the
+  two Electron-only bridge methods stubbed in the page and **real scan records** produced by the
+  real scanner from the client's own samples — the screen's own code is unmodified. New:
+  `37-import-drop-empty.png`, `38-import-drop-dragover.png`, `39-import-drop-summary.png`,
+  `40-import-drop-controls.png`, `41-import-drop-mapping.png`,
+  `42-import-drop-filter-listbox.png`, `43-import-drop-every-file.png`,
+  `44-import-drop-row-editor.png`, `45-import-drop-converting.png`,
+  `46-import-drop-complete.png`. Zero native `<select>`; the only console error in the whole run
+  is `404 /favicon.ico`, a dev-server artefact (Electron loads from `file://` and never requests
+  it).
+
+### 112. Not touched
+`packages/jmi-format` is unchanged — no schema, type, validator or C++ reader edit. The `.jmi`
+schema, the sampler, the FX rack and every recording path (Guided, Auto, the patch queue,
+export) are untouched. `x7l.ts`, `x7lPlan.ts` and `x7lConvert.ts` are unchanged; the drop
+importer *imports* `inferWorld` from `x7lPlan` and `ImportFs` from `x7lConvert` and shares
+`keyRanges` and `bundleFolderName` with `export.ts`, but adds nothing to them. The X7L screen's
+markup is unchanged, only relocated into an `X7lImport` component inside the same file. Work in
+`apps/signature` and the shared FX registry was left alone.

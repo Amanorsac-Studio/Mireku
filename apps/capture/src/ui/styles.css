@@ -1823,3 +1823,105 @@ input.jm-well[type='number']::-webkit-inner-spin-button {
   min-width: calc(var(--jm-size-gap-unit) * 44);
   gap: calc(var(--jm-size-gap-unit) * 1.5);
 }
+
+/* ================================================================== */
+/* Import — drag-and-drop audio                                        */
+/*                                                                     */
+/* CHROME / plaque register only; every colour, size and tracking comes */
+/* from a tokens.ts variable. The drop affordance is a gold recess, not  */
+/* a browser-blue highlight, and the mapping rows reuse the patch-queue  */
+/* row furniture so a dropped set reads like a queue of work.           */
+/* ================================================================== */
+
+.jm-drop-target {
+  position: relative;
+  border-radius: var(--jm-size-radius-panel);
+  transition: box-shadow 120ms ease;
+}
+
+.jm-drop-target.over {
+  box-shadow:
+    inset 0 0 0 2px var(--jm-color-gold),
+    0 0 36px var(--jm-color-gold-glow-soft);
+}
+
+/* the "drop to read" rule, borrowed from the FX rack's drop indicator */
+.jm-drop-rule {
+  font-family: var(--jm-font-display);
+  text-transform: uppercase;
+  letter-spacing: var(--jm-tracking-chrome);
+  font-size: var(--jm-type-label);
+  color: var(--jm-color-gold-hot);
+  text-align: center;
+  padding: calc(var(--jm-size-gap-unit) * 1.5);
+  border: 1px dashed var(--jm-color-gold);
+  border-radius: var(--jm-size-radius-control);
+  background: var(--jm-color-gold-glow-soft);
+}
+
+.jm-drop-hint {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(var(--jm-size-gap-unit) * 0.75);
+  text-align: center;
+  padding: calc(var(--jm-size-gap-unit) * 4) calc(var(--jm-size-gap-unit) * 3);
+  border: 1px dashed var(--jm-color-gold-dark);
+  border-radius: var(--jm-size-radius-panel);
+  background: linear-gradient(180deg, var(--jm-color-chrome-well-top), var(--jm-color-chrome-well-bottom));
+  box-shadow: inset 0 2px 8px var(--jm-color-shadow-inset);
+}
+
+.jm-drop-hint .jm-value {
+  max-width: calc(var(--jm-size-gap-unit) * 82);
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--jm-color-muted);
+}
+
+.jm-drop-hint strong {
+  color: var(--jm-color-gold-bright);
+  font-weight: inherit;
+}
+
+/* the mapping table: a recessed well the rows scroll inside, so three
+   hundred dropped files do not push the Convert button off the screen */
+.jm-map-scroll {
+  max-height: calc(var(--jm-size-gap-unit) * 54);
+  overflow-y: auto;
+  padding: calc(var(--jm-size-gap-unit) * 0.75);
+  border-radius: var(--jm-size-radius-control);
+  background: var(--jm-color-black);
+  box-shadow: inset 0 2px 10px var(--jm-color-shadow-inset);
+}
+
+.jm-map-row {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.jm-map-row:hover {
+  border-color: var(--jm-color-gold);
+}
+
+.jm-map-row:focus-visible {
+  outline: none;
+  border-color: var(--jm-color-gold-bright);
+  box-shadow: 0 0 0 2px var(--jm-color-gold-glow);
+}
+
+/* a file that will not be converted stays legible but recedes */
+.jm-map-row.out .jm-queue-row-name {
+  color: var(--jm-color-muted);
+}
+
+/* the mapping rows carry reasons, not just labels: a refusal that is clipped
+   at the ellipsis is a refusal the user cannot act on */
+.jm-map-row .jm-queue-row-sub {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}

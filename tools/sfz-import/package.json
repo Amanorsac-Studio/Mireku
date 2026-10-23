@@ -1,0 +1,13 @@
+{
+  "name": "@amanorsac/sfz-import",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Converts SFZ / SF2 / named-WAV sample libraries into .jmi bundles for the Amanorsac sampler engine",
+  "bin": { "sfz-import": "src/cli.mjs" },
+  "scripts": { "import": "node src/cli.mjs" },
+  "dependencies": {
+    "@jm/jmi-format": "*",
+    "@wasm-audio-decoders/flac": "^0.2.11"
+  }
+}

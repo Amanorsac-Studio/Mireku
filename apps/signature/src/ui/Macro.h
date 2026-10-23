@@ -767,4 +767,212 @@ private:
     juce::StringArray headers_;
 };
 
+//==============================================================================
+/// AUTHORING MODE — the mode switch and the round trip, in one panel.
+///
+/// The mode is stored in settings.json (see engine/Library.h for why), and this
+/// is the second half of that decision: a file nobody can see is not a control
+/// the artist can be expected to understand, and a control with no file behind
+/// it is not something a release script can set. Both exist; this panel shows
+/// which one is in force, in the same words the bottom-bar plate uses.
+///
+/// COLLECT writes the artist's work to an inspectable folder with a manifest;
+/// IMPORT reads one back on the developer's side. Both report line by line and
+/// neither ever replaces a file without keeping a .bak — the whole point is
+/// that Nene merges deliberately rather than guessing.
+class AuthoringPanel : public ChromePanel
+{
+public:
+    static constexpr int kWidth = 800, kHeight = 620;
+
+    explicit AuthoringPanel (JMSignatureProcessor& p) : ChromePanel ("Authoring"), proc_ (p)
+    {
+        authoringBtn_.setButtonText ("AUTHORING");
+        releaseBtn_.setButtonText ("RELEASE");
+        for (auto* b : { &authoringBtn_, &releaseBtn_ })
+        {
+            b->setFontHeight (12.0f);
+            b->setClickingTogglesState (true);
+            b->setRadioGroupId (4242);
+            addAndMakeVisible (*b);
+        }
+        authoringBtn_.onClick = [this] { if (authoringBtn_.getToggleState()) setMode (authoring::Mode::authoring); };
+        releaseBtn_.onClick   = [this] { if (releaseBtn_.getToggleState())   setMode (authoring::Mode::release); };
+        syncModeButtons();
+
+        collect_.setButtonText ("COLLECT AUTHORED CONTENT...");
+        collect_.setFontHeight (11.0f);
+        collect_.onClick = [this] { doCollect(); };
+        addAndMakeVisible (collect_);
+
+        import_.setButtonText ("IMPORT A COLLECTION...");
+        import_.setFontHeight (11.0f);
+        import_.onClick = [this] { doImport(); };
+        addAndMakeVisible (import_);
+
+        log_.setMultiLine (true, false);
+        log_.setReadOnly (true);
+        log_.setScrollbarsShown (true);
+        log_.setFont (Theme::value (11.5f));
+        log_.setColour (juce::TextEditor::backgroundColourId, juce::Colour (0xff0A0908));
+        log_.setColour (juce::TextEditor::textColourId, Theme::cream);
+        log_.setText (describeState(), false);
+        addAndMakeVisible (log_);
+    }
+
+    /// Self-check hooks (the destructive paths are driven headlessly through
+    /// jm::authoring; these only cover the panel's own wiring).
+    juce::String logText() const { return log_.getText(); }
+    bool authoringSelected() const { return authoringBtn_.getToggleState(); }
+    void selectMode (authoring::Mode m)
+    {
+        (m == authoring::Mode::authoring ? authoringBtn_ : releaseBtn_)
+            .setToggleState (true, juce::sendNotificationSync);
+    }
+
+    void contentResized (juce::Rectangle<int> area) override
+    {
+        area.removeFromTop (70);
+        auto modeRow = area.removeFromTop (30).reduced (12, 0);
+        modeRow.removeFromLeft (150);
+        authoringBtn_.setBounds (modeRow.removeFromLeft (120));
+        modeRow.removeFromLeft (8);
+        releaseBtn_.setBounds (modeRow.removeFromLeft (120));
+
+        area.removeFromTop (58);
+        auto actions = area.removeFromTop (28).reduced (12, 0);
+        collect_.setBounds (actions.removeFromLeft (240));
+        actions.removeFromLeft (10);
+        import_.setBounds (actions.removeFromLeft (200));
+
+        area.removeFromTop (12);
+        log_.setBounds (area.reduced (12, 0));
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        ChromePanel::paint (g);
+        g.setColour (Theme::muted);
+        g.setFont (Theme::display (12.0f));
+        g.drawText ("MODE", 28, authoringBtn_.getY() + 6, 120, 16, juce::Justification::centredLeft, false);
+
+        const bool auth = proc_.state.library.isAuthoring();
+        g.setColour (auth ? Theme::warnRed : Theme::okGreen);
+        g.setFont (Theme::value (12.0f));
+        g.drawFittedText (auth
+            ? "A save creates FACTORY content: patches go into the instrument bundle, "
+              "performance snapshots into Presets/Performance/Factory."
+            : "A save creates a USER preset: patches go to Presets/<world>, "
+              "performance snapshots to Presets/Performance. This is the shipping behaviour.",
+            28, authoringBtn_.getBottom() + 8, getWidth() - 56, 34, juce::Justification::topLeft, 2, 0.95f);
+
+        g.setColour (Theme::gold);
+        g.setFont (Theme::display (13.0f));
+        g.drawText ("ROUND TRIP", 28, collect_.getY() - 22, getWidth() - 56, 16,
+                    juce::Justification::centredLeft, false);
+    }
+
+private:
+    void setMode (authoring::Mode m)
+    {
+        proc_.state.library.setMode (m);
+        proc_.stateChanged.sendChangeMessage();
+        log_.setText (describeState(), false);
+        repaint();
+    }
+
+    void syncModeButtons()
+    {
+        (proc_.state.library.isAuthoring() ? authoringBtn_ : releaseBtn_)
+            .setToggleState (true, juce::dontSendNotification);
+    }
+
+    juce::String describeState() const
+    {
+        juce::StringArray l;
+        l.add ("MODE            " + juce::String (authoring::modeId (proc_.state.library.mode())));
+        l.add ("app version     " + juce::String (authoring::kAppVersion));
+        l.add ("library         " + proc_.state.library.libraryDir().getFullPathName());
+        l.add ("presets         " + Library::userPresetDir().getFullPathName());
+        l.add ("settings        " + Library::settingsFile().getFullPathName());
+        l.add ("");
+        l.add ("A patch (.jmi preset) carries the engine, the FX rack and the amp");
+        l.add ("envelope. It CANNOT carry modulation: the .jmi format is shared with");
+        l.add ("JM Capture, which has no LFOs, matrix or arpeggiator. Modulation is");
+        l.add ("carried by PERFORMANCE presets, which is what COLLECT brings back.");
+        l.add ("");
+        for (auto& b : proc_.state.library.bundles())
+        {
+            const auto led = authoring::readLedger (b.dir);
+            l.add ("bundle  " + b.dir.getFileName() + "   authored here: " + juce::String ((int) led.size()));
+        }
+        return l.joinIntoString ("\n");
+    }
+
+    void doCollect()
+    {
+        chooser_ = std::make_unique<juce::FileChooser> (
+            "Where should the authored content be collected?",
+            Library::appDataDir().getChildFile ("Authored"));
+        chooser_->launchAsync (juce::FileBrowserComponent::saveMode
+                                   | juce::FileBrowserComponent::canSelectDirectories,
+            [this] (const juce::FileChooser& fc)
+            {
+                auto dest = fc.getResult();
+                if (dest == juce::File()) return;
+                // A timestamped sub-folder, so collecting twice never silently
+                // mixes two sessions' work in one tree.
+                dest = dest.getChildFile (juce::Time::getCurrentTime()
+                                              .formatted ("%Y-%m-%d-%H%M%S"));
+                auto res = authoring::collect (proc_.state.library.libraryDir(),
+                                               Library::userPresetDir(),
+                                               Library::settingsFile(), dest,
+                                               proc_.state.library.mode());
+                juce::StringArray l;
+                l.add (res.ok ? "COLLECTED" : "COLLECT FAILED");
+                l.add (res.message);
+                l.add ("");
+                l.addArray (res.lines);
+                if (res.ok)
+                {
+                    l.add ("");
+                    l.add ("manifest: " + res.manifest.getFullPathName());
+                    l.add ("Send this whole folder back (zip it if you like — it is");
+                    l.add ("deliberately a plain folder so it can be read without one).");
+                }
+                log_.setText (l.joinIntoString ("\n"), false);
+            });
+    }
+
+    void doImport()
+    {
+        chooser_ = std::make_unique<juce::FileChooser> (
+            "Choose a collection folder (the one containing "
+                + juce::String (authoring::kManifestFileName) + ")",
+            Library::appDataDir().getChildFile ("Authored"));
+        chooser_->launchAsync (juce::FileBrowserComponent::openMode
+                                   | juce::FileBrowserComponent::canSelectDirectories,
+            [this] (const juce::FileChooser& fc)
+            {
+                auto src = fc.getResult();
+                if (! src.isDirectory()) return;
+                auto res = authoring::importCollection (src, proc_.state.library.libraryDir(),
+                                                        Library::userPresetDir());
+                juce::StringArray l;
+                l.add (res.ok ? "IMPORTED" : "IMPORTED WITH SKIPS");
+                l.add (res.message);
+                l.add ("");
+                l.addArray (res.lines);
+                log_.setText (l.joinIntoString ("\n"), false);
+                proc_.state.library.rescan();
+                proc_.stateChanged.sendChangeMessage();
+            });
+    }
+
+    JMSignatureProcessor& proc_;
+    ux::PlateButton authoringBtn_, releaseBtn_, collect_, import_;
+    juce::TextEditor log_;
+    std::unique_ptr<juce::FileChooser> chooser_;
+};
+
 } // namespace jm

@@ -1,6 +1,7 @@
 /** AOFAS v1 types — mirrors docs/AOFAS-FORMAT-SPEC.md §5. */
 
 import type { Instrument, Preset } from '@jm/jmi-format';
+import type { Category, Licensing } from './catalog.js';
 
 export const MAGIC = Buffer.from([0x41, 0x4f, 0x46, 0x41, 0x53, 0x1a, 0x0d, 0x0a]);
 export const HEADER_SIZE = 128;
@@ -45,6 +46,20 @@ export interface Card {
   totalAudioBytes: number;
   minAppVersion: string;
   keyId: number;
+
+  /* --- Amanorsac catalogue (added after v1.0; older files omit these) -----
+     These live in the PLAINTEXT card on purpose. A credits screen, a library
+     browser or a licence audit must work with NO key at all — attribution
+     sealed inside an encrypted payload is attribution nobody can read, which
+     defeats the obligation it is meant to satisfy. Readers ignore fields they
+     do not know (spec §5.2), so a v1.0 reader is unaffected. --- */
+
+  /** Which shelf this sits on across Amanorsac apps. */
+  category?: Category;
+  /** Free-form family tags: 'worship', 'neo-soul', 'vintage-wurli', … */
+  tags?: string[];
+  /** Licence as shipped, plus every upstream source that contributed audio. */
+  licensing?: Licensing;
   [k: string]: unknown;
 }
 
@@ -71,6 +86,19 @@ export interface AofasIndex {
   instrument: Instrument;
   presets: { fileName: string; preset: Preset }[];
   streams: StreamInfo[];
+  /**
+   * Full provenance, sealed rather than public: which upstream library each
+   * sample came from and what was done to it. The card carries the credits a
+   * user must see; this carries the working detail an audit needs.
+   */
+  provenance?: Provenance;
+}
+
+export interface Provenance {
+  /** Index into the card's licensing.sources, per stream path. Absent = original. */
+  streamSources?: Record<string, number>;
+  /** Free notes: processing chain, normalisation, tuning, edits. */
+  notes?: string;
 }
 
 export function bytesPerSample(codec: AofasCodec): number {

@@ -797,6 +797,11 @@ public:
         labelBelow_ = b;
         name_.setFont (Theme::display (fontHeight));
         name_.setColour (juce::Label::textColourId, juce::Colour (0xffEFE4CC));
+        // A caption below a knob is laid out in the knob's own cell, and the FX
+        // rack's densest grid is only 52 px wide, so a long one ("WOW/FLUTTER",
+        // "PRE-DELAY") hit the Label default and was ELLIPSISED. Condensing is
+        // the lesser evil: the panel's own title already uses the same trick.
+        name_.setMinimumHorizontalScale (0.62f);
         resized();
     }
 
@@ -1330,6 +1335,7 @@ public:
         name_.setJustificationType (juce::Justification::centred);
         name_.setFont (Theme::ui (11.0f));
         name_.setColour (juce::Label::textColourId, Theme::cream);
+        name_.setMinimumHorizontalScale (0.62f);   // see ParamKnob::setLabelBelow
         addAndMakeVisible (name_);
         // §6 accessibility: name the control, and drop the duplicate label from
         // the tree (a juce::TextButton already announces its own button text).

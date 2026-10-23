@@ -176,7 +176,15 @@ public:
         static constexpr int brTitleY = 16, brSearchY = 52, brSearchH = 30;
         static constexpr int brTabsY = 94, brTabsH = 30;
         static constexpr int brListY = 134, brListH = 388;
-        static constexpr int brArtY = 560, brArtH = 308;
+        // AUTHORING MODE: the save control is no longer one bare button. It
+        // states its DESTINATION, and when the patch cannot hold the artist's
+        // modulation it offers the save that can, right beside the one that
+        // would lose it. The brand art below gives up the height.
+        static constexpr int brSaveY = 528, brSaveH = 28;   // name field + SAVE
+        static constexpr int brInfoY = 558, brInfoH = 30;   // where it goes / where it went
+        static constexpr int brWarnY = 590, brWarnH = 32;   // what a patch cannot hold
+        static constexpr int brAltY  = 624, brAltH  = 26;   // SAVE PERFORMANCE INSTEAD
+        static constexpr int brArtY = 656, brArtH = 212;
 
         // model page (local to centerX/centerY) -------------------------------
         static constexpr int mpTitleY = 26, mpPatchY = 60;

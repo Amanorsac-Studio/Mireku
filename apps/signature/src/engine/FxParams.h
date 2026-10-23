@@ -126,12 +126,22 @@ inline const std::array<FxSpec, kNumFxTypes>& fxRegistry()
             { "rate", "Rate", ParamKind::Float, 0.05f, 4.0f, 0.3f, {}, "Hz", false, true },
             { "depth", "Depth", ParamKind::Float, 0, 100, 60 },
             { "feedback", "Feedback", ParamKind::Float, 0, 90, 40 },
-            { "stages", "Stages", ParamKind::Enum, 0, 2, 1, { "2", "4", "6" } } } },
+            { "stages", "Stages", ParamKind::Enum, 0, 2, 1, { "2", "4", "6" } },
+            // CLIENT REQUEST — "put mix knob on all the time based effects".
+            // APPENDED (never inserted): a param's position here is baked into
+            // every saved FX preset. Default 50 is the blend PhaserFx already
+            // hard-wired (`0.5f * (dry + wet)`), so an old preset — which has
+            // no "mix" key at all and therefore takes this default — renders
+            // bit-identically. Asserted in tests/EngineTests.cpp.
+            { "mix", "Mix", ParamKind::Float, 0, 100, 50 } } },
         { FxType::flanger, "flanger", "Flanger", {
             { "rate", "Rate", ParamKind::Float, 0.05f, 2.0f, 0.2f, {}, "Hz", false, true },
             { "depth", "Depth", ParamKind::Float, 0, 100, 50 },
             { "feedback", "Feedback", ParamKind::Float, -90, 90, 30 },
-            { "manual", "Manual", ParamKind::Float, 0.1f, 10.0f, 2.0f, {}, "ms", false, true } } },
+            { "manual", "Manual", ParamKind::Float, 0.1f, 10.0f, 2.0f, {}, "ms", false, true },
+            // APPENDED — see phaser.mix above. FlangerFx summed
+            // `0.5f * (dry + wet)` as well, so 50 reproduces it exactly.
+            { "mix", "Mix", ParamKind::Float, 0, 100, 50 } } },
         { FxType::epPreamp, "epPreamp", "EP Preamp/Drive", {
             { "drive", "Drive", ParamKind::Float, 0, 100, 20 },
             { "tone", "Tone", ParamKind::Float, -100, 100, 0 },

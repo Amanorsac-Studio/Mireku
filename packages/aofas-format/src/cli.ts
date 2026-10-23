@@ -12,12 +12,22 @@
  * Flags: --test (use the all-zero test key), --key-file <path>, --key-id <n>
  */
 
-import { mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { Archive, readCard } from './read.js';
 import { defaultKeyFilePath, keygen, makeKeyRing } from './keyring.js';
 import { pack } from './pack.js';
 import { AofasError, userMessage } from './types.js';
+import {
+  AMANORSAC_ORIGINAL,
+  CATEGORIES,
+  KNOWN_SOURCES,
+  PROVENANCE_UNVERIFIED,
+  creditLines,
+  isUnverified,
+  type Licensing,
+  type SourceRef,
+} from './catalog.js';
 
 function arg(argv: string[], name: string): string | undefined {
   const i = argv.indexOf(name);
@@ -26,6 +36,58 @@ function arg(argv: string[], name: string): string | undefined {
 
 function mb(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/**
+ * --source may name a library from the plan's verified list (`--source salamander`)
+ * or an ad-hoc one as "Name|licenceId|url|credit line". Anything unrecognised is
+ * an error rather than a silent "assume CC0": guessing a licence is the one
+ * mistake that cannot be fixed after the file ships.
+ */
+function sourcesFrom(argv: string[]): SourceRef[] {
+  const out: SourceRef[] = [];
+  argv.forEach((a, i) => {
+    if (a !== '--source') return;
+    const spec = argv[i + 1];
+    if (!spec) throw new Error('--source needs a value');
+    const known = KNOWN_SOURCES[spec.toLowerCase()];
+    if (known) {
+      out.push({ ...known, retrieved: new Date().toISOString().slice(0, 10) });
+      return;
+    }
+    const [library, id, url, attribution] = spec.split('|');
+    if (!library || !id) {
+      throw new Error(
+        `unknown source "${spec}". Use one of: ${Object.keys(KNOWN_SOURCES).join(', ')}, ` +
+          'or describe it as "Library name|licence-id|url|credit line".',
+      );
+    }
+    const requiresAttribution = /^cc-?by/i.test(id);
+    out.push({
+      library,
+      url: url || undefined,
+      retrieved: new Date().toISOString().slice(0, 10),
+      license: { id, url: url || undefined, requiresAttribution, attribution: attribution || undefined },
+    });
+  });
+  return out;
+}
+
+/** The licence of the library as shipped, given its sources. */
+function licensingFrom(argv: string[]): Licensing {
+  if (argv.includes('--unverified')) return PROVENANCE_UNVERIFIED;
+  const sources = sourcesFrom(argv);
+  if (sources.length === 0) return AMANORSAC_ORIGINAL;
+  const mustCredit = sources.filter((s) => s.license.requiresAttribution);
+  return {
+    license: {
+      id: 'proprietary',
+      name: 'Amanorsac Studio — all rights reserved, with third-party material as credited',
+      requiresAttribution: mustCredit.length > 0,
+      attribution: mustCredit.length > 0 ? mustCredit.map((s) => s.license.attribution).join(' ') : undefined,
+    },
+    sources,
+  };
 }
 
 function ring(argv: string[]) {
@@ -43,10 +105,16 @@ function main(argv: string[]): number {
         '  aofas keygen [--key-file <path>]',
         '  aofas pack <bundle.jmi> [-o <out.aofas>] [--test] [--key-id <n>]',
         '           [--name <instrument name>] [--author <brand>] [--drop-empty]',
+        '           [--category <shelf>] [--tags a,b,c] [--source <id|spec> ...] [--unverified]',
         '  aofas info <file.aofas>',
+        '  aofas credits <file.aofas | folder>',
         '  aofas open <file.aofas> [--test]',
         '  aofas verify <file.aofas> [--full] [--test]',
         '  aofas test-vector <bundle.jmi> -o <dir>',
+        '',
+        `  categories:    ${CATEGORIES.join(' | ')}`,
+        `  known sources: ${Object.keys(KNOWN_SOURCES).join(' | ')}`,
+        '  ad-hoc source: "Library name|licence-id|url|credit line"',
         '',
         `  key file: ${defaultKeyFilePath()}`,
       ].join('\n'),
@@ -78,6 +146,9 @@ function main(argv: string[]): number {
         keyId: keyIdArg ? Number(keyIdArg) : undefined,
         name: arg(argv, '--name'),
         author: arg(argv, '--author'),
+        category: arg(argv, '--category') as never,
+        tags: arg(argv, '--tags')?.split(',').map((t) => t.trim()).filter(Boolean),
+        licensing: licensingFrom(argv),
         dropEmptySamples: argv.includes('--drop-empty'),
         onProgress: (done, total, what) => {
           const phase = what.split(' ')[0];
@@ -108,12 +179,64 @@ function main(argv: string[]): number {
             '\nThe zones that used them still play their other round robins. Re-sample when you can.',
         );
       }
+      const sealedCard = readCard(res.out);
+      const credits = sealedCard.licensing ? creditLines(sealedCard.licensing) : [];
       console.log(
         `Sealed ${res.streams} samples -> ${res.out}\n` +
+          `  category ${sealedCard.category}${sealedCard.tags?.length ? ` · tags ${sealedCard.tags.join(', ')}` : ''}\n` +
+          (isUnverified(sealedCard.licensing)
+            ? '  PROVENANCE UNVERIFIED — internal use only, do not ship until the source is established\n'
+            : '') +
+          (credits.length
+            ? `  attribution required (readable without a key):\n` + credits.map((c) => `    ${c}`).join('\n') + '\n'
+            : '  no third-party attribution required\n') +
           `  ${mb(statSync(res.out).size)}, key ${res.keyId}, bundle ${res.bundleId}, ` +
           `${((Date.now() - started) / 1000).toFixed(1)}s\n` +
           `  round-trip verified`,
       );
+      return 0;
+    }
+
+    case 'credits': {
+      // Reads the PLAINTEXT card only: a credits screen, a licence audit or a
+      // release checklist must work with no studio key at all.
+      const target = argv[1];
+      if (!target) throw new Error('usage: aofas credits <file.aofas | folder>');
+      const files = statSync(target).isDirectory()
+        ? readdirSync(target)
+            .filter((n) => n.toLowerCase().endsWith('.aofas'))
+            .map((n) => join(target, n))
+        : [target];
+      if (files.length === 0) {
+        console.log('No .aofas libraries found.');
+        return 0;
+      }
+      let any = false;
+      for (const f of files) {
+        const card = readCard(f);
+        const lines = card.licensing ? creditLines(card.licensing) : [];
+        console.log(`${card.name} — ${card.category ?? 'uncategorised'} — ${basename(f)}`);
+        if (isUnverified(card.licensing)) {
+          any = true;
+          console.log('  PROVENANCE UNVERIFIED — do not ship until the source is established');
+        } else if (!card.licensing) {
+          console.log('  (no licensing recorded — packed before catalogue support)');
+        } else if (lines.length === 0) {
+          console.log(`  ${card.licensing.license.id}: no attribution required`);
+        } else {
+          any = true;
+          for (const l of lines) console.log(`  ${l}`);
+        }
+        for (const src of card.licensing?.sources ?? []) {
+          console.log(`    source: ${src.library} (${src.license.id})${src.url ? ' — ' + src.url : ''}`);
+        }
+      }
+      if (any) {
+        console.log(
+          '\nCredits must be shown wherever this content ships. A library marked UNVERIFIED must not ship at all ' +
+            'until its source is established (plan §10: "if provenance is uncertain, the sample does not ship").',
+        );
+      }
       return 0;
     }
 

@@ -136,7 +136,29 @@ class Phaser extends BaseFxUnit {
   private lfoDepth = this.ctx.createGain();
   private fb = this.ctx.createGain();
   private wet = this.ctx.createGain();
+  private dry = this.ctx.createGain();
   private stageIn = this.ctx.createGain();
+  /**
+   * BUG FOUND WHILE WIRING MIX — the feedback loop was SILENT, and it took the
+   * whole wet path with it.
+   *
+   * `stageIn -> allpass... -> fb -> stageIn` is a cycle, and the Web Audio
+   * spec only allows a cycle that contains at least one DelayNode: an
+   * implementation MUST mute any cycle without one. Chrome and
+   * node-web-audio-api both do, and because the muted sub-graph is the wet
+   * chain itself, the Capture phaser rendered its DRY INPUT and nothing else —
+   * rate, depth, feedback and stages all did nothing audible. Measured: wet
+   * peak 0.0 before, 0.82 after, with the identical graph plus this node.
+   *
+   * One DelayNode in the loop makes the cycle legal. `delayTime` 0 is the
+   * shortest the spec allows inside a cycle (it is rounded up to one render
+   * quantum, 128 frames), so the loop is a short comb rather than the plugin's
+   * per-sample recursion — but it is the tightest Web Audio permits, and a
+   * phaser that phases beats one that does not. The loop gain is still exactly
+   * `feedbackGain(feedback)` (< 1 everywhere, and the allpass chain is
+   * magnitude-flat), so stability is unchanged — fxStability covers it.
+   */
+  private fbDelay = this.ctx.createDelay(0.05);
 
   constructor(ctx: BaseAudioContext) {
     super(ctx, 'phaser');
@@ -152,7 +174,13 @@ class Phaser extends BaseFxUnit {
     this.lfo.connect(this.lfoDepth);
     for (const ap of this.allpass) this.lfoDepth.connect(ap.frequency);
     this.lfo.start();
-    this.wetIn.connect(this.wetOut); // dry path
+    // CLIENT REQUEST — Mix (wet/dry). The dry path used to be a bare
+    // wetIn→wetOut wire at unity against a wet gain of 1, i.e. an unscaled
+    // dry+wet SUM: the right 50/50 balance, but 6 dB hotter than Signature's
+    // `0.5f * (dry + wet)`. It is a true crossfade now, so the registry
+    // default of 50 means the same thing in both apps and a ported preset
+    // finally sounds the same in both. Logged in DECISIONS-capture.md.
+    this.wetIn.connect(this.dry).connect(this.wetOut);
     this.wetIn.connect(this.stageIn);
     this.rebuildChain(4);
     this.applyAll();
@@ -162,6 +190,7 @@ class Phaser extends BaseFxUnit {
     this.stageIn.disconnect();
     for (const ap of this.allpass) ap.disconnect();
     this.fb.disconnect();
+    this.fbDelay.disconnect();
     this.wet.disconnect();
     let node: AudioNode = this.stageIn;
     for (let i = 0; i < stages; i++) {
@@ -169,7 +198,7 @@ class Phaser extends BaseFxUnit {
       node = this.allpass[i];
     }
     node.connect(this.wet).connect(this.wetOut);
-    node.connect(this.fb).connect(this.stageIn);
+    node.connect(this.fb).connect(this.fbDelay).connect(this.stageIn);
   }
 
   protected applyParam(id: string, value: ParamValue): void {
@@ -188,6 +217,12 @@ class Phaser extends BaseFxUnit {
       case 'stages':
         this.rebuildChain(Number(value));
         break;
+      case 'mix': {
+        const m = Number(value) / 100;
+        this.setAP(this.wet.gain, m);
+        this.setAP(this.dry.gain, 1 - m);
+        break;
+      }
     }
   }
 }
@@ -200,14 +235,18 @@ class Flanger extends BaseFxUnit {
   private lfo = makeLfo(this.ctx, this.delay.delayTime, 0.2, 0.001);
   private fb = this.ctx.createGain();
   private wet = this.ctx.createGain();
+  private dry = this.ctx.createGain();
 
   constructor(ctx: BaseAudioContext) {
     super(ctx, 'flanger');
     this.delay.delayTime.value = 0.002;
-    this.wetIn.connect(this.wetOut);
+    // CLIENT REQUEST — Mix (wet/dry). The blend was hard-wired at dry 1.0
+    // against wet 0.7 (a 59/41 balance, and unscaled); it is a crossfade now,
+    // so the registry default of 50 is the same 50/50 the plugin's FlangerFx
+    // produces. See the note on Phaser above and DECISIONS-capture.md.
+    this.wetIn.connect(this.dry).connect(this.wetOut);
     this.wetIn.connect(this.delay).connect(this.wet).connect(this.wetOut);
     this.delay.connect(this.fb).connect(this.delay);
-    this.wet.gain.value = 0.7;
     this.applyAll();
   }
 
@@ -225,6 +264,12 @@ class Flanger extends BaseFxUnit {
       case 'manual':
         this.setAP(this.delay.delayTime, Number(value) / 1000);
         break;
+      case 'mix': {
+        const m = Number(value) / 100;
+        this.setAP(this.wet.gain, m);
+        this.setAP(this.dry.gain, 1 - m);
+        break;
+      }
     }
   }
 }

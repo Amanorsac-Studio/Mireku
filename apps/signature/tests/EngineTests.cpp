@@ -1783,6 +1783,135 @@ static void testReorderIsClickless()
     CHECK (during > steady * 0.3, "the rack passes dry during the change — it never drops audio");
 }
 
+//==============================================================================
+// CLIENT REQUEST — "put mix knob on all the time based effects".
+//
+// Phaser and flanger were the two time-based units with no wet/dry control.
+// `mix` is APPENDED to each unit's list in FxParams.h (a parameter's index is
+// baked into every FX preset ever saved, so nothing may be inserted) with a
+// default of 50.
+//
+// 50 is not a taste choice: it is the blend both units ALREADY hard-wired.
+// PhaserFx ended its per-sample loop with
+//
+//     *s = 0.5f * (*s + x);                 // x = all-pass chain output
+//
+// and FlangerFx with the same expression over its delay tap. The blend is now
+//
+//     *s = dryG * *s + wetG * x;            // wetG = mix/100, dryG = 1 - wetG
+//
+// and at mix 50 both coefficients are exactly 0.5f (50/100 is exact in binary),
+// which is the same arithmetic to the last bit.
+//
+// This test proves the claim rather than asserting it. It renders each unit
+// three times over one fixed signal — fully dry, fully wet, and at the default
+// a legacy preset gets — and requires
+//
+//     out[default] == 0.5f * (dry[i] + wet[i])
+//
+// EXACTLY, with the legacy expression written out literally. That is only true
+// if (a) the default really is 50, (b) the blend is a linear crossfade, and
+// (c) the wet signal is untouched by mix — i.e. the feedback paths still
+// recirculate the same sample they always did, so neither the tone nor the
+// loop's stability moved. It needs no committed golden file and cannot drift
+// with the compiler, because both sides are computed in the same run.
+static void testFxMixDefaultIdentity()
+{
+    std::printf ("\n== CLIENT REQUEST: Mix on the phaser and the flanger ==\n");
+
+    constexpr int kN = 4096;
+    constexpr double kSr = 48000.0;
+
+    // one fixed, deterministic signal: a 220 Hz tone under a slow decay, plus a
+    // little hiss, so every all-pass stage and delay tap is excited
+    auto fillInput = [] (juce::AudioBuffer<float>& b)
+    {
+        juce::uint32 seed = 0x5EED1234u;
+        for (int i = 0; i < kN; ++i)
+        {
+            seed = seed * 1664525u + 1013904223u;
+            const float hiss = 0.05f * ((float) (seed >> 8) / 8388608.0f - 1.0f);
+            const float tone = (float) (0.5 * std::sin (2.0 * juce::MathConstants<double>::pi * 220.0 * i / kSr)
+                                            * std::exp (-i / (kSr * 0.05)));
+            b.setSample (0, i, tone + hiss);
+            b.setSample (1, i, tone - hiss);
+        }
+    };
+
+    auto render = [&fillInput] (FxType type, float mix, juce::AudioBuffer<float>& out)
+    {
+        out.setSize (2, kN);
+        fillInput (out);
+        auto unit = createFxUnit (type);
+        unit->prepare (kSr, kN);
+        unit->setParam ("mix", mix);
+        unit->process (out, 120.0);
+    };
+
+    for (auto type : { FxType::phaser, FxType::flanger })
+    {
+        auto& spec = fxSpec (type);
+        const auto* ps = findParam (spec, "mix");
+        const juce::String name (spec.name);
+
+        CHECK (ps != nullptr, (name + " exposes a mix parameter").toRawUTF8());
+        if (ps == nullptr) continue;
+        CHECK (ps->min == 0.0f && ps->max == 100.0f,
+               (name + " mix range is 0..100, the same as every other mix").toRawUTF8());
+        CHECK (ps->def == 50.0f, (name + " mix defaults to 50").toRawUTF8());
+        // APPEND-ONLY: mix must be the LAST entry, and the four parameters that
+        // existed before must still be at indices 0..3, or saved presets break
+        CHECK ((int) spec.params.size() == 5 && juce::String (spec.params[4].id) == "mix",
+               (name + " mix is appended last — earlier indices are untouched").toRawUTF8());
+
+        // a preset saved before this change carries no "mix" key at all; this is
+        // the load path every entry point uses (defaults, then the saved keys)
+        auto legacy = paramValuesFromVar (juce::var(), spec.params);
+        CHECK (legacy["mix"] == 50.0f,
+               (name + ": a preset with no mix key loads at 50").toRawUTF8());
+
+        juce::AudioBuffer<float> dry, wet, def;
+        render (type, 0.0f, dry);
+        render (type, 100.0f, wet);
+        render (type, legacy["mix"], def);
+
+        // the renders have to be meaningfully different, or the comparison below
+        // would pass on a wire
+        float wetDiff = 0.0f;
+        for (int ch = 0; ch < 2; ++ch)
+            for (int i = 0; i < kN; ++i)
+                wetDiff = juce::jmax (wetDiff, std::abs (wet.getSample (ch, i) - dry.getSample (ch, i)));
+        CHECK (wetDiff > 0.01f, (name + ": the wet render really differs from the dry one").toRawUTF8());
+
+        // THE ASSERTION: the default render is bit-for-bit the legacy expression
+        int mismatches = 0;
+        float worst = 0.0f;
+        for (int ch = 0; ch < 2; ++ch)
+            for (int i = 0; i < kN; ++i)
+            {
+                const float legacyOut = 0.5f * (dry.getSample (ch, i) + wet.getSample (ch, i));
+                const float got = def.getSample (ch, i);
+                if (got != legacyOut) { ++mismatches; worst = juce::jmax (worst, std::abs (got - legacyOut)); }
+            }
+        std::printf ("  %s: %d / %d samples differ from 0.5*(dry+wet) (worst %.3e)\n",
+                     spec.name, mismatches, 2 * kN, (double) worst);
+        CHECK (mismatches == 0,
+               (name + ": the default renders BIT-IDENTICALLY to the old hard-wired 0.5*(dry+wet)")
+                   .toRawUTF8());
+    }
+
+    // the two units that deliberately did NOT get one, so a later edit has to
+    // argue with this test rather than quietly add a redundant knob:
+    //   tremolo/auto-pan is amplitude modulation — blending its output back with
+    //   dry is exactly what `depth` already does;
+    //   the widener is an M/S width control whose `width` already passes through
+    //   unity at 100, so Mix would be a second control for the same axis.
+    CHECK (findParam (fxSpec (FxType::tremoloAutoPan), "mix") == nullptr,
+           "tremolo/auto-pan has no mix (depth is the blend)");
+    CHECK (findParam (fxSpec (FxType::widener), "mix") == nullptr,
+           "widener has no mix (width is the blend)");
+}
+
 int main()
 {
     std::printf ("JM Signature engine tests\n=========================\n");
@@ -1790,6 +1919,7 @@ int main()
     testFxRackStructuralEdits();
     testReorderIsClickless();
     testFxRegistry();
+    testFxMixDefaultIdentity();
     testMasterLimiter();
     testMacroLinkRoundTrip();
     testVelocityCrossfade();

@@ -95,6 +95,28 @@ public:
         saveBtn_.setFontHeight (11.0f);
         saveBtn_.onClick = [this] { doSave(); };
         addAndMakeVisible (saveBtn_);
+
+        // ------------------------------------------------- AUTHORING MODE
+        // The whole point of this control is that a save must not be a guess.
+        // Two things are therefore drawn with it (in paint(), from the
+        // processor's own wording):
+        //   * WHERE it will land — factory or user — which is the mode made
+        //     concrete at the one moment it changes what happens;
+        //   * WHAT it captures, and when the patch format cannot hold the
+        //     modulation the artist just built, what to save instead.
+        //
+        // The second is deliberately NOT a warning dialog. A dialog is read
+        // once, dismissed for ever, and then the work is gone anyway. Instead
+        // the save that KEEPS the modulation sits here as a live button next to
+        // the one that would lose it, and only appears when there is something
+        // to lose — so the right thing is the obvious thing, not a thing you
+        // have to have read about.
+        altSaveBtn_.setButtonText ("SAVE PERFORMANCE INSTEAD");
+        altSaveBtn_.setFontHeight (10.0f);
+        altSaveBtn_.setTooltip ("Saves slots, macros, modulation and the arpeggiator - "
+                                "everything a patch cannot hold");
+        altSaveBtn_.onClick = [this] { doSave (true); };
+        addChildComponent (altSaveBtn_);
         rebuild();
     }
 
@@ -134,9 +156,46 @@ public:
             for (auto& f : dir.findChildFiles (juce::File::findFiles, false, "*.json"))
                 if (mode != 1) add ({ Row::Performance, f.getFileNameWithoutExtension(), f, -1, -1 });
         }
+        refreshSaveBlock();
         list_.updateContent();
         list_.repaint();
     }
+
+    //======================================================== AUTHORING MODE
+    /// Re-reads the two lines the save control shows. The WORDING lives in the
+    /// processor (saveDestinationLine / modBoundaryLine) so the self-check can
+    /// assert the exact sentence the artist will read, and so there is one
+    /// place that decides what a save means.
+    void refreshSaveBlock()
+    {
+        const int page = proc_.state.currentPage;
+        destLine_ = proc_.saveDestinationLine (page);
+        boundaryLine_ = proc_.modBoundaryLine (page);
+        resultIsGood_ = false;
+        altSaveBtn_.setVisible (boundaryLine_.isNotEmpty());
+        if (compact_) resized();        // the block's height depends on those lines
+        repaint();
+    }
+
+    /// Height the save block needs: the name row, plus only the lines that are
+    /// actually showing.
+    int saveBlockHeight() const
+    {
+        using L = Theme::L;
+        int h = L::brSaveH + 2 + 6;
+        if (destLine_.isNotEmpty()) h += L::brInfoH + 2;
+        if (boundaryLine_.isNotEmpty()) h += L::brWarnH + 4 + L::brAltH;
+        return h;
+    }
+
+    // Self-check hooks: the save block is the whole feature, so it has to be
+    // assertable without synthesising clicks into a TextEditor.
+    juce::String destinationText() const { return destLine_; }
+    juce::String boundaryText() const { return boundaryLine_; }
+    bool alternativeSaveOffered() const { return altSaveBtn_.isVisible(); }
+    juce::Rectangle<int> listBounds() const { return list_.getBounds(); }
+    void setSaveName (const juce::String& n) { saveName_.setText (n, false); }
+    void pressSave (bool performanceInstead = false) { doSave (performanceInstead); }
 
     void resized() override
     {
@@ -157,13 +216,33 @@ public:
             for (int i = 0; i < 3; ++i)
                 tabs_[(size_t) i].setBounds (tr.removeFromLeft (i == 2 ? tr.getWidth() : tw));
         }
-        const int listBottom = compact_ ? getHeight() - 40 : L::brListY + L::brListH;
+        // AUTHORING MODE: the save block is now save row + destination/boundary
+        // text + the alternative save. In the compact (overlay) browser the
+        // same block is pinned to the bottom, because the destination and the
+        // modulation boundary matter there exactly as much.
+        // The full column keeps the pinned Theme geometry. The compact (model
+        // page overlay) browser pins the same block to its bottom and gives the
+        // rest to the list — and collapses the lines that are not showing, so a
+        // page with no modulation live does not pay for a warning it is not
+        // getting.
+        const int listBottom = compact_ ? juce::jmax (90, getHeight() - saveBlockHeight())
+                                        : L::brListY + L::brListH;
         list_.setBounds (14, L::brListY, w - 28, juce::jmax (60, listBottom - L::brListY));
-        auto save = juce::Rectangle<int> (12, listBottom + 6, w - 24, 28);
+
+        const int saveY = compact_ ? listBottom + 6 : L::brSaveY;
+        auto save = juce::Rectangle<int> (12, saveY, w - 24, L::brSaveH);
         saveBtn_.setBounds (save.removeFromRight (62));
         save.removeFromRight (6);
         saveName_.setBounds (save);
-        artArea_ = juce::Rectangle<int> (12, L::brArtY, w - 24, L::brArtH);
+
+        int y = compact_ ? saveY + L::brSaveH + 2 : L::brInfoY;
+        infoArea_ = juce::Rectangle<int> (14, y, w - 28, L::brInfoH);
+        y = compact_ ? y + L::brInfoH + 2 : L::brWarnY;
+        warnArea_ = juce::Rectangle<int> (14, y, w - 28, L::brWarnH);
+        y = compact_ ? y + L::brWarnH + 4 : L::brAltY;
+        altSaveBtn_.setBounds (14, y, w - 28, L::brAltH);
+        artArea_ = compact_ ? juce::Rectangle<int>()
+                            : juce::Rectangle<int> (12, L::brArtY, w - 24, L::brArtH);
     }
 
     void paint (juce::Graphics& g) override
@@ -191,6 +270,31 @@ public:
             g.setFont (Theme::ui (12.5f));
             g.drawFittedText (emptyMessage(), list_.getBounds().reduced (14, 18),
                               juce::Justification::centredTop, 6);
+        }
+
+        //======================================================= AUTHORING MODE
+        // Where this save goes, and what it cannot take with it. Drawn, not
+        // hidden behind a dialog, and present on every repaint — so "where did
+        // my save go?" is answered before it is asked.
+        if (destLine_.isNotEmpty() && ! infoArea_.isEmpty())
+        {
+            g.setColour (resultIsGood_ ? Theme::okGreen
+                                       : destLine_.startsWith ("NOT SAVED") ? Theme::warnRed
+                                                                            : Theme::muted.brighter (0.25f));
+            g.setFont (Theme::ui (10.5f));
+            g.drawFittedText (destLine_, infoArea_, juce::Justification::topLeft, 3, 0.9f);
+        }
+        if (boundaryLine_.isNotEmpty() && ! warnArea_.isEmpty())
+        {
+            auto plate = warnArea_.toFloat().expanded (3.0f, 2.0f);
+            g.setColour (Theme::warnRed.withAlpha (0.10f));
+            g.fillRoundedRectangle (plate, 4.0f);
+            g.setColour (Theme::warnRed.withAlpha (0.55f));
+            g.drawRoundedRectangle (plate.reduced (0.5f), 4.0f, 1.0f);
+            g.setColour (Theme::warnRed);
+            g.setFont (Theme::ui (10.5f));
+            g.drawFittedText (boundaryLine_, warnArea_.reduced (4, 1),
+                              juce::Justification::centredLeft, 3, 0.9f);
         }
 
         if (! compact_ && ! artArea_.isEmpty()) drawBrandArt (g, artArea_.toFloat());
@@ -349,17 +453,31 @@ private:
         activateRow (row);
     }
 
-    void doSave()
+    /// AUTHORING MODE. `performanceInstead` is the one-click escape from the
+    /// format boundary: on a model page it saves the PERFORMANCE snapshot (which
+    /// does carry modulation, the macros and the arp) rather than the patch.
+    void doSave (bool performanceInstead = false)
     {
         auto name = saveName_.getText().trim();
         if (name.isEmpty()) return;
-        if (proc_.state.currentPage <= 3)
-            proc_.saveUserPreset (slotForWorld (proc_.state, proc_.state.currentPage), name);
-        else
-            proc_.savePerformancePreset (name);
+        const bool patch = proc_.state.currentPage <= 3 && ! performanceInstead;
+        auto out = patch
+            ? proc_.saveInstrumentPreset (slotForWorld (proc_.state, proc_.state.currentPage), name)
+            : proc_.savePerformanceSnapshot (name);
+
         saveName_.clear();
-        tabs_[0].setToggleState (true, juce::dontSendNotification);
+        // A factory save belongs on the FACTORY tab and a user save on USER —
+        // landing on the wrong tab is exactly how "where did my save go?" starts.
+        const bool toFactory = out.dest == authoring::SaveDest::bundleFactory
+                            || out.dest == authoring::SaveDest::performanceFactory;
+        tabs_[toFactory ? 1 : 0].setToggleState (true, juce::dontSendNotification);
         rebuild();
+
+        // ...and say what actually happened, in place of what was going to.
+        resultIsGood_ = out.ok && ! out.fellBack;
+        destLine_ = out.ok ? out.message : juce::String ("NOT SAVED - ") + out.message;
+        if (out.note.isNotEmpty()) destLine_ += "  (" + out.note + ")";
+        repaint();
     }
 
     JMSignatureProcessor& proc_;
@@ -369,11 +487,14 @@ private:
     ux::SegmentStrip tabStrip_;
     std::array<ux::TabCellButton, 3> tabs_;
     ux::PlateButton saveBtn_;
+    ux::PlateButton altSaveBtn_;                    // AUTHORING MODE: the save that keeps modulation
+    juce::String destLine_, boundaryLine_;
+    bool resultIsGood_ = false;
     std::unique_ptr<juce::DrawableButton> filterBtn_;
     std::unique_ptr<juce::Drawable> searchIcon_ { assets::makeIcon (assets::Icon::search, Theme::muted) };
     std::unique_ptr<juce::Drawable> starIcon_ { ux::makePackIcon (ux::PackIcon::star, Theme::gold) };
     std::unique_ptr<juce::Drawable> shield_ { ux::makeShield() };
-    juce::Rectangle<int> searchIconArea_, artArea_;
+    juce::Rectangle<int> searchIconArea_, artArea_, infoArea_, warnArea_;
     juce::ListBox list_;
     std::vector<Row> rows_;
 };
@@ -421,6 +542,10 @@ public:
         removeBtn_.onClick = [this] { removeSelf(); };
         addAndMakeVisible (removeBtn_);
 
+        // The grid in resized() packs 5+ parameters into 3 columns, which makes
+        // each cell 52 px rather than 74 — so a dense unit's captions take the
+        // smaller of the two type sizes. (See the grid note in resized().)
+        const float capHeight = spec.params.size() <= 4 ? 10.0f : 9.0f;
         for (auto& ps : spec.params)
         {
             auto path = prefix_ + ".fx" + juce::String (idx_) + "." + ps.id;
@@ -428,7 +553,7 @@ public:
             {
                 auto* k = new ParamKnob (proc_, path, ps.label, &ps);
                 k->setShowValue (false);
-                k->setLabelBelow (true, 10.0f);
+                k->setLabelBelow (true, capHeight);
                 knobs_.add (k);
                 addAndMakeVisible (k);
             }
@@ -516,17 +641,37 @@ public:
         juce::Array<juce::Component*> items;
         for (auto* k : knobs_) items.add (k);
         for (auto* c : choices_) items.add (c);
-        const int cx[2] = { S (44), S (120) };
-        const int cy[2] = { S (72), S (134) };
-        for (int i = 0; i < items.size(); ++i)
+
+        // CLIENT REQUEST — "put mix knob on all the time based effects".
+        //
+        // The grid was a FIXED 2x2 with `setVisible (i < 4)`, so a unit's fifth
+        // and later parameters were created, routed, macro-droppable and
+        // automatable — and invisible. That silently swallowed the MIX knob on
+        // the chorus, the plate, the hall and both delays (they all carry mix
+        // last), and it would have swallowed the new phaser/flanger MIX too.
+        //
+        // The grid is now driven by the parameter COUNT, so every registry
+        // parameter has a cell. The cell geometry is chosen so the knob art
+        // does not shrink until it has to: ParamKnob with a label below takes
+        // `min(w, h - 13)` as its diameter, so the 2-column cell (74x58) and
+        // the 3-column cell (52x58) both yield a 45 px knob — only the 7-to-9
+        // parameter units (the two delays) drop to three rows and a 33 px knob.
+        const int n = items.size();
+        const int cols = n <= 4 ? 2 : 3;
+        const int rows = n <= (cols * 2) ? 2 : 3;
+        const int cellW = cols == 2 ? S (74) : S (52);
+        const int cellH = rows == 2 ? S (58) : S (46);
+        const int cx2[2] = { S (44), S (120) };
+        const int cx3[3] = { S (30), S (82), S (134) };
+        const int cy2[2] = { S (72), S (134) };
+        const int cy3[3] = { S (57), S (103), S (149) };
+        for (int i = 0; i < n; ++i)
         {
-            const int col = i % 2, row = juce::jmin (1, i / 2);
-            auto cell = juce::Rectangle<int> (S (74), S (58)).withCentre ({ cx[col], cy[row] });
-            if (dynamic_cast<ParamChoiceButton*> (items[i]) != nullptr)
-                items[i]->setBounds (cell);
-            else
-                items[i]->setBounds (cell);
-            items[i]->setVisible (i < 4);
+            const int col = i % cols, row = juce::jmin (rows - 1, i / cols);
+            const int x = cols == 2 ? cx2[col] : cx3[col];
+            const int y = rows == 2 ? cy2[row] : cy3[row];
+            items[i]->setBounds (juce::Rectangle<int> (cellW, cellH).withCentre ({ x, y }));
+            items[i]->setVisible (i < cols * rows);
         }
     }
 

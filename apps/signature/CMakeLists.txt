@@ -151,6 +151,7 @@ target_link_libraries(JMSignature PRIVATE JMAssets)
 target_include_directories(JMSignature PRIVATE src "${JMI_FORMAT_INCLUDE}")
 
 target_compile_definitions(JMSignature PUBLIC
+    JM_APP_VERSION="${PROJECT_VERSION}"
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
@@ -188,6 +189,7 @@ juce_add_console_app(JMSignatureTests PRODUCT_NAME "JMSignatureTests")
 target_sources(JMSignatureTests PRIVATE tests/EngineTests.cpp)
 target_include_directories(JMSignatureTests PRIVATE src "${JMI_FORMAT_INCLUDE}")
 target_compile_definitions(JMSignatureTests PRIVATE
+    JM_APP_VERSION="${PROJECT_VERSION}"
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JM_TESTDATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../testdata")
@@ -208,10 +210,15 @@ target_sources(JMSignatureSnapshot PRIVATE
 target_include_directories(JMSignatureSnapshot PRIVATE src "${JMI_FORMAT_INCLUDE}"
     "${CMAKE_CURRENT_BINARY_DIR}/juce_binarydata_JMAssets/JuceLibraryCode")
 target_compile_definitions(JMSignatureSnapshot PRIVATE
+    JM_APP_VERSION="${PROJECT_VERSION}"
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_MODAL_LOOPS_PERMITTED=1
     JM_SNAPSHOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/build/snapshots"
+    # AUTHORING MODE: engine/Authoring.h mirrors preset.schema.json in C++ so a
+    # save can be validated BEFORE it touches a bundle. The self-check compares
+    # the mirror against this file, so the two cannot drift apart unnoticed.
+    JM_JMI_SCHEMA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../packages/jmi-format/schema"
     JM_LIBRARY_TESTDATA="${CMAKE_CURRENT_SOURCE_DIR}/../../testdata")
 target_link_libraries(JMSignatureSnapshot PRIVATE
     JMAssets
@@ -232,6 +239,7 @@ target_sources(JMSignatureValidation PRIVATE
 target_include_directories(JMSignatureValidation PRIVATE src "${JMI_FORMAT_INCLUDE}"
     "${CMAKE_CURRENT_BINARY_DIR}/juce_binarydata_JMAssets/JuceLibraryCode")
 target_compile_definitions(JMSignatureValidation PRIVATE
+    JM_APP_VERSION="${PROJECT_VERSION}"
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JM_REF_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/refs")
@@ -268,8 +276,15 @@ add_test(NAME UiSelfCheck COMMAND JMSignatureSnapshot)
 # developer happens to have in their own "Documents/JM Signature/Library" folder
 # — with only the client's one-world Piano.jmi there, three of the four Perform
 # slots came up empty and the routing/audio assertions failed for no good reason.
+# AUTHORING MODE: the mode defaults to AUTHORING and is read from the
+# developer's own settings.json, so leaving it unset would make the self-check
+# behave differently on two machines — and the pre-authoring assertions (e.g.
+# "a performance preset DOES carry modulation", which looks in the USER
+# performance folder) would depend on it. The suite is therefore PINNED to
+# release here, exactly as it is pinned to a known library folder, and the
+# authoring section flips the mode itself for the cases that are about it.
 set_tests_properties(UiSelfCheck PROPERTIES
-    ENVIRONMENT "JM_LIBRARY_DIR=${CMAKE_CURRENT_SOURCE_DIR}/../../testdata")
+    ENVIRONMENT "JM_LIBRARY_DIR=${CMAKE_CURRENT_SOURCE_DIR}/../../testdata;JM_AUTHORING_MODE=release")
 
 # --------------------------------------------------- validation standards
 # Three separate CTest entries out of one binary so a failure names itself in

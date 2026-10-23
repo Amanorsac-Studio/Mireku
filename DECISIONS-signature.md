@@ -3,6 +3,201 @@
 Judgment calls made while building the JUCE plugin, per JM-BUILD-SPEC.md §5.
 Owner: JM Signature build agent.
 
+## Authoring mode (2026-10-22)
+
+The app is sent to **James** (the artist), who crafts presets and complex
+modulation setups and sends it back to **Nene**, who solidifies that work as
+shipping factory content. The client's framing: *"for now any presets made
+should go to factory and should only go to user when we ship… set the app such
+that when I send it to James he can craft presets and complex mods and save them
+and send me the app back for me to solidify them for release."*
+
+So the same SAVE gesture has two meanings, decided by a mode. New file:
+`src/engine/Authoring.h` (mode, schema guard, bundle write guard, ledger,
+collect/import). Nothing in `FxDsp.h`, `FxParams.h`, `fx-params.ts`, the
+modulation engine or the visual language was touched.
+
+### 1. The mode — settings file AND a Settings-tab control, deliberately both
+- Stored in `Documents/JM Signature/settings.json` as `"mode": "authoring" |
+  "release"`. **An absent or unrecognised key means AUTHORING** — the app has
+  not been told it ships yet, which is the right default for this phase and the
+  right failure direction (a build that is accidentally in authoring mode is
+  loud; one accidentally in release mode would quietly scatter James's work into
+  his user folder).
+- Also switchable from **gear → Authoring mode…**, a new `AuthoringPanel`
+  (`ui/Macro.h`). Both exist on purpose: a JSON file nobody can see is not a
+  control the artist can be expected to understand, and a UI control alone is
+  not something a release script can set. The file is the source of truth; the
+  panel is the way a human reads and flips it.
+- `JM_AUTHORING_MODE` overrides the mode for one process and is **never written
+  back** — the same transient-override pattern as `JM_LIBRARY_DIR`. The CTest
+  `UiSelfCheck` is pinned to `release` with it, so the suite no longer depends
+  on whatever is in the developer's own settings.json. (It did, briefly, and two
+  pre-existing modulation assertions failed on this machine because the saves
+  had quietly moved to the Factory folder. Those two probes now take their file
+  from the save's own report instead of assuming a directory.)
+
+**Surfacing.** An amber plate in the **bottom bar**, on screen on every page:
+`AUTHORING MODE - SAVES GO TO FACTORY`. Release mode draws nothing extra —
+absence of the plate is the all-clear, and the shipped product looks like the
+product. The gear menu item also names the mode in force. The save control
+itself states its destination (below). Three places, all passive; no modal.
+
+### 2. Where each save lands
+
+| | AUTHORING | RELEASE |
+|---|---|---|
+| Instrument / patch preset | `<bundle>.jmi/presets/<name>.json` | `Presets/<world>/<name>.json` |
+| Performance snapshot | `Presets/Performance/Factory/<name>.json` | `Presets/Performance/<name>.json` |
+
+Release mode is byte-for-byte today's behaviour. `saveInstrumentPreset()` /
+`savePerformanceSnapshot()` return a `SaveOutcome` naming the destination; the
+old `saveUserPreset` / `savePerformancePreset` survive as wrappers.
+
+**Writing inside the user's library is the risky path, so it is defensive:**
+1. the bundle must exist and carry `instrument.json`;
+2. the preset is schema-checked **in memory** before anything is opened;
+3. a probe file proves `presets/` is writable (read-only library → no damage);
+4. any file about to be replaced is copied to `<name>.json.bak`;
+5. the file is written, **read back and re-validated** — against both the schema
+   mirror and `jmi::parsePreset` — and on failure the `.bak` is restored (or the
+   new file deleted), so a half-written preset can never make the whole bundle
+   fail `jmi validate` or refuse to load in JM Capture;
+6. only then is provenance recorded. `instrument.json` and `samples/` are never
+   opened for writing by any path in this feature.
+
+If the bundle cannot take it (read-only, missing, or an empty slot), the patch
+is **still saved** — to the user folder — and the outcome says exactly why.
+Losing an artist's work to a read-only folder is worse than landing it somewhere
+explicit.
+
+**`slotPresetToVar` now emits `formatVersion: 1`.** It was already the jmi
+preset shape in every other respect; the schema requires the field, and the same
+object is now written to either destination.
+
+**Provenance lives in a sidecar, `<bundle>.jmi/authoring.json`, NOT in the
+preset and NOT in `presets/`.** `preset.schema.json` is
+`additionalProperties: false`, so a provenance field inside a preset would fail
+`npx jmi validate`; and the validator schema-checks *every* `presets/*.json`
+while `jmi::loadInstrument` parses every one of them as a preset, so a sidecar
+in that folder would break both. The ledger records file, preset name, ISO
+timestamp, app version and any `.bak` it replaced.
+
+### 3. The modulation boundary — made visible, not warned about
+Modulation (LFOs, the mod matrix, the arpeggiator) is deliberately **not** in
+`.jmi` bundle presets; that format is shared with JM Capture, which has no
+modulation (Modulation Phase 1, decision 4). James's "complex mods" therefore
+**cannot** go into a patch at all. The failure mode to avoid is him saving a
+patch and silently losing an hour of work.
+
+Solved by making the right thing the obvious thing, in the browser's save block:
+- a **destination line** that says where this save goes and what it captures
+  (`SAVE -> FACTORY, inside EP2.jmi. Captures the engine, the FX rack and the
+  amp envelope.`), replaced after a save by what actually happened;
+- a **boundary line**, in the warn colour, only when there is something to lose:
+  `A patch cannot hold 3 modulation routings, 1 macro link and the arpeggiator.
+  Save a PERFORMANCE preset to keep that work.` — counted live from the matrix,
+  the macros and the arp slot mask for that slot;
+- a **`SAVE PERFORMANCE INSTEAD` button** that appears right there, next to the
+  save that would lose the work, and only while there is work to lose.
+
+Deliberately **not** a warning dialog: a dialog is read once, dismissed for
+ever, and the work is gone anyway. The alternative action sits beside the one it
+replaces. The wording is built in the processor (`saveDestinationLine()`,
+`modBoundaryLine()`, `modCaptureForSlot()`), not in the UI, so the self-check
+asserts the exact sentence the artist reads.
+
+The compact (model-page overlay) browser collapses the lines it is not showing
+so a page with no modulation live does not pay for a warning it is not getting.
+
+### 4. Collection — a plain folder with a manifest, plus an import
+`AuthoringPanel` → **COLLECT AUTHORED CONTENT…** writes a timestamped folder:
+
+```
+authoring-collection.json          manifest
+bundles/<Name>.jmi/presets/*.json  every preset in every library bundle
+bundles/<Name>.jmi/authoring.json  the ledger
+performance/Factory/*.json         factory performance snapshots
+performance/User/*.json            user performance snapshots
+presets/<world>/*.json             world user presets
+settings/settings.json             favourites, library path, mode
+```
+
+**A folder, not a zip**, because Nene's job on the other side is to *merge
+deliberately*: a folder is diffable, greppable and openable with the tools he
+already has, a zip puts a step in front of every look, and Windows makes a zip
+out of a folder with a right-click when he needs to mail it.
+
+**Every** bundle preset is collected, not only the ledger's, so work done by
+hand (or with a missing ledger) still comes back; the manifest marks each one
+`authored: true|false` from the ledger so what changed on James's machine is
+distinguishable from what already shipped. The manifest carries app version,
+export time, machine, user, mode, library/preset paths, per-file bytes and a
+content hash — and a `note` stating in plain words that modulation lives only in
+the performance snapshots.
+
+**Hash is FNV-1a/64, not MD5/SHA-256**, with the algorithm named in the
+manifest. `juce::MD5` and `juce::SHA256` live in `juce_cryptography`; linking a
+crypto module into the plugin to notice a truncated copy is not a trade worth
+making, and nothing security-bearing depends on it.
+
+**IMPORT is in scope** and is the same panel's second button. A hand merge into
+a bundle is exactly the risky write we already made safe, so the import re-uses
+`writeBundlePresetText` — schema-checked, backed up, read back — and writes the
+collected bytes **verbatim** rather than re-serialising, so a preset comes back
+byte for byte. It verifies every hash, skips and *names* anything that fails,
+skips files already identical, keeps a `.bak` of anything it replaces, reports a
+bundle the library does not have instead of inventing one, and never imports the
+ledger or settings.json (those are provenance, not content).
+
+### 5. Keeping the C++ schema mirror honest
+`authoring::checkBundlePresetVar` mirrors `preset.schema.json` field for field in
+C++ so a save is validated before it touches disk. Drift between the two is the
+one failure that would let a bad preset into a bundle undetected, so the
+self-check reads the real schema file (`JM_JMI_SCHEMA_DIR`) and asserts the
+mirrored FX-type enum, the required list and `additionalProperties: false` still
+match. (It caught nothing yet; the second agent's `svFilter` addition was
+already mirrored.)
+
+### 6. Real-library probe (not a CTest)
+`JMSignatureSnapshot --probe-bundle <bundle.jmi> [name]` performs the real
+authoring save into a real bundle through the same guard and prints the result;
+`--undo-probe` removes it and restores any `.bak`. Deliberately not a CTest: its
+result depends on which bundles are on the machine, exactly like
+`JMSignatureDevices`.
+
+Run against the client's own library (`Documents/JM Signature/Library`), first
+on byte copies in temp and then on the originals:
+
+```
+EP2.jmi    1 -> 2 presets   VALID
+MKS20.jmi  1 -> 2 presets   VALID
+Piano.jmi  2 -> 3 presets   VALID        (npx jmi validate, before and after)
+```
+
+The probe presets and ledgers were then removed with `--undo-probe` and the
+three bundles re-validated back at 1 / 1 / 2 presets.
+
+### Verification
+Release build exit 0; `ctest -C Release` **5/5**. The self-check gained an
+AUTHORING MODE section (8 groups, ~55 assertions) covering: mode default/parse/
+badge and the transient override; a factory save landing in a real bundle and
+leaving it valid, with provenance in the sidecar and the new patch listed in the
+browser immediately; the same save in release mode landing in the user folder
+and never touching the bundle; a performance preset round-tripping three matrix
+rows, two LFOs, all fourteen arp settings and a bipolar curved inverted macro
+link; the patch carrying no modulation while the save control says so in words;
+the empty-bundle, not-a-bundle and schema-violating write paths; and a full
+collect → delete → import round trip including a tampered-hash skip and a
+missing-bundle report. Snapshots in `build/snapshots/authoring-*.png`.
+
+**Build note:** a Release relink failed once with LNK1104 on the standalone and
+once on the snapshot binary. In both cases the holder was an orphaned `link.exe`
+from an earlier build of this session (a PowerShell pipeline with
+`Select-Object -First` tears down `cmd` but orphans its grandchildren), not the
+client's running app — no "JM Signature" process existed. The orphans were
+terminated and the builds completed. The standalone was NOT launched.
+
 ## Client review round 8 — "sounds are not changing when I change sound" (2026-09-02)
 
 Two reports, one fix each: a patch chosen on a model page was inaudible, and
@@ -2168,3 +2363,111 @@ contract is unchanged — nothing added here runs on it.
   `NullTest`, `RateBufferMatrix`, `AudioRegression`.
 - `JMSignatureSnapshot`: **SELF-CHECK PASSED (0 failures)** including the new §6 block.
 - pluginval **strictness 10: SUCCESS**, quoted above.
+
+---
+
+## CLIENT REQUEST — "put mix knob on all the time based effects" (2026-10-22)
+
+### 102. The gap, and what the two units actually did before
+Of the time-based units the registry only lacked a wet/dry control on **phaser** and
+**flanger**. Both are modulated all-pass / delay-line effects where a Mix knob is standard,
+and the blend they produced was not a design choice anybody had exposed — it was a literal
+constant in the per-sample loop:
+
+```
+PhaserFx :  *s = 0.5f * (*s + x);        // x = output of the 2/4/6-stage all-pass chain
+FlangerFx:  L[i] = 0.5f * (L[i] + fbL_); // fbL_ = the modulated delay tap
+```
+
+So **both were already exactly 50/50**, measured rather than assumed, and that is why the
+appended parameter defaults to **50** rather than to a taste value.
+
+### 103. Appended, never inserted — and bit-identical at the default
+`mix` is the **fifth and last** entry in each unit's list in `FxParams.h` (mirrored in
+`packages/jmi-format/src/fx-params.ts`, which is the source of truth), range 0..100, default
+50 — the same id, range and default both apps use, so preset JSON stays portable. A parameter's
+index is baked into every FX preset ever saved, so nothing was reordered and nothing inserted;
+indices 0..3 still mean rate / depth / feedback / stages (phaser) and rate / depth / feedback /
+manual (flanger).
+
+A preset written before this change simply has no `mix` key. Every load path starts from
+`defaultParams` and lays the saved keys on top (`paramValuesFromVar` for plugin state and
+performance presets, `rackFromJmiPreset` for `.jmi`), so such a preset loads at 50. The blend is
+now `*s = dryG * *s + wetG * x` with `wetG = mix/100`, `dryG = 1 - wetG`; at 50 both coefficients
+are exactly `0.5f` (50/100 is exact in binary, and `0.5*a + 0.5*b` rounds identically to
+`0.5*(a+b)` for normal floats), i.e. the same arithmetic to the last bit.
+
+**The feedback paths were deliberately left alone.** The phaser recirculates the all-pass output
+and the flanger reads its tap from the delay line *before* the blend, so Mix cannot change the
+wet signal, the tone, or the loop's stability. That is also what makes the test below possible.
+
+### 104. The test, and why it needs no golden file
+`tests/EngineTests.cpp` → `testFxMixDefaultIdentity` renders each unit three times over one
+fixed signal — mix 0, mix 100, and the value a legacy preset gets — and requires
+`out[default] == 0.5f * (dry[i] + wet[i])` **exactly**, with the old expression written out
+literally in the test. Both sides are computed in the same run, so the proof cannot drift with
+the compiler and no reference file has to be committed or re-baselined. It also pins the
+append-only position, the 0..100 range, the default of 50, and the two deliberate omissions.
+
+`AudioRegression` (`ValidationTests.cpp` S5) passes **untouched**: its fixed patch does not
+contain the phaser or the flanger, so it is evidence that nothing else moved rather than
+evidence about the blend — which is exactly why the dedicated test above exists.
+
+### 105. Tremolo/auto-pan and the widener deliberately get no Mix
+Asked for "all the time based effects", and these two are the edge of that set:
+- **Tremolo/auto-pan** is amplitude modulation. Blending its output back with dry is
+  arithmetically what reducing `depth` already does, so a Mix knob would be a second,
+  worse-labelled depth control.
+- **Widener/ensemble** is a mid/side width control, and `width` (0..200) already *passes
+  through unity at 100* — dry is a point on its own range. Mixing a width-processed signal back
+  with dry only rescales the side component, i.e. it moves `width`.
+
+`epPreamp`, `vintageEq` and `compressor` are not time-based and were not touched.
+`testFxMixDefaultIdentity` asserts both omissions so a later edit has to argue with a test
+rather than quietly add a redundant knob.
+
+### 106. The FX panel grid was silently hiding the fifth knob onward
+`FxUnitPanel::resized` laid out a **fixed 2x2** grid and finished with
+`items[i]->setVisible (i < 4)`. Every parameter past the fourth was created, routed,
+macro-droppable and automatable — and invisible. That had already swallowed the **MIX** knob on
+the JM Chorus, the Plate, the Hall and both delays (mix is last in all of them), and it would
+have swallowed the new phaser/flanger Mix too, so "the UI generates knobs from the registry"
+was only true for the first four.
+
+The grid is now driven by the parameter count: 2 columns for up to 4, 3 columns for 5-6, and
+3x3 for the 7-9 parameter units (the two delays). The cell geometry was chosen so the knob art
+does **not** shrink until it has to — `ParamKnob` with a label below takes `min(w, h - 13)` as
+its diameter, so the 2-column cell (74x58) and the 3-column cell (52x58) both yield the same
+45 px knob; only the three-row units drop to 33 px. Every registry parameter now has a cell.
+
+`MasterFxColumn` is left as it is: it shows the first three float parameters of the master
+unit beside a meter, by design, and it is a 196 px summary column, not a full editor.
+
+### 107. Long captions condense instead of truncating
+Making the fifth knob onward visible put real captions into 52 px cells for the first time, and
+`juce::Label` ellipsised them — the tape delay read "WOW/FLUT…" and "PING-PO…". `ParamKnob`'s
+caption and `ParamChoiceButton`'s name now carry `setMinimumHorizontalScale (0.62f)` (the same
+trick the unit title already used), and a unit with 5+ parameters draws its captions at 9 pt
+instead of 10. Verified on `build/snapshots/round7-fx-rack-strip.png`: WOW/FLUTTER, PING-PONG
+and PRE-DELAY all read in full, and the phaser shows RATE · DEPTH · FEEDBACK · **MIX** · STAGES.
+
+### 108. Build / test evidence (2026-10-22)
+- Release Build (Ninja, MSVC 2026), all targets: **exit 0**. One intermediate run failed while
+  linking `JM Signature.exe` / `.vst3`; no "JM Signature" process was running (checked with
+  `Get-Process` — the client's copy was closed), and the identical re-run succeeded, so it was
+  the same shared-build-directory contention with the parallel agent noted in §101. The
+  standalone was **not launched**.
+- `ctest -C Release`: **5/5 passed** — EngineTests, UiSelfCheck, NullTest, RateBufferMatrix,
+  **AudioRegression**. AudioRegression passed **untouched**: no re-baselining, and
+  `tests/refs/audio-regression.json` is unmodified.
+- `testFxMixDefaultIdentity` output, both units:
+  `0 / 8192 samples differ from 0.5*(dry+wet) (worst 0.000e+00)`.
+- Two caveats worth recording. `Round5Streaming.inc`'s two CPU-budget assertions (95th-percentile
+  block, message-thread bundle load under 3 s) each failed once on separate runs **while the
+  parallel agent was building on the same machine**, a different one each time, and both pass on
+  an unloaded run — they are load-sensitive, not affected by this change. UiSelfCheck also failed
+  twice mid-session on `a performance preset DOES carry modulation` / `the arp` /
+  `JM_AUTHORING_MODE pins the mode`; those are the parallel authoring work's own serialization
+  assertions, they changed between runs, and they pass in the 5/5 above.
+- `npm run build -w @jm/jmi-format` + `npm test -w @jm/jmi-format`: **43/43** (18 new).
+  Capture's side is logged in DECISIONS-capture.md §94-99.

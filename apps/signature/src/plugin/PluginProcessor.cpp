@@ -1326,6 +1326,11 @@ juce::var JMSignatureProcessor::slotPresetToVar (int slot, const juce::String& n
 {
     auto& s = state.slots[(size_t) slot];
     auto* o = new juce::DynamicObject();
+    // AUTHORING MODE: the same object is now written either into a user folder
+    // or into a bundle's presets/ folder, and the .jmi preset schema REQUIRES
+    // formatVersion. It has always been the jmi-schema shape in every other
+    // respect; this makes it literally one.
+    o->setProperty ("formatVersion", 1);
     o->setProperty ("name", name);
     o->setProperty ("tags", juce::Array<juce::var>());
     o->setProperty ("engine", paramValuesToVar (s.engineParams, worldEngineControls (s.world)));
@@ -1339,17 +1344,102 @@ juce::var JMSignatureProcessor::slotPresetToVar (int slot, const juce::String& n
     return juce::var (o);
 }
 
-void JMSignatureProcessor::saveUserPreset (int slot, const juce::String& name)
+//==============================================================================
+// AUTHORING MODE — save routing. See the header for the two-mode contract and
+// engine/Authoring.h for the bundle write guard.
+//==============================================================================
+juce::File JMSignatureProcessor::bundleDirForSlot (int slot) const
 {
-    auto dir = worldPresetDir (state.slots[(size_t) slot].world);
-    dir.createDirectory();
-    dir.getChildFile (juce::File::createLegalFileName (name) + ".json")
-       .replaceWithText (juce::JSON::toString (slotPresetToVar (slot, name)));
-    state.slots[(size_t) slot].presetName = name;
-    stateChanged.sendChangeMessage();
+    if (slot < 0 || slot >= 4) return {};
+    if (auto lb = engines[(size_t) slot].bundle()) return lb->dir;
+    const auto& stored = state.slots[(size_t) slot].bundleDir;
+    return stored.isNotEmpty() ? juce::File (stored) : juce::File();
 }
 
-void JMSignatureProcessor::savePerformancePreset (const juce::String& name)
+JMSignatureProcessor::SaveOutcome JMSignatureProcessor::saveInstrumentPreset (int slot, const juce::String& rawName)
+{
+    SaveOutcome out;
+    const auto name = rawName.trim();
+    if (slot < 0 || slot >= 4 || name.isEmpty())
+    {
+        out.message = "a preset needs a name";
+        return out;
+    }
+
+    auto toUserFolder = [&] (const juce::String& why)
+    {
+        auto dir = worldPresetDir (state.slots[(size_t) slot].world);
+        dir.createDirectory();
+        auto f = dir.getChildFile (juce::File::createLegalFileName (name) + ".json");
+        if (! f.replaceWithText (juce::JSON::toString (slotPresetToVar (slot, name), false)))
+        {
+            out.message = "could not write " + f.getFullPathName();
+            return;
+        }
+        out.ok = true;
+        out.dest = authoring::SaveDest::worldUserFolder;
+        out.file = f;
+        out.message = "saved to USER presets: " + f.getFileName();
+        if (why.isNotEmpty()) { out.note = why; out.fellBack = true; }
+    };
+
+    if (! state.library.isAuthoring())
+    {
+        toUserFolder ({});
+    }
+    else
+    {
+        // Factory content being created: it belongs with the instrument that
+        // ships, i.e. inside the bundle the slot is actually playing.
+        auto bundle = bundleDirForSlot (slot);
+        auto wr = authoring::writeBundlePreset (bundle, name, slotPresetToVar (slot, name));
+        if (wr.ok)
+        {
+            out.ok = true;
+            out.dest = authoring::SaveDest::bundleFactory;
+            out.file = wr.file;
+            out.message = wr.message;
+            out.note = wr.note;
+            // The browser lists FACTORY patches out of the LOADED instrument's
+            // preset vector, so a save that only touched disk would not appear
+            // until the bundle was reloaded. Patch the in-memory list instead:
+            // reloading the bundle would re-read a resident head for every
+            // sample (110 of them in the client's EP2) and reset residency —
+            // seconds of stall and a disrupted voice pool, for a list update.
+            // Only `inst.presets` is touched; the audio thread reads zones and
+            // samples, never this vector, and only the message thread writes it.
+            if (auto lb = engines[(size_t) slot].bundle())
+            {
+                jmi::JsonValue jv;
+                std::string perr;
+                jmi::Preset parsed;
+                if (jmi::JsonParser::parse (out.file.loadFileAsString().toStdString(), jv, perr)
+                    && jmi::parsePreset (jv, parsed, perr))
+                {
+                    bool replaced = false;
+                    for (auto& p : lb->inst.presets)
+                        if (p.name == parsed.name) { p = parsed; replaced = true; break; }
+                    if (! replaced) lb->inst.presets.push_back (std::move (parsed));
+                }
+            }
+        }
+        else
+        {
+            // Never lose the artist's work to a read-only library or an empty
+            // slot: keep it, in the user folder, and SAY what happened.
+            toUserFolder ("the instrument bundle could not take it (" + wr.message + ")");
+        }
+    }
+
+    if (out.ok)
+    {
+        state.slots[(size_t) slot].presetName = name;
+        stateChanged.sendChangeMessage();
+    }
+    return out;
+}
+
+JMSignatureProcessor::SaveOutcome JMSignatureProcessor::savePerformanceSnapshot (const juce::String& name)
 {
     auto* o = new juce::DynamicObject();
     o->setProperty ("name", name);
@@ -1368,12 +1458,134 @@ void JMSignatureProcessor::savePerformancePreset (const juce::String& name)
         if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p))
             hp->setProperty (rp->paramID, rp->getValue());
     o->setProperty ("hostParams", juce::var (hp));
-    auto dir = performancePresetDir();
+
+    SaveOutcome out;
+    const bool authoring = state.library.isAuthoring();
+    auto dir = authoring ? factoryPerformanceDir() : performancePresetDir();
     dir.createDirectory();
-    dir.getChildFile (juce::File::createLegalFileName (name) + ".json")
-       .replaceWithText (juce::JSON::toString (juce::var (o)));
+    auto f = dir.getChildFile (juce::File::createLegalFileName (name) + ".json");
+    if (f.existsAsFile())
+    {
+        auto bak = f.getSiblingFile (f.getFileName() + ".bak");
+        bak.deleteFile();
+        f.copyFileTo (bak);
+        out.note = "replaced the previous version (kept as " + bak.getFileName() + ")";
+    }
+    if (! f.replaceWithText (juce::JSON::toString (juce::var (o), false)))
+    {
+        out.message = "could not write " + f.getFullPathName();
+        return out;
+    }
+    out.ok = true;
+    out.file = f;
+    out.dest = authoring ? authoring::SaveDest::performanceFactory
+                         : authoring::SaveDest::performanceUser;
+    out.message = juce::String (authoring ? "saved to FACTORY performance: " : "saved to USER performance: ")
+                + f.getFileName();
     state.performPresetName = name;
     stateChanged.sendChangeMessage();
+    return out;
+}
+
+//==============================================================================
+// THE MODULATION BOUNDARY, made answerable.
+//
+// A .jmi bundle preset holds engine params + the FX rack + the amp envelope and
+// nothing else — modulation was deliberately kept out because the schema is
+// shared with JM Capture (DECISIONS-signature.md, Modulation Phase 1, decision
+// 4). So the save control has to be able to answer, truthfully and before the
+// click: "is the modulation I just built going into this?" These three
+// functions are that answer, and they live here (not in the UI) so the
+// self-check can assert the exact words.
+//==============================================================================
+juce::String JMSignatureProcessor::ModCapture::phrase() const
+{
+    juce::StringArray parts;
+    if (rowsOnSlot == 1) parts.add ("1 modulation routing");
+    else if (rowsOnSlot > 1) parts.add (juce::String (rowsOnSlot) + " modulation routings");
+    if (macroLinksOnSlot == 1) parts.add ("1 macro link");
+    else if (macroLinksOnSlot > 1) parts.add (juce::String (macroLinksOnSlot) + " macro links");
+    if (arpOnSlot) parts.add ("the arpeggiator");
+    if (parts.isEmpty()) return {};
+    if (parts.size() == 1) return parts[0];
+    auto last = parts[parts.size() - 1];
+    parts.remove (parts.size() - 1);
+    return parts.joinIntoString (", ") + " and " + last;
+}
+
+JMSignatureProcessor::ModCapture JMSignatureProcessor::modCaptureForSlot (int slot) const
+{
+    ModCapture c;
+    if (slot < 0 || slot >= 4) return c;
+
+    const auto slotPrefix = "slot" + juce::String (slot) + ".";
+    const juce::StringArray slotHostParams { "host.slotVol" + juce::String (slot),
+                                             "host.slotPan" + juce::String (slot),
+                                             "host.slotEnable" + juce::String (slot) };
+    auto belongsToSlot = [&] (const juce::String& path)
+    {
+        return path.startsWith (slotPrefix) || slotHostParams.contains (path);
+    };
+
+    std::array<bool, kNumLfos> lfoSeen {};
+    for (int i = 0; i < juce::jlimit (0, kMaxMatrixRows, state.mod.rowCount); ++i)
+    {
+        const auto& r = state.mod.rows[(size_t) i];
+        if (! r.active()) continue;
+        if (belongsToSlot (r.destPath)) ++c.rowsOnSlot;
+        else ++c.rowsElsewhere;
+        const int lfo = r.source >= ModSource::lfo1 && r.source <= ModSource::lfo3
+                          ? (int) r.source - (int) ModSource::lfo1 : -1;
+        if (lfo >= 0 && lfo < kNumLfos && ! lfoSeen[(size_t) lfo])
+        { lfoSeen[(size_t) lfo] = true; ++c.lfosInUse; }
+    }
+
+    for (auto& m : state.macros)
+        for (auto& t : m.targets)
+            if (belongsToSlot (t.path)) ++c.macroLinksOnSlot;
+
+    c.arpOnSlot = state.mod.arp.enabled != 0 && (state.mod.arp.slotMask & (1 << slot)) != 0;
+    return c;
+}
+
+int JMSignatureProcessor::slotForModelPage (int page) const
+{
+    // Same rule as ui/Panels.h slotForWorld: the page edits the first slot
+    // hosting that world, falling back to the same-index slot.
+    for (int i = 0; i < 4; ++i)
+        if (state.slots[(size_t) i].world == page) return i;
+    return juce::jlimit (0, 3, page);
+}
+
+juce::String JMSignatureProcessor::saveDestinationLine (int page) const
+{
+    const bool authoring = state.library.isAuthoring();
+    if (page > 3)
+        return authoring
+            ? juce::String ("SAVE -> FACTORY performance. Captures slots, macros, "
+                            "modulation and the arpeggiator.")
+            : juce::String ("SAVE -> your performance presets. Captures slots, macros, "
+                            "modulation and the arpeggiator.");
+
+    const int slot = slotForModelPage (page);
+    if (! authoring)
+        return "SAVE -> your presets. Captures the engine, the FX rack and the amp envelope.";
+
+    auto bundle = bundleDirForSlot (slot);
+    if (! authoring::looksLikeBundle (bundle))
+        return "SAVE -> no instrument loaded here, so it would go to your presets. "
+               "Load an instrument to save into its factory content.";
+    return "SAVE -> FACTORY, inside " + bundle.getFileName()
+         + ". Captures the engine, the FX rack and the amp envelope.";
+}
+
+juce::String JMSignatureProcessor::modBoundaryLine (int page) const
+{
+    if (page < 0 || page > 3) return {};                 // PERFORM captures everything
+    auto c = modCaptureForSlot (slotForModelPage (page));
+    if (! c.anyOnSlot()) return {};
+    return "A patch cannot hold " + c.phrase()
+         + ". Save a PERFORMANCE preset to keep that work.";
 }
 
 // CLIENT REVIEW ROUND 3 (G): the browser listed nothing on PERFORM because the

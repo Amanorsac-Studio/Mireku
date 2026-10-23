@@ -71,6 +71,16 @@ const memoryBridge: JmBridge = (() => {
       throw new Error('Importing a library requires the Electron app');
     },
     onImportProgress: () => () => {},
+    pathForDroppedFile: () => {
+      throw new Error('Dropping files requires the Electron app');
+    },
+    scanDrop: async () => {
+      throw new Error('Dropping files requires the Electron app');
+    },
+    convertDrop: async () => {
+      throw new Error('Dropping files requires the Electron app');
+    },
+    onDropProgress: () => () => {},
     chooseDir: async () => null,
     chooseFile: async () => null,
     showItem: async () => true,

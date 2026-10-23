@@ -37,6 +37,16 @@ var bridge = {
       import_electron.ipcRenderer.off("import:progress", listener);
     };
   },
+  pathForDroppedFile: (file) => import_electron.webUtils.getPathForFile(file),
+  scanDrop: (paths) => import_electron.ipcRenderer.invoke("drop:scan", paths),
+  convertDrop: (req) => import_electron.ipcRenderer.invoke("drop:convert", req),
+  onDropProgress: (cb) => {
+    const listener = (_e, p) => cb(p);
+    import_electron.ipcRenderer.on("drop:progress", listener);
+    return () => {
+      import_electron.ipcRenderer.off("drop:progress", listener);
+    };
+  },
   chooseDir: () => import_electron.ipcRenderer.invoke("dialog:chooseDir"),
   chooseFile: () => import_electron.ipcRenderer.invoke("dialog:chooseFile"),
   showItem: (p) => import_electron.ipcRenderer.invoke("shell:showItem", p)

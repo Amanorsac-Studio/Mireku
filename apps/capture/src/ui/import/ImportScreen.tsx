@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type Dispatch, type DragEvent, type SetStateAction } from 'react';
 import { midiToNoteName } from '@jm/jmi-format/web';
-import type { ImportBundleResult, ImportProgress } from '../../../electron/preload';
+import type { DropScanResult, ImportBundleResult, ImportProgress } from '../../../electron/preload';
 import type { X7lImportPlan } from '../../engine/import/x7lPlan';
 import { useApp } from '../../state/appStore';
 import { bridge } from '../../state/services';
 import { Button, Label, Panel, Select, SectionHeader, Toggle } from '../common';
-import { Flourish, GoldDivider } from '../hardware';
+import { Flourish, GoldDivider, Segmented, type SegmentOption } from '../hardware';
 import { IconLeft, IconMore, IconRight, IconStar } from '../assets/icons';
+import { DropImport } from './DropImport';
 
 interface Inspection {
   filePath: string;
@@ -25,17 +26,36 @@ const fmtDur = (sec: number) => {
   return m ? `${m}m ${Math.round(sec % 60)}s` : `${Math.round(sec)}s`;
 };
 
+type ImportSource = 'x7l' | 'files';
+
+const SOURCE_OPTIONS: SegmentOption<ImportSource>[] = [
+  { value: 'files', label: 'Audio Files' },
+  { value: 'x7l', label: 'Yamaha .X7L Library' },
+];
+
 /**
- * Import screen — convert a Yamaha MONTAGE `.X7L` library straight into `.jmi`
- * bundles. No recording is involved: the library's own PCM is copied through
- * unchanged, so the conversion is bit-perfect and takes seconds.
+ * Import screen — two sources, one promise: **the audio is copied through
+ * unchanged**. No recording, no resampling, no requantising, no normalising.
  *
- * The flow is deliberately three beats: choose → look inside → convert. The
- * middle beat matters most, because it is where the user confirms how the
- * source's velocity layers land in the four the format allows.
+ *  • **Audio Files** (`DropImport`): a dropped folder or set of `.wav` files
+ *    becomes a playable instrument. Names are parsed for note / velocity /
+ *    round robin and the YIN pitch detector fills in whatever the names do not
+ *    carry. This is the default source, and the whole window is a drop target —
+ *    dropping audio while the `.X7L` tab is showing switches to it.
+ *
+ *  • **Yamaha .X7L Library**: the original importer, unchanged.
+ *
+ * Both flows are the same three beats: choose → look at what is inside →
+ * convert. The middle beat matters most, because it is the one place a wrong
+ * guess can still be corrected.
  */
 export function ImportScreen() {
   const setScreen = useApp((s) => s.setScreen);
+  const [source, setSource] = useState<ImportSource>('files');
+  const [dragging, setDragging] = useState(false);
+  const [scan, setScan] = useState<DropScanResult | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [dropError, setDropError] = useState<string | null>(null);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [merges, setMerges] = useState<Record<number, number>>({});
@@ -105,6 +125,56 @@ export function ImportScreen() {
     }
   };
 
+  /**
+   * Resolve dropped files to real filesystem paths and hand them to the main
+   * process. `File.path` was removed in Electron 32, so the path comes from
+   * `webUtils.getPathForFile` via the preload — a dropped *folder* has no
+   * `File` entry on some platforms, so the DataTransfer items are consulted
+   * too and the main process expands whatever directory it is given.
+   */
+  const scanDropped = useCallback(async (paths: string[]) => {
+    if (paths.length === 0) return;
+    setSource('files');
+    setDropError(null);
+    setScan(null);
+    setScanning(true);
+    try {
+      setScan(await bridge.scanDrop(paths));
+    } catch (e) {
+      setDropError((e as Error).message);
+    } finally {
+      setScanning(false);
+    }
+  }, []);
+
+  const onDrop = useCallback(
+    (e: DragEvent) => {
+      e.preventDefault();
+      setDragging(false);
+      const paths: string[] = [];
+      for (const file of Array.from(e.dataTransfer.files)) {
+        try {
+          const p = bridge.pathForDroppedFile(file);
+          if (p) paths.push(p);
+        } catch {
+          /* a drop that carries no real file (a browser selection) — ignored */
+        }
+      }
+      if (paths.length === 0) {
+        setSource('files');
+        setDropError('That drop carried no files from disk. Drag a folder or .wav files out of Explorer.');
+        return;
+      }
+      void scanDropped(paths);
+    },
+    [scanDropped],
+  );
+
+  const chooseFolder = useCallback(async () => {
+    const dir = await bridge.chooseDir();
+    if (dir) void scanDropped([dir]);
+  }, [scanDropped]);
+
   const toggle = (index: number) =>
     setSelected((prev) => {
       const next = new Set(prev);
@@ -114,7 +184,103 @@ export function ImportScreen() {
     });
 
   return (
-    <div className="jm-col" style={{ maxWidth: 'calc(var(--jm-size-gap-unit) * 118)', margin: '0 auto' }}>
+    <div
+      className={`jm-col jm-drop-target${dragging ? ' over' : ''}`}
+      style={{ maxWidth: 'calc(var(--jm-size-gap-unit) * 118)', margin: '0 auto' }}
+      onDragOver={(e) => {
+        e.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+      }}
+      onDrop={onDrop}
+    >
+      <Segmented<ImportSource> options={SOURCE_OPTIONS} value={source} onChange={(s) => setSource(s)} grow />
+
+      {dragging && <div className="jm-drop-rule">Drop to read these files — nothing is written yet</div>}
+
+      {source === 'files' ? (
+        <DropImport
+          scan={scan}
+          scanning={scanning}
+          error={dropError}
+          onChooseFolder={() => void chooseFolder()}
+          onClear={() => {
+            setScan(null);
+            setDropError(null);
+          }}
+          onBack={() => setScreen('home')}
+        />
+      ) : (
+        <X7lImport
+          inspection={inspection}
+          plan={plan}
+          selected={selected}
+          merges={merges}
+          makeZip={makeZip}
+          reading={reading}
+          busy={busy}
+          progress={progress}
+          error={error}
+          results={results}
+          setMerges={setMerges}
+          setMakeZip={setMakeZip}
+          toggle={toggle}
+          totals={totals}
+          choose={() => void choose()}
+          convert={() => void convert()}
+          onBack={() => setScreen('home')}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Yamaha .X7L library import — unchanged behaviour, lifted into its   */
+/* own component so the Import screen can host two sources.            */
+/* ------------------------------------------------------------------ */
+
+function X7lImport({
+  inspection,
+  plan,
+  selected,
+  merges,
+  makeZip,
+  reading,
+  busy,
+  progress,
+  error,
+  results,
+  setMerges,
+  setMakeZip,
+  toggle,
+  totals,
+  choose,
+  convert,
+  onBack,
+}: {
+  inspection: Inspection | null;
+  plan: X7lImportPlan | undefined;
+  selected: Set<number>;
+  merges: Record<number, number>;
+  makeZip: boolean;
+  reading: boolean;
+  busy: boolean;
+  progress: ImportProgress | null;
+  error: string | null;
+  results: ImportBundleResult[] | null;
+  setMerges: Dispatch<SetStateAction<Record<number, number>>>;
+  setMakeZip(next: boolean): void;
+  toggle(index: number): void;
+  totals: { count: number; samples: number; zones: number; bytes: number } | null;
+  choose(): void;
+  convert(): void;
+  onBack(): void;
+}) {
+  return (
+    <>
       <Panel screws style={{ textAlign: 'center' }}>
         <div className="jm-col" style={{ alignItems: 'center', gap: 'calc(var(--jm-size-gap-unit) * 1.25)' }}>
           <div className="jm-title" style={{ fontSize: 'var(--jm-type-h1)' }}>
@@ -126,10 +292,10 @@ export function ImportScreen() {
           </Label>
           <Flourish width={150} />
           <div className="jm-row" style={{ gap: 'calc(var(--jm-size-gap-unit) * 0.75)' }}>
-            <Button onClick={() => setScreen('home')}>
+            <Button onClick={onBack}>
               <IconLeft size={14} /> Sessions
             </Button>
-            <Button primary disabled={reading || busy} onClick={() => void choose()}>
+            <Button primary disabled={reading || busy} onClick={choose}>
               <IconStar size={14} /> {reading ? 'Reading library…' : 'Choose Library File…'}
             </Button>
           </div>
@@ -240,7 +406,7 @@ export function ImportScreen() {
             </div>
             <div className="jm-row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
               <Toggle checked={makeZip} onChange={setMakeZip} label="Also write a .zip beside each bundle" />
-              <Button primary disabled={busy || totals.count === 0} onClick={() => void convert()}>
+              <Button primary disabled={busy || totals.count === 0} onClick={convert}>
                 {busy ? 'Converting…' : 'Convert to .jmi'} <IconRight size={14} />
               </Button>
             </div>
@@ -298,7 +464,7 @@ export function ImportScreen() {
           </div>
         </Panel>
       ))}
-    </div>
+    </>
   );
 }
 

@@ -34,6 +34,14 @@ import {
   type StreamInfo,
 } from './types.js';
 import { readWav } from './wav.js';
+import {
+  AMANORSAC_ORIGINAL,
+  categoryFromWorld,
+  isCategory,
+  licensingProblems,
+  type Category,
+  type Licensing,
+} from './catalog.js';
 
 export interface PackOptions {
   /** .jmi bundle folder */
@@ -48,6 +56,17 @@ export interface PackOptions {
   name?: string;
   /** override the author (brand) written into the card and the index */
   author?: string;
+  /** Amanorsac catalogue shelf. Falls back to a guess from the .jmi world. */
+  category?: Category;
+  /** free-form family tags: 'worship', 'neo-soul', … */
+  tags?: string[];
+  /**
+   * Licence as shipped plus every upstream source. Defaults to wholly-original
+   * Amanorsac material — which is a claim, so state sources when there are any.
+   */
+  licensing?: Licensing;
+  /** which upstream source each sample came from, and processing notes */
+  provenance?: { streamSources?: Record<string, number>; notes?: string };
   /**
    * A take that recorded no audio is a defect in the capture, not something to
    * paper over, so by default packing REFUSES and names the files. Set this to
@@ -203,6 +222,20 @@ export function pack(opts: PackOptions): PackResult {
     }
   }
 
+  // ---- catalogue + licensing (spec §5.2) ---------------------------------
+  // Refuse to seal before the credits are right. A CC BY source with no credit
+  // line is a licence breach the moment the file ships, and once it is sealed
+  // and copied to a stage laptop nobody is going to notice it is missing.
+  const licensing: Licensing = opts.licensing ?? AMANORSAC_ORIGINAL;
+  const problems = licensingProblems(licensing);
+  if (problems.length > 0) {
+    throw new Error(`this library cannot be sealed as licensed:\n  ${problems.join('\n  ')}`);
+  }
+  if (opts.category && !isCategory(opts.category)) {
+    throw new Error(`unknown category "${opts.category}" — see CATEGORIES in catalog.ts`);
+  }
+  const category = opts.category ?? categoryFromWorld(instrument.meta.world);
+
   // ---- the card (§5.2): display metadata only, no audio, no zone map -------
   const card: Card = {
     format: 'aofas',
@@ -216,6 +249,9 @@ export function pack(opts: PackOptions): PackResult {
     totalAudioBytes,
     minAppVersion: opts.minAppVersion ?? '1.0.0',
     keyId,
+    category,
+    tags: opts.tags?.length ? opts.tags : undefined,
+    licensing,
   };
   const cardBytes = Buffer.from(JSON.stringify(card), 'utf8');
 
@@ -232,7 +268,7 @@ export function pack(opts: PackOptions): PackResult {
   // the byte. The loop below converges in two passes in practice (only the
   // digit count of the offsets can move); the guard is there so a pathological
   // case fails loudly instead of writing a file whose offsets are wrong.
-  const indexPlain = layoutIndex(instrument, presets, planned, cardBytes.length, chunkSize);
+  const indexPlain = layoutIndex(instrument, opts.provenance, presets, planned, cardBytes.length, chunkSize);
   const indexOffset = HEADER_SIZE + cardBytes.length;
   const dataOffset = indexOffset + indexPlain.length;
   const dataLength = planned.reduce((n, s) => n + s.byteLength + s.chunkCount * TAG_BYTES, 0);
@@ -313,6 +349,7 @@ export function pack(opts: PackOptions): PackResult {
  */
 function layoutIndex(
   instrument: Instrument,
+  provenance: AofasIndex['provenance'],
   presets: { fileName: string; preset: Preset }[],
   streams: PlannedStream[],
   cardLength: number,
@@ -324,6 +361,7 @@ function layoutIndex(
       instrument,
       presets,
       streams: streams.map(({ srcFile: _f, srcOffset: _o, ...s }) => s),
+      provenance,
     };
     // ALWAYS present, so its ~10 bytes of JSON overhead are part of the
     // measured size and one pad space is worth exactly one byte.

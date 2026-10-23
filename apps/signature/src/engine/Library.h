@@ -30,6 +30,7 @@
 #include <vector>
 #include "jmi_format.h"
 #include "FxParams.h"
+#include "Authoring.h"
 
 namespace jm {
 
@@ -484,15 +485,41 @@ public:
     /// without touching the developer's own settings.
     void setLibraryDirTransient (const juce::File& f) { libraryDir_ = f; rescan(); }
 
+    // -------------------------------------------------------- authoring mode
+    // AUTHORING MODE. The mode lives in settings.json (key "mode"), because
+    // that is the one artefact that travels with the app when it is sent to the
+    // artist and comes back, and because a release build can be stamped by
+    // writing one line instead of recompiling. It DEFAULTS TO AUTHORING while
+    // this product is in the author-the-factory-content phase: an absent key
+    // means "the app has not been told it is shipping yet".
+    //
+    // There is also a Settings-tab control (see ui/Macro.h, AuthoringPanel) so
+    // the mode can be read and flipped without opening a JSON file. Both,
+    // deliberately: the file alone would be invisible to the artist, and the
+    // control alone would be unavailable to a build or release script.
+    //
+    // JM_AUTHORING_MODE overrides the mode for THIS PROCESS ONLY and is never
+    // written back — the same transient-override pattern as JM_LIBRARY_DIR, and
+    // the only way the self-check can exercise both modes in one process
+    // without rewriting the developer's own settings.
+    authoring::Mode mode() const { return mode_; }
+    bool isAuthoring() const { return mode_ == authoring::Mode::authoring; }
+    void setMode (authoring::Mode m) { mode_ = m; settingsMode_ = m; saveSettings(); }
+    /// Self-check only: switch mode without touching settings.json.
+    void setModeTransient (authoring::Mode m) { mode_ = m; }
+
     void loadSettings()
     {
         libraryDir_ = defaultLibraryDir();
+        mode_ = authoring::Mode::authoring;
         auto sf = settingsFile();
         if (sf.existsAsFile())
         {
             auto v = juce::JSON::parse (sf.loadFileAsString());
             if (auto* o = v.getDynamicObject())
             {
+                if (o->hasProperty ("mode"))
+                    mode_ = authoring::modeFromId (o->getProperty ("mode").toString());
                 if (o->hasProperty ("libraryPath"))
                 {
                     juce::File f (o->getProperty ("libraryPath").toString());
@@ -504,6 +531,9 @@ public:
             }
         }
         settingsLibraryDir_ = libraryDir_;
+        settingsMode_ = mode_;
+        if (auto env = juce::SystemStats::getEnvironmentVariable ("JM_AUTHORING_MODE", {}); env.isNotEmpty())
+            mode_ = authoring::modeFromId (env);
         // Round 5: JM_LIBRARY_DIR overrides the scanned folder for THIS process
         // only and is never written back. The UI self-check sets it so the test
         // runs against the repo testdata instead of whatever happens to be in
@@ -525,6 +555,7 @@ public:
         for (auto& f : favorites_) favs.add (f);
         o->setProperty ("favorites", favs);
         o->setProperty ("licenseKey", licenseKey_);
+        o->setProperty ("mode", authoring::modeId (settingsMode_));
         appDataDir().createDirectory();
         settingsFile().replaceWithText (juce::JSON::toString (juce::var (o)));
     }
@@ -667,6 +698,8 @@ private:
     juce::AudioFormatManager fm_;
     juce::File libraryDir_;
     mutable juce::File settingsLibraryDir_;          // what settings.json holds (never the override)
+    authoring::Mode mode_ = authoring::Mode::authoring;
+    authoring::Mode settingsMode_ = authoring::Mode::authoring;   // never the env override
     std::vector<BundleInfo> bundles_;
     juce::StringArray favorites_;
     juce::String licenseKey_;

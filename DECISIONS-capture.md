@@ -1796,3 +1796,295 @@ importer *imports* `inferWorld` from `x7lPlan` and `ImportFs` from `x7lConvert` 
 `keyRanges` and `bundleFolderName` with `export.ts`, but adds nothing to them. The X7L screen's
 markup is unchanged, only relocated into an `X7lImport` component inside the same file. Work in
 `apps/signature` and the shared FX registry was left alone.
+
+---
+
+## X7L importer hardening — the client's 13-library corpus (Oct 2026)
+
+The importer worked on exactly one file: `MKS20 EP1 EP2.X7L`, the library it was written
+against. Handed 13 real MONTAGE/MODX libraries (2.2 GB, `C:\Users\amano\Downloads\JM Sounds`),
+it imported 2 and refused 11. **It now imports 10 and refuses 3, and all three refusals are
+correct.** 30 valid `.jmi` bundles, 1,476 samples, every byte of PCM verified identical to the
+source.
+
+Nothing was fixed by loosening a check. Three fields were being read wrongly, and every
+refusal that remains is a refusal the data earns.
+
+### 113. Byte +11 of a keyzone record is the channel count, and that was the whole collision
+
+Five libraries died with `Sample name collision: samples/A0_v1_rr1.wav`. The reader was taking
+each 64-byte DWFM keyzone record as one mono keyzone. In eleven of the twelve libraries with
+audio, the records come in **adjacent pairs that are byte-identical except for one field**, and
+the DWIM record holds two consecutive mono PCM blocks for them. Two "keyzones" with the same
+root note produce the same `{Note}_v{layer}_rr{n}` name.
+
+The field that settles what those pairs are is `+11`:
+
+| | `+11` | adjacent identical pairs | zone count |
+|---|---|---|---|
+| `MK 80 C Rhodes`, `MKS20 PN1 PN2` | **1** | none | odd and even |
+| the other ten audio libraries | **2** | every pair exact | always even |
+
+`+11 == 1` in exactly the two libraries that have no pairs — the two that already imported —
+and `+11 == 2` in every library that has them, where the record count is always even and the
+pairing is exact in all 4,000+ keyzones. It is the channel count: **2 means stereo, stored as
+left then right.** Within a pair, key range, velocity range, root, sample rate, length, loop
+start, loop end and start offset are all identical; only the per-sample handle differs.
+
+So the pairs are folded into one logical keyzone with one PCM span per channel, and written as
+one interleaved stereo WAV with `meta.channels: "stereo"`.
+
+**Filing them as round robins would have been wrong, and silently so** — the sampler would have
+alternated the left and right channels of one recording from note to note. The brief flagged
+exactly that risk, so it was checked rather than assumed. Sample-level correlation between pair
+members does *not* settle it (0.99 in Crystal Rhodes, **−0.76** in New York Grand, 0.02 in
+Symphoniq — wide stereo pairs decorrelate, and an out-of-phase pair goes negative), which is
+why the decision rests on `+11` and on the structural facts instead: identical lengths
+**to the byte** across thousands of zones, which two separate takes would never produce, and
+the perfect correlation of `+11` with the presence of pairing.
+
+Corroboration added: a stereo waveform must have an even record count, each pair must agree on
+every mapping field, and the DWIM walk must consume exactly two sub-records of
+`2 × lengthSamples` per stereo zone and land on the record end. A pair that disagrees is
+refused, not guessed at.
+
+### 114. Velocity layers live in two different places
+
+`Crystal Rhodes.X7L` still collided after the stereo fix, because the planner assumed one
+waveform = one velocity layer and overrode each keyzone's own velocity range. Crystal's key map
+declares **eight velocity windows per note** (1-16, 17-32, 33-48, 49-64, 65-79, 80-95, 96-111,
+112-127) — eight zones sharing root A0, so eight files called `A0_v1_rr1.wav`.
+
+Both mechanisms are now handled:
+
+- **Inside one key map.** The source's own windows are used verbatim rather than re-split, and
+  verified to tile 1..127 with no gap or overlap before they are trusted. Where there are more
+  than four, adjacent windows are grouped into four — the established `MAX_VELOCITY_LAYERS`
+  fold, generalised from one pair to as many as needed — and the windows sharing a group play
+  as round robins. No audio is dropped and each window keeps the velocity span the library gave
+  it. Crystal's eight become 1-32 / 33-64 / 65-95 / 96-127, two round robins each.
+- **Across waveforms**, as before, ordered by measured peak.
+
+A library combining the two is **refused**: nothing in the corpus does it, so there is no way
+to verify how they stack.
+
+`rr` is now allocated from a per-`(root, layer)` counter, so sample names are unique by
+construction however awkward a key map is, and the reader separately refuses two logical
+keyzones that claim the same `(key range, velocity range)` slot.
+
+### 115. Grouping on key map alone was unsafe, in both directions
+
+Fixing the naming exposed a worse bug that the old collision had been hiding.
+
+**Too eager.** `Montage Triton Library.X7L` has six unrelated waveforms — "Brass Low",
+"Brass High", "analogpad Low", "analogpad High", "M1 Organ", "Stage EP High" — sharing one
+identical key map. The comment claiming "two different instruments never [share a key map]" is
+false. Stacking those six as velocity layers of one instrument would have been silently wrong
+(and would have thrown on the four-layer cap, losing a 346 MB library outright). Waveforms with
+a shared key map are now layered together only when their names differ by a **dynamic or
+variant token** alone: dynamic markings are dropped wherever they sit, a short alphanumeric
+variant tag only as the last token. `MKS20 pn1`/`pn2` → `MKS20`; `MK 80 p`/`MK 80 f` →
+`MK 80` (the model number survives); `DYNO 1…5` → `DYNO`; `Grand Lady D2`/`D7` → `Grand Lady`;
+`AZ p SE`/`AZ mp SE` → `AZ SE`. `Brass Low` and `M1 Organ` share no stem and stay separate.
+`low`/`high` are deliberately **not** treated as variant tokens: in Triton they distinguish two
+real samples and nothing in the file says how they layer, so they become two bundles rather
+than a guess. The fallback — one bundle per waveform — is never wrong, only less rich.
+
+**Too shy.** `Crystal Rhodes.X7L` is one instrument spread over four waveforms:
+
+```
+Crystal A  roots 21,33,45,...,105   (A)       Crystal D  roots 27,39,...,99   (D#)
+Crystal C  roots 24,36,...,96       (C)       Crystal F  roots 30,42,...,102  (F#)
+```
+
+Four interleaved 12-semitone ladders that unite into the 3-semitone ladder 21…105 — the same
+3-semitone plan this project uses for its own recordings. As four bundles each would have been
+playable over about a third of the keyboard. They are now merged, but only on proof: identical
+velocity windows, channel count and sample rate; pairwise disjoint root sets; each member's
+roots an arithmetic progression of the same difference D; D divisible by the member count k with
+the members' lowest roots spaced exactly D/k apart, so the union is itself an even ladder of
+D/k with no root used twice and none missing; and the union's key ranges covering the span with
+no unmapped key. Nothing else in the corpus comes close to satisfying that, which is the point.
+
+The merged members' key ranges overlap at the top (each partner's highest sample is stretched
+to key 127), so merged zone boundaries are taken from the roots — midpoints between adjacent
+roots, the rule `keyRanges()` already uses for a recorded bundle. That changes the mapping only,
+never the audio, and it is written into `meta.notes`. Result: 116 zones covering MIDI 0–127 with
+no gap at every one of the four velocity layers.
+
+### 116. The field at +56 was never a loop start — this is failure class C
+
+Two libraries were refused with `loop 48016..30463 in 30464 samples`. The shape was the tell:
+`loopEnd == length − 1` (a whole-sample loop) with a *start* beyond the end.
+
+`+56` is not a loop start. The evidence, over 4,000+ keyzones in 12 libraries:
+
+1. The half-word at `+58` is **zero in every keyzone of every library**, while sample lengths
+   reach 790,000. A genuine 32-bit loop start on samples that long would use it constantly.
+2. In `Montage Triton Library.X7L` the field enumerates **1, 2, 3, … 408** strictly
+   sequentially — exactly the library's keyzone-record count. That is a handle, not an offset.
+   No loop start counts 1, 2, 3, 4 across four different half-million-sample recordings.
+3. It is distinct for every keyzone in every library — 462 of 462 in Crystal Rhodes, 756 of 756
+   in NRD — which is what a per-sample id or checksum looks like, not a loop point.
+4. It differs between the two channels of one stereo recording, which a loop start cannot.
+
+The real loop start is at **`+44`**. It satisfies `loopStart ≤ loopEnd < lengthSamples` for
+every keyzone in the corpus, and it is **exactly 0** in every library whose loops span the whole
+sample — the coherent reading that `+56` never gave.
+
+So the answer to class C is: **a misread field, not unusable loops.** `New York Grand 88 SE`
+and `NRD Grand Imperial` are all-one-shot libraries (`+44 == 0`, `loopEnd == length − 1`
+throughout). The old field happened to stay under the sample length in the long samples and
+exceeded it only in the short ones — `record 5 keyzone 1` is 30,464 samples, short enough for a
+16-bit handle of 48,016 to overshoot. Read from `+44` they are plain one-shots and get
+`loop: null`.
+
+A loop spanning the whole sample is written as `loop: null` (there is nothing to repeat);
+anything narrower is the library's real region, carried straight over. The reader now also
+refuses any keyzone whose `+58` half-word is non-zero rather than guessing — if that ever fires,
+the field is wrong and the layout cannot be trusted.
+
+### 117. Catalogue names start at +22, not +12
+
+Names were arriving as `'*0:AZ p SE`, `'!18:DYNO 1`, `'"RomancePiano Low`. The entry body is
+`[dataLength:u32][dataOffset:u32][u16 = 1][id:u16][8 zero bytes][u16 category code][name, NUL
+terminated]` — the name is at **+22**, after a 2-byte category code. Scanning for printable runs
+from +12 glued that code onto the front whenever its bytes happened to be printable ASCII, which
+is why some names came out clean and others did not. Read at a known offset, they are clean, and
+so are the bundle folder names derived from them.
+
+### 118. Two files are simply incomplete — this is failure class B
+
+`Arizona Grand 88 SE.X7L` and `JM Symphoniq.X7L` were refused with *"Block DWIM runs past the
+end of the file"*, DWIM claiming to end at 411,745,528 in an 88 MB file. This is **not** a
+format variant, a 64-bit field or an unknown layout. The files are truncated downloads:
+
+- Both are **exactly round MiB**: 92,274,688 = 88.0 MiB, 163,577,856 = 156.0 MiB. Every one of
+  the other eleven libraries is a ragged size. Nothing but an interrupted transfer lands on a
+  1 MiB boundary.
+- Everything inside them is **self-consistent**. For every waveform, the DWFM keyzone lengths
+  sum exactly to the DWIM record length declared by both the catalogue entry *and* the record
+  header: Symphoniq waveform 0 is `56,074,880 + 40×4 + 4 = 56,075,044`, matching to the byte,
+  and so is every other waveform in both files. The reader understands the format; the bytes are
+  not there. Symphoniq stops part-way through waveform 2 of 12; Arizona part-way through
+  waveform 0 of 6.
+
+So the fix is the message, not the parser. `X7lTruncatedError` now says the file is incomplete,
+how much is missing in MiB, that the format is understood and the data is not, and to
+re-download. Importing the complete prefix was rejected: a piano missing most of its velocity
+layers, presented as finished, is worse than a clear refusal.
+
+### 119. YSFC 5.0.1 accepted, because it was verified — failure class D
+
+`Nord Stage V-1.0.X8L` is YSFC 5.0.1, and the gate was set to 4.x because no 5.x file existed
+to check against. One does now, and it passes **every** corroboration the 4.x files pass, with
+no structural difference found: block table; catalogue entry layout with the name at +22;
+EWIM `dataOffset`/`dataLength` agreeing with the DWIM record walked to; 64-byte keyzone records
+with `+11 == 2`, loop start at `+44` satisfying `loopStart ≤ loopEnd < length`, `+58` zero;
+DWIM sub-records of exactly `2 × lengthSamples` summing to the record end; and 232 logical
+keyzones whose slots are all distinct. It carries extra `EFVT`/`DFVT` and `ECRV`/`DCRV` blocks,
+which are ignored exactly as `ESYS`/`DSYS` already were.
+
+The gate is therefore 4.x **and** 5.x, `.X8L` moves from `UNVERIFIED_EXTENSIONS` to
+`SUPPORTED_EXTENSIONS`, and the file dialog accepts it. `.x7u`, `.x8u`, `.x7a` and `.x8a` stay
+unverified. 3.x and 6.x are still refused — nothing to check them against.
+
+### 120. The DX7 refusal was right; only the message changed — failure class E
+
+`DX7-Original-ROMs.x7l` (767 KB, YSFC 4.0.0) has `EPFM`/`DPFM` and nothing else: 128 FM patches
+for the synth's own tone generator, referencing sounds the instrument already has. There is no
+audio to import and none was synthesised. The message now explains that the library holds no
+sampled audio, which blocks carry what, why a library like this has none, and that the sounds
+have to be sampled off the hardware with Guided or Auto mode — instead of the old
+`no EWIM block (found: EPFM, DPFM, EPFM)`.
+
+That phantom third `EPFM` was a block-table scan artefact: 4.0.0 terminates the table
+differently, so the scan ran into payload bytes that looked like a tag. A block-table entry must
+now point at its own tag, which ends the scan cleanly.
+
+### 121. The batch harness can no longer overwrite the client's library
+
+Three fixes, the first of which was the dangerous one.
+
+- **It appended `.jmi` to a name that already ended in `.jmi`.** `bundleFolderName` returns
+  `MKS20.jmi`; the harness validated `MKS20.jmi.jmi`. That path never existed, so
+  `validateBundle` reported every bundle invalid *and* the already-present guard never fired —
+  which is how an earlier run came to overwrite one of the client's bundles. The suffix now goes
+  before the extension: `MKS20_2.jmi`, never `MKS20.jmi.jmi`.
+- **It never overwrites.** A bundle name taken on disk or already handed out in this run gets a
+  numeric suffix. Bundle names do collide across libraries — Nord Stage and NRD Grand Imperial
+  both want `Note_on` and `Note_off`, and both were disambiguated in the acceptance run.
+- **Output goes to a scratch folder.** `C:\Users\amano\Documents\JM Signature\Library` was not
+  written to, renamed or deleted; its five bundles (EP2, MKS20_EP1_EP2, MKS20_PN1_PN2, MK_80,
+  Piano) are untouched and were confirmed so by timestamp after every run.
+
+`freeBundleName` is covered by a test that **runs under `npm test`** rather than being skipped
+with the rest of the harness, because never overwriting is the part that matters.
+
+### 122. Bit-perfect, re-proved including the interleave
+
+PCM is still copied, never decoded, resampled, requantised or scaled. A mono keyzone is one
+contiguous byte-for-byte copy; a stereo keyzone's two channel blocks are interleaved frame by
+frame, every 16-bit word still the source word.
+
+Verified by an independent script that re-parses each source `.X7L` from scratch and compares
+every produced WAV frame against the two source channel blocks: `MKS20.jmi` 58/58,
+`SQ1P_piano.jmi` 22/22, `Fantasia.jmi` 10/10, `Brass_Low.jmi` 11/11 — byte-identical, with the
+stereo interleave confirmed per frame. The unit tests assert the same on a fixture whose two
+channels carry deliberately different audio, so an interleave that duplicated one channel would
+fail.
+
+### 123. Acceptance run — all 13 libraries
+
+| File | Result | Bundles | Samples | Reason if refused |
+|---|---|---|---|---|
+| Arizona Grand 88 SE.X7L | **refused** | 0 | 0 | Incomplete file — 88.0 MiB of a declared ~392 MiB; 304.7 MiB missing. Re-download. |
+| Crystal Rhodes.X7L | imported | 1 | 231 | — |
+| D50 roland.X7L | imported | 2 | 21 | — |
+| DX7-Original-ROMs.x7l | **refused** | 0 | 0 | Parameter-only: FM patches, no sampled audio. Must be sampled off the hardware. |
+| JM Dyno Piano XL.X7L | imported | 1 | 115 | — |
+| JM Symphoniq.X7L | **refused** | 0 | 0 | Incomplete file — 156.0 MiB of a declared ~433 MiB; 277.2 MiB missing. Re-download. |
+| kt76 grandpiano ensoniq.X7L | imported | 1 | 22 | — |
+| MK 80 C Rhodes.X7L | imported | 1 | 56 | — |
+| MKS20 PN1 PN2.X7L | imported | 1 | 58 | — |
+| Montage Triton Library.X7L | imported | 13 | 204 | — |
+| New York Grand 88 SE.X7L | imported | 3 | 159 | — |
+| Nord Stage V-1.0.X8L | imported | 4 | 232 | — |
+| NRD Grand Imperial.X7L | imported | 3 | 378 | — |
+
+**10 of 13 libraries, 30 bundles, 1,476 samples (2.0 GB), every one passing `validateBundle`
+with zero errors.** Bundles: `Crystal` (stereo, 4 vel layers, 116 zones, 629 MB), `Fantasia`,
+`Staccato_H`, `DYNO` (4 layers, 92 zones), `SQ1P_piano`, `MK_80` (mono, 2 layers), `MKS20`
+(mono, 2 layers), the thirteen Triton instruments, `NY_SE` (3 layers, 120 zones), `NY_h_SE`,
+`NY_note_off_SE`, `Grand_Lady`, `Grand_Lady_2`, `Note_on`, `Note_off`, `Imperial` (3 layers,
+207 zones), `Note_on_2`, `Note_off_2`.
+
+### 124. Testing
+
+`test/x7lImport.test.ts` is now **45 passing tests**, up from 21, all on small synthetic
+fixtures rather than the 2.2 GB corpus. The fixture builder was corrected to match the real
+files — name at +22 behind a deliberately-printable category code, loop start at +44, a 16-bit
+handle at +56, and stereo waveforms written as byte-identical record pairs with two PCM
+sub-records whose channels carry different audio.
+
+New coverage, one class per failure: stereo pair folding, unique sample names, the per-frame
+interleave, `meta.channels: "stereo"`, a mismatched "stereo" pair refused, a duplicate
+key/velocity slot refused; eight in-map velocity windows read, folded to four that still tile
+1..127 with every source window kept, and non-tiling windows refused; key-split partners merged
+and a near-miss ladder correctly *not* merged; unrelated waveforms sharing a key map kept
+separate; the stem rule in both directions; a truncated file reported as incomplete with the
+shortfall; the +56 handle larger than its sample parsed as a one-shot with `loop: null`, a
+genuine +44/+48 region carried over, and a used `+58` refused; 5.0.1 accepted with 3.x and 6.x
+still refused; `.X8L` supported; names read at +22; and the batch harness's no-overwrite rule.
+
+`npm run typecheck -w jm-capture` and `npm run test -w jm-capture` are clean apart from the two
+pre-existing failures from separate uncommitted work — `units.ts(894)` (`svFilter` missing from
+`createFxUnit`) and `fxStability > svFilter`. 291 tests pass.
+
+### 125. Not touched
+`packages/jmi-format` is unchanged — no schema, type, validator or C++ reader edit. The
+recording paths (Guided, Auto, patch queue, export), the sampler, the FX rack and the drop
+importer are unchanged; `dropPlan.ts` keeps importing `inferWorld` from `x7lPlan`, whose
+signature is the same. `x7l.ts` keeps `pcm16MonoWavHeader` and the `pcmOffset`/`pcmBytes` fields
+(now the first channel's span) so nothing else had to move. The Import screen's markup is
+unchanged beyond the tab label and one line of copy, both of which said `.X7L` only.

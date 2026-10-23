@@ -5,13 +5,15 @@
  * client library — runs under vitest exactly as it runs in Electron.
  *
  * Bit-perfect by construction: each sample file is a canonical 44-byte RIFF
- * header followed by a byte-for-byte copy of the source PCM. Nothing is
- * decoded to float, resampled or requantised anywhere on this path.
+ * header followed by the source PCM. A mono keyzone's audio is one contiguous
+ * byte-for-byte copy; a stereo keyzone's two channel blocks are interleaved
+ * frame by frame, every 16-bit word still the source word. Nothing is decoded
+ * to float, resampled or requantised anywhere on this path.
  */
 
 import type { Preset } from '@jm/jmi-format/web';
 import { buildDefaultRack, defaultEngineParams } from '@jm/jmi-format/web';
-import { measureKeyzone, pcm16MonoWavHeader, type X7lLibrary } from './x7l';
+import { keyzoneWav, measureKeyzone, type X7lLibrary } from './x7l';
 import { buildImportInstrument, type SampleFacts, type X7lInstrumentPlan } from './x7lPlan';
 
 export interface ImportFs {
@@ -91,10 +93,7 @@ export function convertInstrument(
     for (const s of zone.samples) {
       const wf = lib.waveforms[s.waveformIndex];
       const kz = wf.keyzones[s.keyzoneIndex];
-      const header = pcm16MonoWavHeader(kz.pcmBytes, kz.sampleRate);
-      const wav = new Uint8Array(header.length + kz.pcmBytes);
-      wav.set(header, 0);
-      wav.set(bytes.subarray(kz.pcmOffset, kz.pcmOffset + kz.pcmBytes), header.length);
+      const wav = keyzoneWav(bytes, kz);
       fs.writeFile(fs.join(bundlePath, ...s.file.split('/')), wav);
       bytesWritten += wav.length;
 
@@ -102,13 +101,19 @@ export function convertInstrument(
       facts[s.file] = {
         peakDb: m.peakDb,
         lengthMs: round3((kz.lengthSamples / kz.sampleRate) * 1000),
-        loop: wf.oneShot
-          ? null
-          : {
-              startSample: kz.loopStartSample,
-              endSample: kz.loopEndSample,
-              crossfadeSamples: 0,
-            },
+        // A loop that spans the whole sample is not a loop — there is nothing
+        // to repeat — so it is written as `null`. Anything narrower is the
+        // library's real loop region and is carried straight over.
+        loop:
+          kz.loopStartSample === 0 && kz.loopEndSample === kz.lengthSamples - 1
+            ? null
+            : kz.loopStartSample >= kz.loopEndSample
+              ? null
+              : {
+                  startSample: kz.loopStartSample,
+                  endSample: kz.loopEndSample,
+                  crossfadeSamples: 0,
+                },
       };
       done++;
       opts.onProgress?.({ instrument: plan.name, done, total });

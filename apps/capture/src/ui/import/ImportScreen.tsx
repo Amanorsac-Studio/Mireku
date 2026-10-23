@@ -30,7 +30,7 @@ type ImportSource = 'x7l' | 'files';
 
 const SOURCE_OPTIONS: SegmentOption<ImportSource>[] = [
   { value: 'files', label: 'Audio Files' },
-  { value: 'x7l', label: 'Yamaha .X7L Library' },
+  { value: 'x7l', label: 'Yamaha Library' },
 ];
 
 /**
@@ -287,8 +287,8 @@ function X7lImport({
             Import Library
           </div>
           <Label>
-            Convert a Yamaha MONTAGE .X7L library straight to .jmi — the library&apos;s own samples, copied
-            through unchanged
+            Convert a Yamaha MONTAGE or MODX library (.X7L, .X8L) straight to .jmi — the library&apos;s own
+            samples, copied through unchanged
           </Label>
           <Flourish width={150} />
           <div className="jm-row" style={{ gap: 'calc(var(--jm-size-gap-unit) * 0.75)' }}>

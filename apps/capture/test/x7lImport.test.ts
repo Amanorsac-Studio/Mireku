@@ -18,15 +18,24 @@ import {
   pcm16MonoWavHeader,
   representativeKeyzone,
   X7lFormatError,
+  SUPPORTED_EXTENSIONS,
+  UNVERIFIED_EXTENSIONS,
+  X7lNoAudioError,
+  X7lTruncatedError,
+  keyzoneWav,
   type X7lLibrary,
 } from '../src/engine/import/x7l';
 import {
   buildImportInstrument,
   commonInstrumentName,
   inferWorld,
+  findKeySplitGroups,
+  foldSourceWindows,
   keyMapSignature,
   planImport,
+  velocitySplits,
   velocityWindows,
+  waveformStem,
 } from '../src/engine/import/x7lPlan';
 import { convertInstrument, type ImportFs } from '../src/engine/import/x7lConvert';
 
@@ -51,41 +60,66 @@ interface FakeZone {
   hi: number;
   root: number;
   samples: number;
+  /** velocity window; defaults to the whole range */
+  vlo?: number;
+  vhi?: number;
+  /** loop start (field +44); defaults to 0 = whole-sample loop / one-shot */
+  loopStart?: number;
+  /** loop end (field +48); defaults to samples - 1 */
+  loopEnd?: number;
 }
 interface FakeWave {
   name: string;
   zones: FakeZone[];
   /** peak amplitude written into every sample of this waveform */
   amp: number;
+  /** 1 = mono (default), 2 = stereo (each zone written as an L/R pair) */
+  channels?: 1 | 2;
 }
 
-/** Builds a minimal but structurally exact YSFC library in memory. */
-function buildFakeLibrary(waves: FakeWave[]): Uint8Array {
+/**
+ * Builds a minimal but structurally exact YSFC library in memory.
+ *
+ * Field placement matches the real files: the catalogue name sits at +22 after
+ * a 2-byte category code, the loop start is at +44, and +56 holds the 16-bit
+ * per-sample handle (NOT a loop point). A stereo waveform writes two
+ * byte-identical keyzone records per zone — differing only in that handle —
+ * and two consecutive PCM sub-records, left then right.
+ */
+function buildFakeLibrary(waves: FakeWave[], version = '4.0.5'): Uint8Array {
   const entryBodies: number[][] = [];
   const dwfmBodies: number[][] = [];
   const dwimBodies: number[][] = [];
+  let handle = 1;
 
   for (const w of waves) {
-    const keymap: number[] = le32(w.zones.length);
-    const audio: number[] = be32(w.zones.length);
+    const ch = w.channels ?? 1;
+    const keymap: number[] = le32(w.zones.length * ch);
+    const audio: number[] = be32(w.zones.length * ch);
     for (const z of w.zones) {
-      const rec = new Array<number>(64).fill(0);
-      rec[0] = z.lo;
-      rec[1] = z.hi;
-      rec[2] = 1;
-      rec[3] = 127;
-      rec[8] = z.root;
-      le32(44100).forEach((b, i) => (rec[36 + i] = b));
-      le32(z.samples - 1).forEach((b, i) => (rec[48 + i] = b)); // loop end
-      le32(0).forEach((b, i) => (rec[52 + i] = b)); // start
-      le32(Math.floor(z.samples / 10)).forEach((b, i) => (rec[56 + i] = b)); // loop start
-      le32(z.samples).forEach((b, i) => (rec[60 + i] = b)); // length
-      keymap.push(...rec);
+      for (let c = 0; c < ch; c++) {
+        const rec = new Array<number>(64).fill(0);
+        rec[0] = z.lo;
+        rec[1] = z.hi;
+        rec[2] = z.vlo ?? 1;
+        rec[3] = z.vhi ?? 127;
+        rec[8] = z.root;
+        rec[11] = ch;
+        le32(44100).forEach((b, i) => (rec[36 + i] = b));
+        le32(z.loopStart ?? 0).forEach((b, i) => (rec[44 + i] = b)); // loop start
+        le32(z.loopEnd ?? z.samples - 1).forEach((b, i) => (rec[48 + i] = b)); // loop end
+        le32(0).forEach((b, i) => (rec[52 + i] = b)); // start
+        const h = handle++ & 0xffff;
+        rec[56] = h & 255;
+        rec[57] = (h >> 8) & 255; // per-sample handle (u16 LE)
+        le32(z.samples).forEach((b, i) => (rec[60 + i] = b)); // length
+        keymap.push(...rec);
 
-      audio.push(...be32(z.samples * 2));
-      for (let i = 0; i < z.samples; i++) {
-        const v = Math.round(w.amp * Math.sin((i / 32) * Math.PI * 2));
-        audio.push(v & 255, (v >> 8) & 255);
+        audio.push(...be32(z.samples * 2));
+        for (let i = 0; i < z.samples; i++) {
+          const v = Math.round((c === 0 ? w.amp : -w.amp) * Math.sin((i / 32) * Math.PI * 2));
+          audio.push(v & 255, (v >> 8) & 255);
+        }
       }
     }
     dwfmBodies.push(keymap);
@@ -108,7 +142,9 @@ function buildFakeLibrary(waves: FakeWave[]): Uint8Array {
       1,
       0,
       i + 1,
-      ...tag(w.name),
+      0, 0, 0, 0, 0, 0, 0, 0, // +12: eight zero bytes
+      0x27, 0x21, // +20: category code, printable on purpose
+      ...tag(w.name), // +22: the name
       0,
       0,
     ];
@@ -129,7 +165,7 @@ function buildFakeLibrary(waves: FakeWave[]): Uint8Array {
 
   const header = new Array<number>(0x100).fill(0);
   tag('YAMAHA-YSFC').forEach((b, i) => (header[i] = b));
-  tag('4.0.5').forEach((b, i) => (header[0x10 + i] = b));
+  tag(version).forEach((b, i) => (header[0x10 + i] = b));
 
   const ewimAt = header.length;
   const dwfmAt = ewimAt + ewim.length;
@@ -223,9 +259,12 @@ describe('X7L parser — rejects malformed input', () => {
     expect(() => parseX7l(mangle((b) => (b[0x10] = 0x5a)))).toThrow(/Unrecognised YSFC version/);
   });
 
-  it('rejects a library with no audio block', () => {
+  it('refuses a library with no audio, explaining it must be sampled off the hardware', () => {
     // blank the DWIM tag in the block table (third entry)
-    expect(() => parseX7l(mangle((b) => (b[0x40 + 16] = 0x41)))).toThrow(/no DWIM block/);
+    const noAudio = mangle((b) => (b[0x40 + 16] = 0x41));
+    expect(() => parseX7l(noAudio)).toThrow(X7lNoAudioError);
+    expect(() => parseX7l(noAudio)).toThrow(/holds no sampled audio/);
+    expect(() => parseX7l(noAudio)).toThrow(/sampled off the hardware/);
   });
 
   it('rejects a key map whose size is not a whole number of keyzones', () => {
@@ -392,7 +431,7 @@ describe('conversion to .jmi', () => {
       { author: 'test', sourceFileName: 'fake.X7L', createdAt: '2026-01-01T00:00:00.000Z' },
     );
     expect(inst.meta.captureMode).toBe('auto');
-    expect(inst.meta.notes).toMatch(/Imported from the Yamaha MONTAGE library "fake\.X7L"/);
+    expect(inst.meta.notes).toMatch(/Imported from the Yamaha YSFC library "fake\.X7L"/);
     expect(inst.meta.notes).toMatch(/bit-perfect/);
     expect(inst.meta.channels).toBe('mono');
     expect(inst.meta.bitDepth).toBe(16);
@@ -501,4 +540,389 @@ maybe("the client's MKS20 EP1 EP2.X7L", () => {
     expect(plan.instruments[0].sampleCount).toBe(96);
     expect(plan.instruments[1].sampleCount).toBe(110);
   }, 600_000);
+});
+
+/* ------------------------------------------------------------------ */
+/* regression coverage for the batch-run failure classes               */
+/* ------------------------------------------------------------------ */
+
+/** The 16-bit PCM frames of a WAV produced by the importer. */
+function wavFrames(wav: Uint8Array): { channels: number; frames: number[][] } {
+  const dv = new DataView(wav.buffer, wav.byteOffset, wav.byteLength);
+  const channels = dv.getUint16(22, true);
+  const dataBytes = dv.getUint32(40, true);
+  const n = dataBytes / (2 * channels);
+  const frames: number[][] = [];
+  for (let i = 0; i < n; i++) {
+    const f: number[] = [];
+    for (let c = 0; c < channels; c++) f.push(dv.getInt16(44 + (i * channels + c) * 2, true));
+    frames.push(f);
+  }
+  return { channels, frames };
+}
+
+describe('A — stereo keyzone pairs (the sample-name collision)', () => {
+  const stereoLib = () =>
+    buildFakeLibrary([{ name: '1:Fake Stereo p', zones: FAKE_ZONES, amp: 9000, channels: 2 }]);
+
+  it('folds each left/right pair into ONE logical keyzone', () => {
+    const lib = parseX7l(stereoLib());
+    const wf = lib.waveforms[0];
+    // two zones in the key map, four keyzone records in the file
+    expect(wf.channels).toBe(2);
+    expect(wf.keyzones).toHaveLength(FAKE_ZONES.length);
+    for (const z of wf.keyzones) {
+      expect(z.channels).toBe(2);
+      expect(z.pcm).toHaveLength(2);
+      expect(z.pcmBytes).toBe(z.lengthSamples * 2);
+      expect(z.totalPcmBytes).toBe(z.lengthSamples * 4);
+      expect(z.pcm[1].offset).toBeGreaterThan(z.pcm[0].offset);
+    }
+  });
+
+  it('plans unique sample names — the collision cannot come back', () => {
+    const bytes = stereoLib();
+    const lib = parseX7l(bytes);
+    const plan = planImport(lib, levelsFor(lib, bytes));
+    const inst = plan.instruments[0];
+    const files = inst.zones.flatMap((z) => z.samples.map((s) => s.file));
+    expect(new Set(files).size).toBe(files.length);
+    // one sample per logical keyzone, not two
+    expect(inst.sampleCount).toBe(FAKE_ZONES.length);
+    expect(inst.channels).toBe(2);
+  });
+
+  it('writes a stereo WAV whose frames interleave the source channels bit-perfectly', () => {
+    const bytes = stereoLib();
+    const lib = parseX7l(bytes);
+    const z = lib.waveforms[0].keyzones[0];
+    const { channels, frames } = wavFrames(keyzoneWav(bytes, z));
+    expect(channels).toBe(2);
+    expect(frames).toHaveLength(z.lengthSamples);
+    const left = new DataView(bytes.buffer, bytes.byteOffset + z.pcm[0].offset, z.pcm[0].bytes);
+    const right = new DataView(bytes.buffer, bytes.byteOffset + z.pcm[1].offset, z.pcm[1].bytes);
+    for (let i = 0; i < z.lengthSamples; i++) {
+      expect(frames[i][0]).toBe(left.getInt16(i * 2, true));
+      expect(frames[i][1]).toBe(right.getInt16(i * 2, true));
+    }
+    // the fixture's right channel really is different audio, so an interleave
+    // that silently duplicated one channel would be caught here
+    expect(frames.some((f) => f[0] !== f[1])).toBe(true);
+  });
+
+  it('declares the bundle stereo so the validator checks the WAVs', () => {
+    const bytes = stereoLib();
+    const lib = parseX7l(bytes);
+    const plan = planImport(lib, levelsFor(lib, bytes));
+    const inst = buildImportInstrument(
+      plan.instruments[0],
+      Object.fromEntries(
+        plan.instruments[0].zones.flatMap((z) =>
+          z.samples.map((s) => [s.file, { peakDb: -6, lengthMs: 10, loop: null }]),
+        ),
+      ),
+      { author: 'test', sourceFileName: 'fake.X7L' },
+    );
+    expect(inst.meta.channels).toBe('stereo');
+  });
+
+  it('refuses a pair marked stereo that does not describe one sample', () => {
+    const broken = buildFakeLibrary([{ name: '1:Bad', zones: FAKE_ZONES, amp: 9000, channels: 2 }]);
+    // change the right-hand record's root note: no longer the same sample
+    const zoneAt = findTag(broken, 'DWFM') + 12 + 8 + 4;
+    broken[zoneAt + 64 + 8] = 99;
+    expect(() => parseX7l(broken)).toThrow(/left and right channels of one recording/);
+  });
+
+  it('refuses two keyzones claiming the same key and velocity slot', () => {
+    const dup = buildFakeLibrary([
+      { name: '1:Dup', zones: [FAKE_ZONES[0], { ...FAKE_ZONES[0], samples: 300 }], amp: 9000 },
+    ]);
+    expect(() => parseX7l(dup)).toThrow(/both claim key/);
+  });
+});
+
+describe('A — velocity windows declared inside one key map', () => {
+  /** One instrument, eight velocity windows per note, as Crystal Rhodes has. */
+  const EIGHT: FakeZone[] = (
+    [
+      [1, 16],
+      [17, 32],
+      [33, 48],
+      [49, 64],
+      [65, 79],
+      [80, 95],
+      [96, 111],
+      [112, 127],
+    ] as [number, number][]
+  ).flatMap(([vlo, vhi]) => [
+    { lo: 21, hi: 59, root: 40, samples: 256, vlo, vhi },
+    { lo: 60, hi: 108, root: 72, samples: 192, vlo, vhi },
+  ]);
+
+  const lib8 = () => buildFakeLibrary([{ name: '1:Eight', zones: EIGHT, amp: 9000 }]);
+
+  it('reads the source velocity splits', () => {
+    const lib = parseX7l(lib8());
+    expect(velocitySplits(lib.waveforms[0]).map((w) => `${w.lo}-${w.hi}`)).toEqual([
+      '1-16',
+      '17-32',
+      '33-48',
+      '49-64',
+      '65-79',
+      '80-95',
+      '96-111',
+      '112-127',
+    ]);
+  });
+
+  it('folds eight source windows into four that still tile 1..127', () => {
+    const folded = foldSourceWindows([
+      { lo: 1, hi: 16 },
+      { lo: 17, hi: 32 },
+      { lo: 33, hi: 48 },
+      { lo: 49, hi: 64 },
+      { lo: 65, hi: 79 },
+      { lo: 80, hi: 95 },
+      { lo: 96, hi: 111 },
+      { lo: 112, hi: 127 },
+    ]);
+    expect(folded).toHaveLength(4);
+    expect(folded[0].lo).toBe(1);
+    expect(folded[3].hi).toBe(127);
+    for (let i = 1; i < folded.length; i++) expect(folded[i].lo).toBe(folded[i - 1].hi + 1);
+    // every source window is kept — no audio is dropped
+    expect(folded.flatMap((w) => w.sources).sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+  });
+
+  it('plans four layers, every source keyzone used, every sample name unique', () => {
+    const bytes = lib8();
+    const lib = parseX7l(bytes);
+    const plan = planImport(lib, levelsFor(lib, bytes));
+    const inst = plan.instruments[0];
+    expect(inst.windows).toHaveLength(4);
+    expect(inst.sampleCount).toBe(EIGHT.length);
+    const files = inst.zones.flatMap((z) => z.samples.map((s) => s.file));
+    expect(new Set(files).size).toBe(files.length);
+    // the zones carry the source's own velocity spans, not an even re-split
+    expect(inst.windows.map((w) => `${w.lo}-${w.hi}`)).toEqual(['1-32', '33-64', '65-95', '96-127']);
+    // and the two windows sharing a span are round robins of one zone
+    expect(inst.zones[0].samples.map((s) => s.rr)).toEqual([1, 2]);
+  });
+
+  it('refuses in-map velocity windows that do not tile 1..127', () => {
+    const bytes = buildFakeLibrary([
+      {
+        name: '1:Gappy',
+        zones: [
+          { lo: 21, hi: 108, root: 60, samples: 256, vlo: 1, vhi: 40 },
+          { lo: 21, hi: 108, root: 60, samples: 256, vlo: 60, vhi: 127 },
+        ],
+        amp: 9000,
+      },
+    ]);
+    const lib = parseX7l(bytes);
+    expect(() => planImport(lib, levelsFor(lib, bytes))).toThrow(/do not tile 1\.\.127/);
+  });
+});
+
+describe('A — grouping waveforms into instruments', () => {
+  const ladder = (base: number, step: number, count: number, name: string): FakeWave => ({
+    name,
+    zones: Array.from({ length: count }, (_, i) => ({
+      lo: base + i * step,
+      hi: base + i * step + step - 1,
+      root: base + i * step,
+      samples: 128,
+    })),
+    amp: 9000,
+  });
+
+  it('merges key-split partners into one instrument covering the whole ladder', () => {
+    // two waveforms, roots every 6 semitones, offset by 3 → a 3-semitone ladder
+    const bytes = buildFakeLibrary([ladder(21, 6, 8, '1:Split A'), ladder(24, 6, 8, '1:Split B')]);
+    const lib = parseX7l(bytes);
+    expect(findKeySplitGroups(lib.waveforms)).toHaveLength(1);
+    const plan = planImport(lib, levelsFor(lib, bytes));
+    expect(plan.instruments).toHaveLength(1);
+    const inst = plan.instruments[0];
+    expect(inst.keyzoneCount).toBe(16);
+    expect(inst.windows).toHaveLength(1);
+    // the merged zones tile the span with no gap and no overlap
+    const zones = [...inst.zones].sort((x, y) => x.keyRangeLo - y.keyRangeLo);
+    for (let i = 1; i < zones.length; i++) {
+      expect(zones[i].keyRangeLo).toBe(zones[i - 1].keyRangeHi + 1);
+    }
+    // and both source waveforms are used
+    const used = [...new Set(inst.zones.flatMap((z) => z.samples.map((s) => s.waveformIndex)))].sort();
+    expect(used).toEqual([0, 1]);
+  });
+
+  it('does not merge waveforms whose roots are not an interleaved ladder', () => {
+    const bytes = buildFakeLibrary([ladder(21, 6, 8, '1:One'), ladder(22, 6, 8, '1:Two')]);
+    const lib = parseX7l(bytes);
+    // offset 1 of 6 with two members: the union is not an even 3-semitone ladder
+    expect(findKeySplitGroups(lib.waveforms)).toHaveLength(0);
+  });
+
+  it('layers waveforms whose names differ only by a variant token', () => {
+    const bytes = fake([2000, 9000]);
+    const lib = parseX7l(bytes);
+    expect(lib.waveforms.map((w) => w.name)).toEqual(['Fake EP L1', 'Fake EP L2']);
+    const plan = planImport(lib, levelsFor(lib, bytes));
+    expect(plan.instruments).toHaveLength(1);
+    expect(plan.instruments[0].windows).toHaveLength(2);
+  });
+
+  it('keeps unrelated waveforms that share a key map as separate instruments', () => {
+    // exactly the Montage Triton case: one key map, several unrelated names
+    const bytes = buildFakeLibrary([
+      { name: '1:Brass Low', zones: FAKE_ZONES, amp: 4000 },
+      { name: '1:M1 Organ', zones: FAKE_ZONES, amp: 9000 },
+      { name: '1:analogpad High', zones: FAKE_ZONES, amp: 14000 },
+    ]);
+    const lib = parseX7l(bytes);
+    expect(keyMapSignature(lib.waveforms[0])).toBe(keyMapSignature(lib.waveforms[1]));
+    const plan = planImport(lib, levelsFor(lib, bytes));
+    expect(plan.instruments.map((i) => i.name)).toEqual(['Brass Low', 'M1 Organ', 'analogpad High']);
+    for (const inst of plan.instruments) expect(inst.windows).toHaveLength(1);
+  });
+
+  it('reduces a name to the stem that identifies the instrument', () => {
+    expect(waveformStem('MKS20 pn1')).toBe('MKS20');
+    expect(waveformStem('MKS20 pn2')).toBe('MKS20');
+    expect(waveformStem('MK 80 p')).toBe('MK 80');
+    expect(waveformStem('MK 80 f')).toBe('MK 80');
+    expect(waveformStem('DYNO 3')).toBe('DYNO');
+    expect(waveformStem('Grand Lady D2')).toBe('Grand Lady');
+    expect(waveformStem('AZ mp SE')).toBe('AZ SE');
+    expect(waveformStem('AZ p SE')).toBe('AZ SE');
+    expect(waveformStem('Strings MF')).toBe('Strings');
+    // and the ones that must NOT collapse together
+    expect(waveformStem('M1 Organ')).toBe('M1 Organ');
+    expect(waveformStem('Brass Low')).not.toBe(waveformStem('Brass High'));
+    expect(waveformStem('Stac P')).not.toBe(waveformStem('Strings P'));
+  });
+});
+
+describe('B — a file that stops early', () => {
+  it('names the shortfall instead of blaming the block layout', () => {
+    const good = fake([2000, 9000]);
+    // lop off the tail, exactly as an interrupted download does
+    const short = good.slice(0, good.length - 600);
+    let caught: unknown;
+    try {
+      parseX7l(short);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(X7lTruncatedError);
+    const err = caught as X7lTruncatedError;
+    expect(err.message).toMatch(/incomplete/);
+    expect(err.message).toMatch(/is missing/);
+    expect(err.message).toMatch(/Re-download/);
+    expect(err.declaredBytes).toBeGreaterThan(err.actualBytes);
+    expect(err.actualBytes).toBe(short.length);
+  });
+});
+
+describe('C — the field at +56 is a handle, not a loop start', () => {
+  /**
+   * The shape the batch run reported: a short sample whose whole length is the
+   * loop, with a large value sitting at +56. Reading +56 as a 32-bit loop
+   * start made it "loop 48016..30463 in 30464 samples" and the file was
+   * refused; +44 is the real loop start and says 0.
+   */
+  const shortOneShot = () => {
+    const b = buildFakeLibrary([
+      { name: '1:Short', zones: [{ lo: 21, hi: 108, root: 60, samples: 30464 }], amp: 9000 },
+    ]);
+    const zoneAt = findTag(b, 'DWFM') + 12 + 8 + 4;
+    // handle 48016 — larger than the sample is long
+    b[zoneAt + 56] = 48016 & 255;
+    b[zoneAt + 57] = (48016 >> 8) & 255;
+    return b;
+  };
+
+  it('parses a whole-sample loop as a one-shot however large the handle is', () => {
+    const lib = parseX7l(shortOneShot());
+    const z = lib.waveforms[0].keyzones[0];
+    expect(z.sampleId).toBe(48016);
+    expect(z.loopStartSample).toBe(0);
+    expect(z.loopEndSample).toBe(z.lengthSamples - 1);
+    expect(lib.waveforms[0].oneShot).toBe(true);
+  });
+
+  it('writes loop: null for it', () => {
+    const bytes = shortOneShot();
+    const lib = parseX7l(bytes);
+    const plan = planImport(lib, levelsFor(lib, bytes));
+    const { fs, out } = memFs();
+    const inst = plan.instruments[0];
+    convertInstrument(bytes, lib, inst, '/out', fs, { author: 't', sourceFileName: 'f.X7L' });
+    const json = JSON.parse(out.files.get(`/out/${inst.bundleName}/instrument.json`) as string);
+    expect(json.soundType).toBe('decaying');
+    expect(json.zones[0].roundRobins[0].loop).toBeNull();
+  });
+
+  it('carries a genuine loop region straight over from +44/+48', () => {
+    const bytes = buildFakeLibrary([
+      {
+        name: '1:Looped',
+        zones: [{ lo: 21, hi: 108, root: 60, samples: 4000, loopStart: 1000, loopEnd: 3500 }],
+        amp: 9000,
+      },
+    ]);
+    const lib = parseX7l(bytes);
+    expect(lib.waveforms[0].oneShot).toBe(false);
+    const plan = planImport(lib, levelsFor(lib, bytes));
+    const { fs, out } = memFs();
+    const inst = plan.instruments[0];
+    convertInstrument(bytes, lib, inst, '/out', fs, { author: 't', sourceFileName: 'f.X7L' });
+    const json = JSON.parse(out.files.get(`/out/${inst.bundleName}/instrument.json`) as string);
+    expect(json.soundType).toBe('sustaining');
+    expect(json.zones[0].roundRobins[0].loop).toEqual({
+      startSample: 1000,
+      endSample: 3500,
+      crossfadeSamples: 0,
+    });
+  });
+
+  it('refuses a keyzone whose +58 half-word is used, rather than guessing', () => {
+    const b = fake([2000]);
+    const zoneAt = findTag(b, 'DWFM') + 12 + 8 + 4;
+    b[zoneAt + 58] = 1;
+    expect(() => parseX7l(b)).toThrow(/half-word at \+58/);
+  });
+});
+
+describe('D — YSFC version gate', () => {
+  it('accepts 5.0.1, now that a 5.x file has been verified', () => {
+    const lib = parseX7l(buildFakeLibrary([{ name: '1:Five', zones: FAKE_ZONES, amp: 9000 }], '5.0.1'));
+    expect(lib.version).toBe('5.0.1');
+    expect(lib.waveforms).toHaveLength(1);
+  });
+
+  it('accepts .X8L as a supported extension', () => {
+    expect(SUPPORTED_EXTENSIONS as readonly string[]).toContain('x8l');
+    expect(UNVERIFIED_EXTENSIONS as readonly string[]).not.toContain('x8l');
+  });
+
+  it('still refuses versions with no verified file', () => {
+    for (const v of ['3.0.5', '6.0.0']) {
+      expect(() =>
+        parseX7l(buildFakeLibrary([{ name: '1:V', zones: FAKE_ZONES, amp: 9000 }], v)),
+      ).toThrow(/is not supported/);
+    }
+  });
+});
+
+describe('catalogue names', () => {
+  it('reads the name at +22, past the 2-byte category code', () => {
+    // the fixture writes a printable code (0x27 0x21) before the name, exactly
+    // like the real files whose names came out as "<code>18:DYNO 1"
+    const lib = parseX7l(buildFakeLibrary([{ name: '18:DYNO 1', zones: FAKE_ZONES, amp: 9000 }]));
+    expect(lib.waveforms[0].rawName).toBe('18:DYNO 1');
+    expect(lib.waveforms[0].name).toBe('DYNO 1');
+  });
 });

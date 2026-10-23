@@ -282,7 +282,9 @@ function loadLibrary(filePath: string) {
     const hint = (UNVERIFIED_EXTENSIONS as readonly string[]).includes(ext)
       ? ` ".${ext}" libraries look like the same YAMAHA-YSFC container but have not been verified against a real file, so they are not accepted yet.`
       : '';
-    throw new Error(`Unsupported library type ".${ext}" — expected .X7L.${hint}`);
+    throw new Error(
+      `Unsupported library type ".${ext}" — expected ${SUPPORTED_EXTENSIONS.map((e) => `.${e.toUpperCase()}`).join(' or ')}.${hint}`,
+    );
   }
   const st = statSync(filePath);
   if (libCache && libCache.path === filePath && libCache.mtimeMs === st.mtimeMs) return libCache;
@@ -513,7 +515,7 @@ ipcMain.handle('dialog:chooseFile', async () => {
     title: 'Choose a Yamaha MONTAGE library',
     properties: ['openFile'],
     filters: [
-      { name: 'Yamaha MONTAGE library', extensions: ['X7L', 'x7l'] },
+      { name: 'Yamaha YSFC library', extensions: ['X7L', 'x7l', 'X8L', 'x8l'] },
       { name: 'All files', extensions: ['*'] },
     ],
   });

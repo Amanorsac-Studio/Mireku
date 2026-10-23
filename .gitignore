@@ -35,3 +35,5 @@ apps/lowend/release/
 apps/lowend/models/
 apps/lowend/build-tester/
 apps/lowend/build-mac-tester/
+apps/lowend/
+apps/topend/

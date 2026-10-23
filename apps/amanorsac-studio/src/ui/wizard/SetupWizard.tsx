@@ -9,6 +9,7 @@ import { Button, Field, Input, Label, Panel, Select, useWorldCloth } from '../co
 import { useDeviceScan } from '../settings/useDeviceScan';
 import { GoldDivider, Segmented } from '../hardware';
 import { worldAccent } from '../theme/tokens';
+import { CATEGORIES, categoryFromWorld, type Category } from '@amanorsac/aofas-format/catalog';
 import { IconLeft, IconRight } from '../assets/icons';
 
 const WORLDS: { id: World; label: string }[] = [
@@ -30,6 +31,14 @@ export function SetupWizard() {
   const [step, setStep] = useState(0);
   const [name, setName] = useState('');
   const [world, setWorld] = useState<World>('rhodes-ep');
+  // The catalogue shelf follows the world until the user says otherwise; once
+  // they choose by hand we stop overwriting their answer.
+  const [category, setCategory] = useState<Category>(categoryFromWorld('rhodes-ep'));
+  const [categoryTouched, setCategoryTouched] = useState(false);
+  const chooseWorld = (w: World) => {
+    setWorld(w);
+    if (!categoryTouched) setCategory(categoryFromWorld(w));
+  };
   const [soundType, setSoundType] = useState<'decaying' | 'sustaining' | 'auto-detect'>('auto-detect');
   const [channels, setChannels] = useState<Channels>('stereo');
   const [mode, setMode] = useState<'guided' | 'auto'>('guided');
@@ -63,6 +72,7 @@ export function SetupWizard() {
       id: `session-${Date.now()}`,
       instrumentName: name || 'Untitled Instrument',
       world,
+      category,
       soundType,
       channels,
       captureMode: mode,
@@ -120,9 +130,25 @@ export function SetupWizard() {
             <Field label="World">
               <div className="as-row" style={{ alignItems: 'stretch' }}>
                 {WORLDS.map((w) => (
-                  <WorldCard key={w.id} id={w.id} label={w.label} selected={world === w.id} onSelect={() => setWorld(w.id)} />
+                  <WorldCard key={w.id} id={w.id} label={w.label} selected={world === w.id} onSelect={() => chooseWorld(w.id)} />
                 ))}
               </div>
+            </Field>
+          )}
+          {step === 1 && (
+            <Field label="Catalogue Shelf">
+              <Select
+                value={category}
+                onChange={(v) => {
+                  setCategory(v as Category);
+                  setCategoryTouched(true);
+                }}
+                options={CATEGORIES.map((c) => ({ value: c, label: c.replace(/-/g, ' ') }))}
+              />
+              <Label>
+                How every Amanorsac app files this sound. The world above stays a JM Signature
+                concept; this is ours, and it is what the sealed .aofas carries.
+              </Label>
             </Field>
           )}
           {step === 2 && (
@@ -280,7 +306,7 @@ export function SetupWizard() {
                 <div className="as-title">{name || 'Untitled Instrument'}</div>
               </div>
               <Label>
-                {world} · {soundType} · {channels} · {mode} mode
+                {world} · {category.replace(/-/g, ' ')} · {soundType} · {channels} · {mode} mode
               </Label>
               <Label>
                 {plan.notes.length} notes ({midiToNoteName(plan.notes[0])}–{midiToNoteName(plan.notes[plan.notes.length - 1])}), every{' '}

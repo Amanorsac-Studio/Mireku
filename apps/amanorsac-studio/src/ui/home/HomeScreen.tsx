@@ -44,6 +44,13 @@ export function HomeScreen() {
             <Button onClick={() => setScreen('import')}>
               <IconKeyboard size={14} /> Import a Library
             </Button>
+            {/* Sound design on what Sanctuary already has: rename, re-file, build presets. */}
+            <Button onClick={() => setScreen('library')}>
+              <IconMore size={14} /> Open Sanctuary Library
+            </Button>
+            <Button onClick={() => setScreen('sound')}>
+              <IconStar size={14} /> Design a Sound
+            </Button>
           </div>
         </div>
       </Panel>

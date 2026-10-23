@@ -20,6 +20,11 @@ export class MidiManager {
   private input: MIDIInput | null = null;
   private output: MIDIOutput | null = null;
   events: MidiEvents = {};
+  /**
+   * UI observers of incoming notes (velocity 0 = note off), independent of
+   * `events`, so on-screen keyboards light up whichever screen owns playback.
+   */
+  readonly noteWatchers = new Set<(note: number, velocity: number) => void>();
 
   permission: MidiPermission = 'unsupported';
   /**
@@ -86,8 +91,13 @@ export class MidiManager {
       // when no screen has installed handlers
       if (status !== 0xf0) this.activityAt = performance.now();
       if (status === 0x90 || status === 0x80) this.lastNote = data[1];
-      if (status === 0x90 && data[2] > 0) this.events.onNoteOn?.(data[1], data[2]);
-      else if (status === 0x80 || (status === 0x90 && data[2] === 0)) this.events.onNoteOff?.(data[1]);
+      if (status === 0x90 && data[2] > 0) {
+        this.events.onNoteOn?.(data[1], data[2]);
+        this.noteWatchers.forEach((w) => w(data[1], data[2]));
+      } else if (status === 0x80 || (status === 0x90 && data[2] === 0)) {
+        this.events.onNoteOff?.(data[1]);
+        this.noteWatchers.forEach((w) => w(data[1], 0));
+      }
       else if (status === 0xb0) this.events.onControlChange?.(data[1], data[2]);
     };
   }

@@ -204,6 +204,7 @@ export const fxPanel = {
   compressor: 'red',
   plateReverb: 'green',
   widener: 'green',
+  svFilter: 'purple',
 } as const;
 
 /** Widener is the one unit that carries a gold wash over its plate. */
@@ -310,6 +311,7 @@ export const fxTint = {
   plateReverb: '#3A4E5C',
   hallShimmer: '#33406F',
   widener: '#4A2E55',
+  svFilter: '#4E3A6F',
 } as const;
 
 function toVars(): Record<string, string> {

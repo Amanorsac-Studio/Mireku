@@ -24,6 +24,65 @@ var AofasError = class extends Error {
   }
 };
 
+// ../../packages/aofas-format/dist/catalog.js
+var CATEGORIES = [
+  "grand-piano",
+  "felt-piano",
+  "upright-piano",
+  "electric-piano",
+  "strings",
+  "pad",
+  "shimmer",
+  "synth",
+  "bells-mallets",
+  "other"
+];
+function isCategory(v) {
+  return typeof v === "string" && CATEGORIES.includes(v);
+}
+function categoryFromWorld(world) {
+  switch (world) {
+    case "rhodes-ep":
+    case "fm":
+      return "electric-piano";
+    case "strings":
+      return "strings";
+    case "mks":
+      return "synth";
+    default:
+      return "other";
+  }
+}
+var AMANORSAC_ORIGINAL = {
+  license: {
+    id: "proprietary",
+    name: "Amanorsac Studio \u2014 all rights reserved",
+    requiresAttribution: false
+  },
+  sources: []
+};
+function licensingProblems(l) {
+  const out = [];
+  const check = (li, where) => {
+    if (!li.id)
+      out.push(`${where}: licence id is missing`);
+    if (li.requiresAttribution && !li.attribution?.trim()) {
+      out.push(`${where}: licence ${li.id} requires attribution, but no credit line was given`);
+    }
+  };
+  check(l.license, "instrument");
+  l.sources.forEach((s, i) => {
+    if (!s.library?.trim())
+      out.push(`source ${i + 1}: library name is missing`);
+    check(s.license, `source "${s.library || i + 1}"`);
+  });
+  const inherited = l.sources.filter((s) => s.license.requiresAttribution);
+  if (inherited.length > 0 && !l.license.requiresAttribution) {
+    out.push(`instrument licence says no attribution is required, but ${inherited.length} source(s) (${inherited.map((s) => s.library).join(", ")}) require it \u2014 the obligation travels with the audio`);
+  }
+  return out;
+}
+
 // ../../packages/aofas-format/dist/crypto.js
 import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes } from "node:crypto";
 var TAG_BYTES = 16;
@@ -333,6 +392,16 @@ Re-sample them, or pass --drop-empty to seal the rest without them.`);
         throw new Error(`instrument.json references a missing sample: ${rr.file}`);
     }
   }
+  const licensing = opts.licensing ?? AMANORSAC_ORIGINAL;
+  const problems = licensingProblems(licensing);
+  if (problems.length > 0) {
+    throw new Error(`this library cannot be sealed as licensed:
+  ${problems.join("\n  ")}`);
+  }
+  if (opts.category && !isCategory(opts.category)) {
+    throw new Error(`unknown category "${opts.category}" \u2014 see CATEGORIES in catalog.ts`);
+  }
+  const category = opts.category ?? categoryFromWorld(instrument.meta.world);
   const card = {
     format: "aofas",
     formatVersion: FORMAT_VERSION,
@@ -344,14 +413,17 @@ Re-sample them, or pass --drop-empty to seal the rest without them.`);
     sampleCount: planned.length,
     totalAudioBytes,
     minAppVersion: opts.minAppVersion ?? "1.0.0",
-    keyId
+    keyId,
+    category,
+    tags: opts.tags?.length ? opts.tags : void 0,
+    licensing
   };
   const cardBytes = Buffer.from(JSON.stringify(card), "utf8");
   planned.forEach((s, i) => {
     opts.onProgress?.(i, planned.length, `hashing ${s.path}`);
     s.sha256 = hashRange(s.srcFile, s.srcOffset, s.byteLength);
   });
-  const indexPlain = layoutIndex(instrument, presets, planned, cardBytes.length, chunkSize);
+  const indexPlain = layoutIndex(instrument, opts.provenance, presets, planned, cardBytes.length, chunkSize);
   const indexOffset = HEADER_SIZE + cardBytes.length;
   const dataOffset = indexOffset + indexPlain.length;
   const dataLength = planned.reduce((n, s) => n + s.byteLength + s.chunkCount * TAG_BYTES, 0);
@@ -420,13 +492,14 @@ Re-sample them, or pass --drop-empty to seal the rest without them.`);
     droppedEmpty: empty
   };
 }
-function layoutIndex(instrument, presets, streams, cardLength, chunkSize) {
+function layoutIndex(instrument, provenance, presets, streams, cardLength, chunkSize) {
   const build = (pad) => {
     const index = {
       aofas: 1,
       instrument,
       presets,
-      streams: streams.map(({ srcFile: _f, srcOffset: _o, ...s }) => s)
+      streams: streams.map(({ srcFile: _f, srcOffset: _o, ...s }) => s),
+      provenance
     };
     index._pad = " ".repeat(pad);
     return Buffer.from(JSON.stringify(index), "utf8");
@@ -1189,6 +1262,19 @@ ipcMain.handle(
     return p;
   }
 );
+async function decodeSampleFile(p) {
+  const bytes = readFileSync3(p);
+  if (!/\.flac$/i.test(p) && bytes.toString("ascii", 0, 4) !== "fLaC") return decodeWav(bytes);
+  const { FLACDecoder } = await import("@wasm-audio-decoders/flac");
+  const dec = new FLACDecoder();
+  await dec.ready;
+  try {
+    const { channelData, samplesDecoded, sampleRate } = await dec.decodeFile(new Uint8Array(bytes));
+    return { sampleRate, channels: channelData.map((c) => c.subarray(0, samplesDecoded)) };
+  } finally {
+    dec.free();
+  }
+}
 ipcMain.handle("take:read", (_e, id, file) => {
   const p = join3(sessionDir(id), "samples", file);
   if (!existsSync2(p)) return null;
@@ -1251,6 +1337,7 @@ ipcMain.handle("export:bundle", (_e, req) => {
       out,
       keyRing: makeKeyRing(),
       author: "Amanorsac Studio",
+      category: req.category,
       // A take that captured nothing is reported in the validation issues
       // above; it must not stop the rest of the instrument being sealed.
       dropEmptySamples: true
@@ -1269,6 +1356,99 @@ ipcMain.handle("export:bundle", (_e, req) => {
     stats: result.stats ?? { sampleCount: 0, presetCount: 0, totalBytes },
     totalBytes
   };
+});
+function sanctuaryLibraryDir() {
+  const d = join3(homedir2(), "Documents", "Amanorsac Studio", "Sanctuary", "Library");
+  mkdirSync2(d, { recursive: true });
+  return d;
+}
+function readJson(path) {
+  try {
+    return JSON.parse(readFileSync3(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+ipcMain.handle("library:list", () => {
+  const lib = sanctuaryLibraryDir();
+  const out = [];
+  for (const e of readdirSync2(lib, { withFileTypes: true })) {
+    if (!e.isDirectory() || !e.name.toLowerCase().endsWith(".jmi")) continue;
+    const dir = join3(lib, e.name);
+    const inst = readJson(join3(dir, "instrument.json"));
+    if (!inst?.meta) continue;
+    const side = readJson(join3(dir, "sanctuary.json"));
+    out.push({
+      dir,
+      name: inst.meta.name ?? e.name,
+      world: inst.meta.world ?? "",
+      category: side?.category ?? "",
+      sampleCount: (inst.zones ?? []).reduce((n, z) => n + z.roundRobins.length, 0),
+      zoneCount: (inst.zones ?? []).length,
+      sustaining: inst.soundType === "sustaining"
+    });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+});
+ipcMain.handle("bundle:open", (_e, dir) => {
+  const instrument = readJson(join3(dir, "instrument.json"));
+  if (!instrument) throw new Error("Not a .jmi bundle: " + dir);
+  const presetsDir = join3(dir, "presets");
+  const presets = existsSync2(presetsDir) ? readdirSync2(presetsDir).filter((f) => f.toLowerCase().endsWith(".json")).sort().map((f) => ({ fileName: f, json: readFileSync3(join3(presetsDir, f), "utf8") })) : [];
+  const side = readJson(join3(dir, "sanctuary.json"));
+  return { dir, instrument, presets, category: side?.category ?? "" };
+});
+ipcMain.handle("bundle:readSample", async (_e, dir, file) => {
+  const p = join3(dir, file.replace(/^[\\/]+/, ""));
+  if (!p.startsWith(dir) || !existsSync2(p)) return null;
+  const { sampleRate, channels } = await decodeSampleFile(p);
+  return { sampleRate, channels: channels.map((c) => c.buffer) };
+});
+ipcMain.handle("bundle:save", (_e, req) => {
+  const instPath = join3(req.dir, "instrument.json");
+  const inst = readJson(instPath);
+  if (!inst) throw new Error("Not a .jmi bundle: " + req.dir);
+  if (req.name && req.name.trim() && req.name.trim() !== inst.meta.name) {
+    inst.meta.name = req.name.trim();
+    writeFileSync2(instPath, JSON.stringify(inst, null, 2), "utf8");
+  }
+  if (req.category) {
+    const sidePath = join3(req.dir, "sanctuary.json");
+    const side = readJson(sidePath) ?? { tags: [] };
+    side.category = req.category;
+    writeFileSync2(sidePath, JSON.stringify(side, null, 2), "utf8");
+  }
+  const presetsDir = join3(req.dir, "presets");
+  mkdirSync2(presetsDir, { recursive: true });
+  for (const f of readdirSync2(presetsDir)) if (f.toLowerCase().endsWith(".json")) rmSync(join3(presetsDir, f));
+  for (const p of req.presets) writeFileSync2(join3(presetsDir, p.fileName.replace(/[\\/]/g, "_")), p.json, "utf8");
+  const result = validateBundle(req.dir);
+  return { ok: result.valid, issues: result.issues };
+});
+function soundsDir() {
+  const d = join3(sanctuaryLibraryDir(), "Sounds");
+  mkdirSync2(d, { recursive: true });
+  return d;
+}
+ipcMain.handle("sound:list", () => {
+  const out = [];
+  for (const e of readdirSync2(soundsDir())) {
+    if (!e.toLowerCase().endsWith(".sound.json")) continue;
+    const file = join3(soundsDir(), e);
+    const j = readJson(file);
+    if (j) out.push({ file, name: j.name ?? e, parts: j.parts?.length ?? 0 });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+});
+ipcMain.handle("sound:load", (_e, file) => {
+  if (!file.startsWith(soundsDir())) throw new Error("Not a library sound: " + file);
+  return readFileSync3(file, "utf8");
+});
+ipcMain.handle("sound:save", (_e, req) => {
+  const safe = req.name.trim().replace(/[<>:"/\\|?*]+/g, "").trim() || "Sound";
+  const file = join3(soundsDir(), `${safe}.sound.json`);
+  writeFileSync2(file, req.json, "utf8");
+  return { file };
 });
 var libCache = null;
 function loadLibrary(filePath) {

@@ -21,3 +21,17 @@ studio-keys.json
 # the .aofas reference vector SOURCE bundle is regenerable; the vector itself
 # (testdata/aofas/) is committed because the VST reader is built against it
 testdata/aofas-src/
+
+# scratch MSVC build output for header-only C++ package tests
+packages/*/cpp/*.exe
+packages/*/cpp/*.obj
+packages/*/cpp/*.pdb
+packages/*/cpp/*.ilk
+
+# Low End: build output, release installers, and the separation model (fetched, never committed)
+apps/lowend/build/
+apps/lowend/build-mac/
+apps/lowend/release/
+apps/lowend/models/
+apps/lowend/build-tester/
+apps/lowend/build-mac-tester/

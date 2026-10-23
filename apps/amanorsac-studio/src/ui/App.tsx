@@ -9,6 +9,10 @@ import { LoopbackHelper } from './auto/LoopbackHelper';
 import { AuditionScreen } from './audition/AuditionScreen';
 import { ExportScreen } from './export/ExportScreen';
 import { ImportScreen } from './import/ImportScreen';
+import { LibraryScreen } from './library/LibraryScreen';
+import { LibraryEditScreen } from './library/LibraryEditScreen';
+import { SoundDesignerScreen } from './sound/SoundDesignerScreen';
+import { PresetMakerScreen } from './preset/PresetMakerScreen';
 import { KitMeter, Segmented } from './hardware';
 import { KIT } from './assets/kit';
 import { IconGear } from './assets/icons';
@@ -47,9 +51,12 @@ export function App() {
   navOptions.push({ value: 'home', label: 'Sessions' });
   // Import is a standalone path: it needs no capture session, so it sits
   // alongside Sessions rather than inside a session's Capture/Audition/Export run.
+  navOptions.push({ value: 'library', label: 'Library' });
+  navOptions.push({ value: 'preset', label: 'Preset Maker' });
+  navOptions.push({ value: 'sound', label: 'Sound Designer' });
   navOptions.push({ value: 'import', label: 'Import' });
 
-  const navValue = navOptions.some((o) => o.value === screen) ? screen : 'home';
+  const navValue = navOptions.some((o) => o.value === screen) ? screen : screen === 'libraryEdit' ? 'library' : 'home';
 
   return (
     <div className="as-app">
@@ -89,6 +96,10 @@ export function App() {
         {screen === 'audition' && <AuditionScreen />}
         {screen === 'export' && <ExportScreen />}
         {screen === 'import' && <ImportScreen />}
+        {screen === 'library' && <LibraryScreen />}
+        {screen === 'libraryEdit' && <LibraryEditScreen />}
+        {screen === 'preset' && <PresetMakerScreen />}
+        {screen === 'sound' && <SoundDesignerScreen />}
       </div>
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
       <StatusBar />

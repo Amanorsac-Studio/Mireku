@@ -15,7 +15,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   DEFAULT_RACKS,
   DEFAULT_UNIT_BYPASSED,
+  FX_REGISTRY,
   buildDefaultRack,
+  defaultParams,
   defaultEngineParams,
   defaultUnitState,
   setBundleFxBypassed,
@@ -147,5 +149,90 @@ describe('jmi fx-off — the remedy for bundles already on disk', () => {
     setBundleFxBypassed(bundle, false);
     const after = JSON.parse(readFileSync(join(bundle, 'presets', 'Warm.json'), 'utf8')) as Preset;
     expect(after.fxRack.every((u) => !u.bypassed)).toBe(true);
+  });
+});
+
+/**
+ * CLIENT REQUEST — "put mix knob on all the time based effects".
+ *
+ * Phaser and flanger were the two time-based units with no wet/dry control at
+ * all. `mix` is APPENDED to each list, because a parameter's index in these
+ * lists is baked into every FX preset ever saved, and the default is 50 —
+ * which is the blend both engines already hard-wired (`0.5 * (dry + wet)`), so
+ * a preset saved before this change renders exactly as it did.
+ *
+ * Tremolo/auto-pan and the widener deliberately do NOT get one: tremolo is
+ * amplitude modulation (blending its output back with dry is literally what
+ * `depth` already does) and the widener is an M/S width control whose `width`
+ * parameter already passes through unity at 100. A Mix there would be a second
+ * control for the same axis.
+ */
+describe('CLIENT REQUEST — Mix on the time-based FX', () => {
+  const TIME_BASED_WITH_MIX = [
+    'jmChorus',
+    'phaser',
+    'flanger',
+    'tapeDelay',
+    'digitalDelay',
+    'plateReverb',
+    'hallShimmer',
+  ] as const;
+
+  for (const type of TIME_BASED_WITH_MIX) {
+    it(`${type} exposes mix as 0..100`, () => {
+      const spec = FX_REGISTRY[type].params.find((p) => p.id === 'mix');
+      expect(spec, `${type} has no mix parameter`).toBeDefined();
+      expect(spec!.kind).toBe('float');
+      expect(spec!.min).toBe(0);
+      expect(spec!.max).toBe(100);
+      expect(spec!.label).toBe('Mix');
+    });
+  }
+
+  it('the two new ones default to 50 — the blend the DSP already produced', () => {
+    expect(defaultParams('phaser').mix).toBe(50);
+    expect(defaultParams('flanger').mix).toBe(50);
+  });
+
+  it('mix is APPENDED, never inserted: every other index is where it was', () => {
+    expect(FX_REGISTRY.phaser.params.map((p) => p.id)).toEqual([
+      'rate',
+      'depth',
+      'feedback',
+      'stages',
+      'mix',
+    ]);
+    expect(FX_REGISTRY.flanger.params.map((p) => p.id)).toEqual([
+      'rate',
+      'depth',
+      'feedback',
+      'manual',
+      'mix',
+    ]);
+  });
+
+  it('tremolo and the widener are left alone on purpose', () => {
+    expect(FX_REGISTRY.tremoloAutoPan.params.some((p) => p.id === 'mix')).toBe(false);
+    expect(FX_REGISTRY.widener.params.some((p) => p.id === 'mix')).toBe(false);
+    // ...and so are the three that are not time-based at all
+    for (const t of ['epPreamp', 'vintageEq', 'compressor'] as const)
+      expect(FX_REGISTRY[t].params.some((p) => p.id === 'mix')).toBe(false);
+  });
+
+  it('a preset saved before the change has no mix key, still validates, and loads at 50', () => {
+    const legacy = presetWith(
+      [
+        { type: 'phaser', bypassed: false, params: { rate: 0.3, depth: 60, feedback: 40, stages: '4' } },
+        { type: 'flanger', bypassed: false, params: { rate: 0.2, depth: 50, feedback: 30, manual: 2 } },
+      ],
+      'Legacy FX',
+    );
+    expect(validatePresetJson(legacy).filter((i) => i.level === 'error')).toEqual([]);
+    for (const unit of legacy.fxRack) expect('mix' in unit.params).toBe(false);
+    // the load path every app uses: registry defaults, then the saved keys on top
+    for (const unit of legacy.fxRack) {
+      const loaded = { ...defaultParams(unit.type), ...unit.params };
+      expect(loaded.mix).toBe(50);
+    }
   });
 });

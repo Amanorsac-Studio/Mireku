@@ -3,7 +3,7 @@
  * view state only. */
 
 import { create } from 'zustand';
-import type { Preset } from '@jm/jmi-format/web';
+import type { Instrument, Preset } from '@jm/jmi-format/web';
 import type { SessionPosition, SessionState } from '../engine/session';
 import type { GuidedPhase } from '../engine/guided';
 import { createPatchQueue, type PatchQueueState } from '../engine/patchQueue';
@@ -16,7 +16,11 @@ export type Screen =
   | 'loopback'
   | 'audition'
   | 'export'
-  | 'import';
+  | 'import'
+  | 'library'
+  | 'libraryEdit'
+  | 'sound'
+  | 'preset';
 
 export interface VerdictFlash {
   kind: 'accepted' | 'coaching';
@@ -147,6 +151,8 @@ interface AppState {
   queuePitchPrompt: QueuePitchPrompt | null;
   presets: { fileName: string; preset: Preset }[];
   activePresetIndex: number;
+  /** a Sanctuary-library instrument opened for editing (presets, name, category) */
+  libraryBundle: { dir: string; instrument: Instrument; category: string } | null;
   tempo: number;
   exportResult: ExportResult | null;
   monoFoldOffer: boolean;
@@ -171,6 +177,7 @@ interface AppState {
   setQueuePitchPrompt(p: QueuePitchPrompt | null): void;
   setPresets(p: { fileName: string; preset: Preset }[]): void;
   setActivePresetIndex(i: number): void;
+  setLibraryBundle(b: { dir: string; instrument: Instrument; category: string } | null): void;
   setTempo(bpm: number): void;
   setExportResult(r: ExportResult | null): void;
   setMonoFoldOffer(b: boolean): void;
@@ -197,6 +204,7 @@ export const useApp = create<AppState>((set) => ({
   queuePitchPrompt: null,
   presets: [],
   activePresetIndex: 0,
+  libraryBundle: null,
   tempo: 120,
   exportResult: null,
   monoFoldOffer: false,
@@ -221,6 +229,7 @@ export const useApp = create<AppState>((set) => ({
   setQueuePitchPrompt: (queuePitchPrompt) => set({ queuePitchPrompt }),
   setPresets: (presets) => set({ presets }),
   setActivePresetIndex: (activePresetIndex) => set({ activePresetIndex }),
+  setLibraryBundle: (libraryBundle) => set({ libraryBundle }),
   setTempo: (tempo) => set({ tempo }),
   setExportResult: (exportResult) => set({ exportResult }),
   setMonoFoldOffer: (monoFoldOffer) => set({ monoFoldOffer }),

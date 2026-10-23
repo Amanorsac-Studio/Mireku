@@ -34,6 +34,18 @@ export interface JmBridge {
   convertLibrary(req: ImportConvertRequest): Promise<{ destDir: string; results: ImportBundleResult[] }>;
   /** Subscribe to conversion progress; returns an unsubscribe function. */
   onImportProgress(cb: (p: ImportProgress) => void): () => void;
+  /** Sanctuary library: every .jmi bundle with its browser category. */
+  listLibrary(): Promise<LibraryEntry[]>;
+  /** Read a bundle's instrument.json, presets and category (no audio). */
+  openBundle(dir: string): Promise<OpenedBundle>;
+  /** Decode one sample of an open bundle (bundle-relative path). */
+  readBundleSample(dir: string, file: string): Promise<{ sampleRate: number; channels: ArrayBuffer[] } | null>;
+  /** Write presets / name / category back into the bundle in place. */
+  saveBundle(req: SaveBundleRequest): Promise<{ ok: boolean; issues: { level: string; path: string; message: string }[] }>;
+  /** Layered sounds saved for Sanctuary (<Library>/Sounds/*.sound.json). */
+  listSounds(): Promise<{ file: string; name: string; parts: number }[]>;
+  loadSound(file: string): Promise<string>;
+  saveSound(req: { name: string; json: string }): Promise<{ file: string }>;
   chooseDir(): Promise<string | null>;
   chooseFile(): Promise<string | null>;
   showItem(path: string): Promise<boolean>;
@@ -82,6 +94,30 @@ export interface ImportBundleResult {
   stats: { sampleCount: number; presetCount: number; totalBytes: number };
 }
 
+export interface LibraryEntry {
+  dir: string;
+  name: string;
+  world: string;
+  category: string;
+  sampleCount: number;
+  zoneCount: number;
+  sustaining: boolean;
+}
+
+export interface OpenedBundle {
+  dir: string;
+  instrument: unknown;
+  presets: { fileName: string; json: string }[];
+  category: string;
+}
+
+export interface SaveBundleRequest {
+  dir: string;
+  name?: string;
+  category?: string;
+  presets: { fileName: string; json: string }[];
+}
+
 const bridge: JmBridge = {
   saveSession: (id, json) => ipcRenderer.invoke('session:save', id, json),
   loadSession: (id) => ipcRenderer.invoke('session:load', id),
@@ -103,6 +139,13 @@ const bridge: JmBridge = {
       ipcRenderer.off('import:progress', listener);
     };
   },
+  listLibrary: () => ipcRenderer.invoke('library:list'),
+  openBundle: (dir) => ipcRenderer.invoke('bundle:open', dir),
+  readBundleSample: (dir, file) => ipcRenderer.invoke('bundle:readSample', dir, file),
+  saveBundle: (req) => ipcRenderer.invoke('bundle:save', req),
+  listSounds: () => ipcRenderer.invoke('sound:list'),
+  loadSound: (file) => ipcRenderer.invoke('sound:load', file),
+  saveSound: (req) => ipcRenderer.invoke('sound:save', req),
   chooseDir: () => ipcRenderer.invoke('dialog:chooseDir'),
   chooseFile: () => ipcRenderer.invoke('dialog:chooseFile'),
   showItem: (p) => ipcRenderer.invoke('shell:showItem', p),

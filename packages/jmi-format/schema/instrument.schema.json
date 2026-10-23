@@ -3,71 +3,210 @@
   "$id": "https://jmstudios.example/schema/instrument.schema.json",
   "title": "JM .jmi instrument.json",
   "type": "object",
-  "required": ["formatVersion", "meta", "soundType", "zones", "velocityMap", "reserved"],
+  "required": [
+    "formatVersion",
+    "meta",
+    "soundType",
+    "zones",
+    "velocityMap",
+    "reserved"
+  ],
   "additionalProperties": false,
   "properties": {
-    "formatVersion": { "const": 1 },
+    "formatVersion": {
+      "const": 1
+    },
     "meta": {
       "type": "object",
-      "required": ["name", "world", "author", "createdAt", "captureMode", "channels", "sampleRate", "bitDepth"],
+      "required": [
+        "name",
+        "world",
+        "author",
+        "createdAt",
+        "captureMode",
+        "channels",
+        "sampleRate",
+        "bitDepth"
+      ],
       "additionalProperties": false,
       "properties": {
-        "name": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "world": { "enum": ["rhodes-ep", "mks", "fm", "strings"] },
-        "author": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "captureMode": { "enum": ["guided", "auto"] },
-        "channels": { "enum": ["mono", "stereo"] },
-        "sampleRate": { "type": "integer", "enum": [44100, 48000, 88200, 96000] },
-        "bitDepth": { "type": "integer", "enum": [16, 24, 32] },
-        "notes": { "type": "string" }
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "world": {
+          "enum": [
+            "rhodes-ep",
+            "mks",
+            "fm",
+            "strings"
+          ]
+        },
+        "author": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "captureMode": {
+          "enum": [
+            "guided",
+            "auto"
+          ]
+        },
+        "channels": {
+          "enum": [
+            "mono",
+            "stereo"
+          ]
+        },
+        "sampleRate": {
+          "type": "integer",
+          "enum": [
+            44100,
+            48000,
+            88200,
+            96000
+          ]
+        },
+        "bitDepth": {
+          "type": "integer",
+          "enum": [
+            16,
+            24,
+            32
+          ]
+        },
+        "notes": {
+          "type": "string"
+        },
+        "renderTrimDb": {
+          "type": "number",
+          "minimum": -60,
+          "maximum": 60
+        }
       }
     },
-    "soundType": { "enum": ["decaying", "sustaining"] },
+    "soundType": {
+      "enum": [
+        "decaying",
+        "sustaining"
+      ]
+    },
     "zones": {
       "type": "array",
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["rootNote", "keyRangeLo", "keyRangeHi", "velRangeLo", "velRangeHi", "roundRobins"],
+        "required": [
+          "rootNote",
+          "keyRangeLo",
+          "keyRangeHi",
+          "velRangeLo",
+          "velRangeHi",
+          "roundRobins"
+        ],
         "additionalProperties": false,
         "properties": {
-          "rootNote": { "type": "integer", "minimum": 0, "maximum": 127 },
-          "keyRangeLo": { "type": "integer", "minimum": 0, "maximum": 127 },
-          "keyRangeHi": { "type": "integer", "minimum": 0, "maximum": 127 },
-          "velRangeLo": { "type": "integer", "minimum": 1, "maximum": 127 },
-          "velRangeHi": { "type": "integer", "minimum": 1, "maximum": 127 },
+          "rootNote": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 127
+          },
+          "keyRangeLo": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 127
+          },
+          "keyRangeHi": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 127
+          },
+          "velRangeLo": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 127
+          },
+          "velRangeHi": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 127
+          },
           "roundRobins": {
             "type": "array",
             "minItems": 1,
             "items": {
               "type": "object",
-              "required": ["file", "peakDb", "lengthMs", "loop"],
+              "required": [
+                "file",
+                "peakDb",
+                "lengthMs",
+                "loop"
+              ],
               "additionalProperties": false,
               "properties": {
                 "file": {
                   "type": "string",
-                  "pattern": "^samples/[A-G]#?-?[0-9]+_v[1-4]_rr[0-9]+\\.wav$"
+                  "pattern": "^samples/(rel_)?[A-G]#?-?[0-9]+_v[0-9]+_rr[0-9]+\\.(wav|flac)$"
                 },
-                "peakDb": { "type": "number", "maximum": 0 },
-                "lengthMs": { "type": "number", "exclusiveMinimum": 0 },
+                "peakDb": {
+                  "type": "number",
+                  "maximum": 0
+                },
+                "lengthMs": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
                 "loop": {
                   "oneOf": [
-                    { "type": "null" },
+                    {
+                      "type": "null"
+                    },
                     {
                       "type": "object",
-                      "required": ["startSample", "endSample", "crossfadeSamples"],
+                      "required": [
+                        "startSample",
+                        "endSample",
+                        "crossfadeSamples"
+                      ],
                       "additionalProperties": false,
                       "properties": {
-                        "startSample": { "type": "integer", "minimum": 0 },
-                        "endSample": { "type": "integer", "exclusiveMinimum": 0 },
-                        "crossfadeSamples": { "type": "integer", "minimum": 0 }
+                        "startSample": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "endSample": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        },
+                        "crossfadeSamples": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
                       }
                     }
                   ]
                 }
               }
             }
+          },
+          "releaseMs": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 20000
+          },
+          "anchorVelocity": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 127
+          },
+          "levelDb": {
+            "type": "number",
+            "minimum": -120,
+            "maximum": 0
           }
         }
       }
@@ -75,26 +214,209 @@
     "velocityMap": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 4,
+      "maxItems": 16,
       "items": {
         "type": "object",
-        "required": ["layer", "name", "lo", "hi"],
+        "required": [
+          "layer",
+          "name",
+          "lo",
+          "hi"
+        ],
         "additionalProperties": false,
         "properties": {
-          "layer": { "type": "integer", "minimum": 1, "maximum": 4 },
-          "name": { "type": "string" },
-          "lo": { "type": "integer", "minimum": 1, "maximum": 127 },
-          "hi": { "type": "integer", "minimum": 1, "maximum": 127 }
+          "layer": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 16
+          },
+          "name": {
+            "type": "string"
+          },
+          "lo": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 127
+          },
+          "hi": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 127
+          }
         }
       }
     },
     "reserved": {
       "type": "object",
-      "required": ["releaseSamples", "pedalDownZones"],
+      "required": [
+        "releaseSamples",
+        "pedalDownZones"
+      ],
       "additionalProperties": false,
       "properties": {
-        "releaseSamples": { "type": "array", "maxItems": 0 },
-        "pedalDownZones": { "type": "array", "maxItems": 0 }
+        "releaseSamples": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "pedalDownZones": {
+          "type": "array",
+          "maxItems": 0
+        }
+      }
+    },
+    "releaseZones": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "rootNote",
+          "keyRangeLo",
+          "keyRangeHi",
+          "velRangeLo",
+          "velRangeHi",
+          "roundRobins",
+          "rtDecayDb"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "rootNote": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 127
+          },
+          "keyRangeLo": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 127
+          },
+          "keyRangeHi": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 127
+          },
+          "velRangeLo": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 127
+          },
+          "velRangeHi": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 127
+          },
+          "roundRobins": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "file",
+                "peakDb",
+                "lengthMs",
+                "loop"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "file": {
+                  "type": "string",
+                  "pattern": "^samples/(rel_)?[A-G]#?-?[0-9]+_v[0-9]+_rr[0-9]+\\.(wav|flac)$"
+                },
+                "peakDb": {
+                  "type": "number",
+                  "maximum": 0
+                },
+                "lengthMs": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "loop": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "startSample",
+                        "endSample",
+                        "crossfadeSamples"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "startSample": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "endSample": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        },
+                        "crossfadeSamples": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "releaseMs": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 20000
+          },
+          "anchorVelocity": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 127
+          },
+          "levelDb": {
+            "type": "number",
+            "minimum": -120,
+            "maximum": 0
+          },
+          "rtDecayDb": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 200
+          }
+        }
+      }
+    },
+    "playback": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "velocityMode": {
+          "enum": [
+            "switch",
+            "crossfade",
+            "anchored"
+          ]
+        },
+        "velocityXfade": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 32
+        },
+        "velocityBrightness": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "ampVelTrack": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "voicing": {
+          "enum": [
+            "world",
+            "neutral"
+          ]
+        }
       }
     }
   }

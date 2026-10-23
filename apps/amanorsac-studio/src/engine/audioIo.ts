@@ -118,6 +118,8 @@ export class AudioIo {
   /** Master audible bus. Sampler, FX rack, loop audition and test tones join here. */
   private outputBus: GainNode | null = null;
   private outputAnalyser: AnalyserNode | null = null;
+  /** master safety limiter between the bus and the device (see installLimiter) */
+  private limiter: AudioWorkletNode | null = null;
   /** Fallback sink: bus → MediaStreamDestination → <audio>.setSinkId(device). */
   private elementSink: { dest: MediaStreamAudioDestinationNode; el: HTMLAudioElement } | null = null;
   /** The playback device currently routed to (null = system default). */
@@ -279,8 +281,42 @@ export class AudioIo {
   private attachBus(): void {
     if (!this.outputBus || !this.ctx) return;
     this.outputBus.disconnect();
+    this.limiter?.disconnect();
     if (this.outputAnalyser) this.outputBus.connect(this.outputAnalyser);
-    this.outputBus.connect(this.elementSink ? this.elementSink.dest : this.ctx.destination);
+    const terminal = this.elementSink ? this.elementSink.dest : this.ctx.destination;
+    // bus → master limiter → device, so a chord of -1 dBFS samples cannot clip the output
+    if (this.limiter) {
+      this.outputBus.connect(this.limiter);
+      this.limiter.connect(terminal);
+    } else {
+      this.outputBus.connect(terminal);
+    }
+  }
+
+  /**
+   * Insert the master safety limiter (-0.3 dBFS brick wall, 2 ms lookahead) between the output bus
+   * and the device. Call once the worklet module is registered; idempotent. Without it, samples
+   * that peak at -1 dBFS sum on a chord past 0 dBFS and the device hard-clips — which is exactly
+   * what made playback sound distorted next to Sanctuary, which has the same limiter.
+   */
+  installLimiter(): void {
+    const ctx = this.ctx;
+    if (!ctx || this.limiter) return;
+    void this.output;             // make sure the bus exists first
+    try {
+      this.limiter = new AudioWorkletNode(ctx, 'as-limiter', {
+        numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2], channelCount: 2,
+        channelCountMode: 'explicit', channelInterpretation: 'speakers',
+      });
+      this.attachBus();
+    } catch {
+      this.limiter = null;        // module not registered yet: stay unlimited rather than silent
+    }
+  }
+
+  /** True once the master limiter is in the signal path. */
+  get limiterActive(): boolean {
+    return this.limiter !== null;
   }
 
   private teardownElementSink(): void {

@@ -1,4 +1,4 @@
-/** Minimal RIFF/WAVE header reader used by the validator (no audio decoding). */
+/** Minimal RIFF/WAVE and FLAC header readers used by the validator (no audio decoding). */
 
 export interface WavInfo {
   channels: number;
@@ -7,6 +7,32 @@ export interface WavInfo {
   /** PCM frames (samples per channel) */
   frames: number;
   format: 'pcm' | 'float' | 'other';
+}
+
+/**
+ * FLAC STREAMINFO, which is always the first metadata block: sample rate, channel count, bit depth
+ * and total frames live in fixed bit positions right after the 4-byte "fLaC" marker and the 4-byte
+ * block header. Bundles may ship FLAC (lossless, roughly a third the size of the WAV), so the
+ * validator has to read both.
+ */
+export function readFlacHeader(buf: Buffer): WavInfo {
+  if (buf.length < 42 || buf.toString('ascii', 0, 4) !== 'fLaC') throw new Error('Not a FLAC file');
+  if ((buf[4] & 0x7f) !== 0) throw new Error('FLAC: first metadata block is not STREAMINFO');
+  const p = 8;                                        // skip "fLaC" + block header
+  // 16 bits min block, 16 max block, 24 min frame, 24 max frame, then the packed fields
+  const o = p + 10;
+  const sampleRate = (buf[o] << 12) | (buf[o + 1] << 4) | (buf[o + 2] >> 4);
+  const channels = ((buf[o + 2] >> 1) & 0x07) + 1;
+  const bitDepth = (((buf[o + 2] & 0x01) << 4) | (buf[o + 3] >> 4)) + 1;
+  // 36-bit total sample count; the top 4 bits sit in the same byte as the bit depth
+  const frames = (buf[o + 3] & 0x0f) * 2 ** 32 + buf.readUInt32BE(o + 4);
+  if (!sampleRate) throw new Error('FLAC: zero sample rate');
+  return { channels, sampleRate, bitDepth, frames, format: 'pcm' };
+}
+
+/** Read whichever of the two formats this buffer holds. */
+export function readAudioHeader(buf: Buffer): WavInfo {
+  return buf.length >= 4 && buf.toString('ascii', 0, 4) === 'fLaC' ? readFlacHeader(buf) : readWavHeader(buf);
 }
 
 export function readWavHeader(buf: Buffer): WavInfo {

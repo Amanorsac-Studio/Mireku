@@ -3,7 +3,7 @@
  * FX rack) and wires them to the zustand store + Electron bridge.
  */
 
-import type { Preset } from '@jm/jmi-format/web';
+import type { Instrument, Preset } from '@jm/jmi-format/web';
 import { buildDefaultRack, midiToNoteName } from '@jm/jmi-format/web';
 import { AutoModeEngine, measureLatencyMs, type AutoPitchAlert, type MidiOut } from '../engine/autoMode';
 import { audioIo, realClock, WebAudioCapturePort } from '../engine/audioIo';
@@ -35,6 +35,7 @@ import {
   WebAudioVoiceSink,
 } from '../engine/sampler/samplerWebAudio';
 import type { JmBridge } from '../../electron/preload';
+import { SoundEngine } from '../engine/sound/soundEngine';
 import { DEFAULT_DEVICES, useApp, type DeviceSettings, type QueuePitchDecision } from './appStore';
 
 declare global {
@@ -71,6 +72,19 @@ const memoryBridge: JmBridge = (() => {
       throw new Error('Importing a library requires the Electron app');
     },
     onImportProgress: () => () => {},
+    listLibrary: async () => [],
+    listSounds: async () => [],
+    loadSound: async () => {
+      throw new Error('Sounds need the Electron app');
+    },
+    saveSound: async () => {
+      throw new Error('Sounds need the Electron app');
+    },
+    openBundle: async () => {
+      throw new Error('The library needs the Electron app');
+    },
+    readBundleSample: async () => null,
+    saveBundle: async () => ({ ok: false, issues: [] }),
     chooseDir: async () => null,
     chooseFile: async () => null,
     showItem: async () => true,
@@ -101,6 +115,7 @@ class Services {
     }
     if (audioIo.ctx.state === 'suspended') await audioIo.ctx.resume();
     await registerJmWorklets(audioIo.ctx);
+    audioIo.installLimiter();   // -0.3 dBFS brick wall before the device, as in Sanctuary
     if (!this.rack) {
       this.rack = new FxRack(audioIo.ctx);
       // everything audible leaves through the output bus, never ctx.destination,
@@ -221,7 +236,7 @@ class Services {
 
   /** True when a screen (not just the Settings meter) needs the input open. */
   get inputInUse(): boolean {
-    return this.guided !== null || useApp.getState().auto.running;
+    return this.guided !== null || useApp.getState().auto.running || useApp.getState().devices.monitorEnabled;
   }
 
   /* ---------------- guided mode ---------------- */
@@ -696,9 +711,68 @@ class Services {
     midi.selectInput(session.config.midiInputId);
   }
 
+  /**
+   * Audition an instrument straight from a Sanctuary-library bundle: same voice
+   * engine and FX rack as a captured session, samples streamed from the bundle
+   * folder instead of the session's takes.
+   */
+  async initLibraryAudition(dir: string, instrument: Instrument): Promise<void> {
+    const gen = ++this.auditionGen;
+    const ctx = await this.ensureAudio();
+    if (!this.sink || gen !== this.auditionGen) return;
+    this.quietInput();
+    this.sink.clear();
+    const selector = new ZoneSelector(instrument);
+    this.voices = new VoiceManager(selector, this.sink);
+    this.sink.manager = this.voices;
+    for (const zone of [...instrument.zones, ...(instrument.releaseZones ?? [])]) {
+      for (const rr of zone.roundRobins) {
+        if (this.sink.hasSample(rr.file)) continue;
+        const fromDisk = await bridge.readBundleSample(dir, rr.file);
+        // the user left the page while samples were loading: don't take over MIDI
+        if (gen !== this.auditionGen) return;
+        if (!fromDisk) continue;
+        const buffer = audioBufferFrom(ctx, fromDisk.channels.map((b) => new Float32Array(b)), fromDisk.sampleRate);
+        if (rr.loop) bakeLoopCrossfade(buffer, rr.loop);
+        this.sink.setSample(rr.file, { buffer, loop: rr.loop });
+      }
+    }
+    midi.events = {
+      onNoteOn: (n, v) => this.voices?.noteOn(n, v),
+      onNoteOff: (n) => this.voices?.noteOff(n),
+      onControlChange: (cc, v) => this.voices?.controlChange(cc, v),
+    };
+    midi.selectInput(useApp.getState().devices.midiInputId);
+  }
+
+  /** The layered-sound engine for the Sound Designer (shares the output bus). */
+  readonly soundEngine = new SoundEngine((dir, file) => bridge.readBundleSample(dir, file));
+
+  /** Bumped whenever a library audition starts or stops; stale loads bail out. */
+  private auditionGen = 0;
+
   stopAudition(): void {
+    this.auditionGen++;
     this.voices?.allNotesOff();
+    this.sink?.stopAll(); // release tails too, so nothing rings into the next screen
     midi.events = {};
+  }
+
+  /**
+   * Audition screens play samples, not the audio input: close the input so the
+   * analog keyboard can't come through the app, unless the user switched input
+   * monitoring on or a capture screen needs it.
+   */
+  quietInput(): void {
+    if (!this.inputInUse) audioIo.closeInput();
+  }
+
+  /** The Input Monitor switch on audition screens: off by default, on only when asked. */
+  async setInputMonitor(on: boolean): Promise<void> {
+    const next = { ...useApp.getState().devices, monitorEnabled: on };
+    await this.applyDevices(next);
+    if (on) await this.openInputForMonitoring(next);
+    else this.quietInput();
   }
 
   /* ---------------- loop audition (§3.5) ---------------- */
@@ -732,6 +806,19 @@ class Services {
 
   loadPresetIntoRack(preset: Preset): void {
     this.rack?.load(preset.fxRack);
+    this.applyAmpEnvelope(preset);
+  }
+
+  /** Amp attack/release from a preset onto the live voices (0 attack = as sampled). */
+  applyAmpEnvelope(preset: Pick<Preset, 'ampEnvelope'>): void {
+    if (!this.sink || !preset.ampEnvelope) return;
+    this.sink.attackMs = Math.max(0, preset.ampEnvelope.attackMs ?? 0);
+    this.sink.releaseMs = Math.max(1, preset.ampEnvelope.releaseMs ?? 250);
+  }
+
+  /** Instrument output trim in dB for the preset maker's Level control. */
+  setAuditionTrim(db: number): void {
+    if (this.sink) this.sink.trimDb = Math.max(-36, Math.min(12, db));
   }
 
   currentRackState(): Preset['fxRack'] {
@@ -773,6 +860,7 @@ class Services {
       files: manifest.files,
       foldToMono: session.config.foldToMono ?? false,
       bitDepth: session.config.bitDepth,
+      category: session.config.category,
     });
   }
 }

@@ -3,7 +3,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Ajv, type ValidateFunction } from 'ajv';
 import type { Instrument, Preset } from './types.js';
-import { readWavHeader } from './wav.js';
+import { readAudioHeader } from './wav.js';
 
 export interface ValidationIssue {
   level: 'error' | 'warning';
@@ -95,9 +95,11 @@ export function validateBundle(bundlePath: string): ValidationResult {
   let sampleCount = 0;
 
   // Semantic checks over zones
-  for (let zi = 0; zi < inst.zones.length; zi++) {
-    const z = inst.zones[zi];
-    const zp = `zones[${zi}]`;
+  const allZones = [
+    ...inst.zones.map((z, i) => ({ z, zp: `zones[${i}]` })),
+    ...(inst.releaseZones ?? []).map((z, i) => ({ z, zp: `releaseZones[${i}]` })),
+  ];
+  for (const { z, zp } of allZones) {
     if (z.keyRangeLo > z.keyRangeHi) err(zp, `keyRangeLo ${z.keyRangeLo} > keyRangeHi ${z.keyRangeHi}`);
     if (z.velRangeLo > z.velRangeHi) err(zp, `velRangeLo ${z.velRangeLo} > velRangeHi ${z.velRangeHi}`);
     if (z.rootNote < z.keyRangeLo || z.rootNote > z.keyRangeHi)
@@ -120,7 +122,7 @@ export function validateBundle(bundlePath: string): ValidationResult {
         const head = Buffer.alloc(Math.min(st.size, 4096));
         readSync(fd, head, 0, head.length, 0);
         closeSync(fd);
-        const info = readWavHeader(head);
+        const info = readAudioHeader(head);
         if (info.format !== 'pcm') err(rp, `${rr.file}: not integer PCM (float dump?)`);
         if (info.sampleRate !== inst.meta.sampleRate)
           err(rp, `${rr.file}: sampleRate ${info.sampleRate} != meta ${inst.meta.sampleRate}`);

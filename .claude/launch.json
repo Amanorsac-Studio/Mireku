@@ -22,6 +22,15 @@
         "amanorsac-studio"
       ],
       "port": 5174
+    },
+    {
+      "name": "lowend-ui",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "apps/lowend/tests/learn/serve.js",
+        "5177"
+      ],
+      "port": 5177
     }
   ]
 }

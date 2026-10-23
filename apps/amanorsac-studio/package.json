@@ -16,12 +16,13 @@
     "dist": "npm run build && electron-builder --config electron-builder.yml"
   },
   "dependencies": {
+    "@amanorsac/aofas-format": "1.0.0",
     "@jm/jmi-format": "1.0.0",
+    "@wasm-audio-decoders/flac": "^0.2.11",
     "adm-zip": "^0.5.16",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "zustand": "^5.0.2",
-    "@amanorsac/aofas-format": "1.0.0"
+    "zustand": "^5.0.2"
   },
   "devDependencies": {
     "@types/adm-zip": "^0.5.7",

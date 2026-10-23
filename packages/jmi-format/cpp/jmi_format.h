@@ -211,6 +211,10 @@ struct Zone {
     int keyRangeLo = 0, keyRangeHi = 127;
     int velRangeLo = 1, velRangeHi = 127;
     std::vector<RoundRobin> roundRobins;
+    double releaseMs = 0.0;   // > 0: amp release for this zone (SFZ ampeg_release)
+    double rtDecayDb = 0.0;   // release zones: dB per second held (SFZ rt_decay)
+    int anchorVelocity = 0;   // > 0: the velocity this layer was played at (anchored mode)
+    double levelDb = 1.0;     // <= 0: measured loudness of this layer, for level matching
 };
 
 struct VelocityLayer {
@@ -248,6 +252,13 @@ struct Instrument {
     SoundType soundType = SoundType::Decaying;
     std::vector<Zone> zones;
     std::vector<VelocityLayer> velocityMap;
+    std::vector<Zone> releaseZones;   // key-off samples (SFZ trigger=release)
+    bool velocitySwitch = false;      // playback.velocityMode == "switch"
+    bool velocityAnchored = false;    // playback.velocityMode == "anchored": level matched at anchors
+    double velocityXfade = 0.0;       // playback.velocityXfade: half-width of the boundary blend
+    double velocityBrightness = 0.0;  // playback.velocityBrightness 0..100: darken under an anchor
+    double ampVelTrack = -1.0;        // playback.ampVelTrack 0..100, < 0 = JM default curve
+    bool neutralVoicing = false;      // playback.voicing == "neutral"
     std::vector<Preset> presets;
     std::string bundlePath;  // absolute path to the .jmi folder
 };
@@ -288,9 +299,42 @@ inline bool parsePreset(const JsonValue& root, Preset& p, std::string& err) {
     return true;
 }
 
-inline bool parseInstrumentJson(const std::string& text, Instrument& inst, std::string& err) {
-    JsonValue root;
-    if (!JsonParser::parse(text, root, err)) { err = "instrument.json: " + err; return false; }
+/// Parses an already-parsed instrument.json JsonValue tree. Split out of
+/// parseInstrumentJson() so callers that already hold the value (e.g. an
+/// embedded "instrument" member inside a larger document, as .aofas does)
+/// don't have to re-serialize it back to text first.
+inline bool parseZoneValue(const JsonValue& zv, Zone& z, std::string& err) {
+    if (auto* v = zv.find("rootNote")) z.rootNote = v->asInt();
+    if (auto* v = zv.find("keyRangeLo")) z.keyRangeLo = v->asInt();
+    if (auto* v = zv.find("keyRangeHi")) z.keyRangeHi = v->asInt();
+    if (auto* v = zv.find("velRangeLo")) z.velRangeLo = v->asInt();
+    if (auto* v = zv.find("velRangeHi")) z.velRangeHi = v->asInt();
+    if (auto* v = zv.find("releaseMs")) z.releaseMs = v->asNumber();
+    if (auto* v = zv.find("anchorVelocity")) z.anchorVelocity = (int) v->asNumber();
+    if (auto* v = zv.find("levelDb")) z.levelDb = v->asNumber();
+    if (auto* v = zv.find("rtDecayDb")) z.rtDecayDb = v->asNumber();
+    if (auto* rrs = zv.find("roundRobins"); rrs && rrs->isArray()) {
+        for (auto& rv : rrs->asArray()) {
+            RoundRobin rr;
+            if (auto* v = rv.find("file")) rr.file = v->asString();
+            if (rr.file.empty()) { err = "zone round-robin missing file"; return false; }
+            if (auto* v = rv.find("peakDb")) rr.peakDb = v->asNumber();
+            if (auto* v = rv.find("lengthMs")) rr.lengthMs = v->asNumber();
+            if (auto* v = rv.find("loop"); v && v->isObject()) {
+                LoopRegion lp;
+                if (auto* q = v->find("startSample")) lp.startSample = (int64_t) q->asNumber();
+                if (auto* q = v->find("endSample")) lp.endSample = (int64_t) q->asNumber();
+                if (auto* q = v->find("crossfadeSamples")) lp.crossfadeSamples = (int64_t) q->asNumber();
+                rr.loop = lp;
+            }
+            z.roundRobins.push_back(std::move(rr));
+        }
+    }
+    if (z.roundRobins.empty()) { err = "zone has no round robins"; return false; }
+    return true;
+}
+
+inline bool parseInstrumentValue(const JsonValue& root, Instrument& inst, std::string& err) {
     if (!root.isObject()) { err = "instrument.json: not an object"; return false; }
 
     if (auto* v = root.find("formatVersion")) inst.formatVersion = v->asInt();
@@ -323,29 +367,7 @@ inline bool parseInstrumentJson(const std::string& text, Instrument& inst, std::
     if (!zonesV || !zonesV->isArray() || zonesV->asArray().empty()) { err = "missing zones"; return false; }
     for (auto& zv : zonesV->asArray()) {
         Zone z;
-        if (auto* v = zv.find("rootNote")) z.rootNote = v->asInt();
-        if (auto* v = zv.find("keyRangeLo")) z.keyRangeLo = v->asInt();
-        if (auto* v = zv.find("keyRangeHi")) z.keyRangeHi = v->asInt();
-        if (auto* v = zv.find("velRangeLo")) z.velRangeLo = v->asInt();
-        if (auto* v = zv.find("velRangeHi")) z.velRangeHi = v->asInt();
-        if (auto* rrs = zv.find("roundRobins"); rrs && rrs->isArray()) {
-            for (auto& rv : rrs->asArray()) {
-                RoundRobin rr;
-                if (auto* v = rv.find("file")) rr.file = v->asString();
-                if (rr.file.empty()) { err = "zone round-robin missing file"; return false; }
-                if (auto* v = rv.find("peakDb")) rr.peakDb = v->asNumber();
-                if (auto* v = rv.find("lengthMs")) rr.lengthMs = v->asNumber();
-                if (auto* v = rv.find("loop"); v && v->isObject()) {
-                    LoopRegion lp;
-                    if (auto* s = v->find("startSample")) lp.startSample = (int64_t) s->asNumber();
-                    if (auto* s = v->find("endSample")) lp.endSample = (int64_t) s->asNumber();
-                    if (auto* s = v->find("crossfadeSamples")) lp.crossfadeSamples = (int64_t) s->asNumber();
-                    rr.loop = lp;
-                }
-                z.roundRobins.push_back(std::move(rr));
-            }
-        }
-        if (z.roundRobins.empty()) { err = "zone has no round robins"; return false; }
+        if (!parseZoneValue(zv, z, err)) return false;
         inst.zones.push_back(std::move(z));
     }
 
@@ -359,7 +381,30 @@ inline bool parseInstrumentJson(const std::string& text, Instrument& inst, std::
             inst.velocityMap.push_back(std::move(l));
         }
     }
+    if (auto* rz = root.find("releaseZones"); rz && rz->isArray()) {
+        for (auto& zv : rz->asArray()) {
+            Zone z;
+            if (!parseZoneValue(zv, z, err)) { err = "releaseZones: " + err; return false; }
+            inst.releaseZones.push_back(std::move(z));
+        }
+    }
+    if (auto* pb = root.find("playback"); pb && pb->isObject()) {
+        if (auto* v = pb->find("velocityMode")) {
+            inst.velocitySwitch = v->asString() == "switch";
+            inst.velocityAnchored = v->asString() == "anchored";
+        }
+        if (auto* v = pb->find("velocityXfade")) inst.velocityXfade = v->asNumber();
+        if (auto* v = pb->find("velocityBrightness")) inst.velocityBrightness = v->asNumber();
+        if (auto* v = pb->find("ampVelTrack")) inst.ampVelTrack = v->asNumber();
+        if (auto* v = pb->find("voicing")) inst.neutralVoicing = v->asString() == "neutral";
+    }
     return true;
+}
+
+inline bool parseInstrumentJson(const std::string& text, Instrument& inst, std::string& err) {
+    JsonValue root;
+    if (!JsonParser::parse(text, root, err)) { err = "instrument.json: " + err; return false; }
+    return parseInstrumentValue(root, inst, err);
 }
 
 /// Load a full bundle: instrument.json (required) + presets/*.json (optional).

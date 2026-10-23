@@ -61,6 +61,17 @@ export const FX_REGISTRY: Record<FxType, FxSpec> = {
       { id: 'depth', label: 'Depth', kind: 'float', min: 0, max: 100, default: 60 },
       { id: 'feedback', label: 'Feedback', kind: 'float', min: 0, max: 90, default: 40 },
       { id: 'stages', label: 'Stages', kind: 'enum', choices: ['2', '4', '6'], default: '4' },
+      // CLIENT REQUEST — "put mix knob on all the time based effects".
+      // APPENDED, never inserted: a parameter's position in this list is baked
+      // into every FX preset ever saved. A preset written before this change
+      // simply has no `mix` key and therefore loads at the default below.
+      //
+      // The default is 50 because that is EXACTLY the blend both engines
+      // already produced with the mix hard-wired: Signature's PhaserFx summed
+      // `0.5f * (dry + wet)`, so `dry * (1 - 0.5) + wet * 0.5` is the same
+      // arithmetic. Loading an old preset after this change is therefore
+      // bit-identical (asserted in EngineTests `testFxMixDefaultIdentity`).
+      { id: 'mix', label: 'Mix', kind: 'float', min: 0, max: 100, default: 50 },
     ],
   },
   flanger: {
@@ -71,6 +82,9 @@ export const FX_REGISTRY: Record<FxType, FxSpec> = {
       { id: 'depth', label: 'Depth', kind: 'float', min: 0, max: 100, default: 50 },
       { id: 'feedback', label: 'Feedback', kind: 'float', min: -90, max: 90, default: 30 },
       { id: 'manual', label: 'Manual', kind: 'float', min: 0.1, max: 10, default: 2, unit: 'ms', log: true },
+      // APPENDED — see the note on phaser.mix above. Signature's FlangerFx
+      // summed `0.5f * (dry + wet)` too, so 50 reproduces it exactly.
+      { id: 'mix', label: 'Mix', kind: 'float', min: 0, max: 100, default: 50 },
     ],
   },
   epPreamp: {
@@ -159,6 +173,18 @@ export const FX_REGISTRY: Record<FxType, FxSpec> = {
     params: [
       { id: 'width', label: 'Width', kind: 'float', min: 0, max: 200, default: 120 },
       { id: 'ensemble', label: 'Ensemble', kind: 'float', min: 0, max: 100, default: 0 },
+    ],
+  },
+  // Amanorsac sound designer: resonant state-variable filter with a drive stage in front.
+  svFilter: {
+    type: 'svFilter',
+    name: 'Filter',
+    params: [
+      { id: 'mode', label: 'Mode', kind: 'enum', choices: ['lowpass', 'highpass', 'bandpass'], default: 'lowpass' },
+      { id: 'cutoff', label: 'Cutoff', kind: 'float', min: 40, max: 18000, default: 2200, unit: 'Hz', log: true },
+      { id: 'resonance', label: 'Resonance', kind: 'float', min: 0, max: 100, default: 20 },
+      { id: 'drive', label: 'Drive', kind: 'float', min: 0, max: 100, default: 0 },
+      { id: 'mix', label: 'Mix', kind: 'float', min: 0, max: 100, default: 100 },
     ],
   },
 };

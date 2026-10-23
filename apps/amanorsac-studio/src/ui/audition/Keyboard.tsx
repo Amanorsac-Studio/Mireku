@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { midi } from '../../engine/midi';
 
 const BLACK = new Set([1, 3, 6, 8, 10]);
 
@@ -11,7 +12,21 @@ export function Keyboard({
   onNoteOn(note: number, velocity: number): void;
   onNoteOff(note: number): void;
 }) {
-  const [held, setHeld] = useState<Set<number>>(new Set());
+  const [clicked, setHeld] = useState<Set<number>>(new Set());
+  // keys played on the MIDI keyboard light up too
+  const [fromMidi, setFromMidi] = useState<Set<number>>(new Set());
+  useEffect(() => {
+    const watch = (note: number, vel: number) =>
+      setFromMidi((s) => {
+        const next = new Set(s);
+        if (vel > 0) next.add(note);
+        else next.delete(note);
+        return next;
+      });
+    midi.noteWatchers.add(watch);
+    return () => void midi.noteWatchers.delete(watch);
+  }, []);
+  const held = { has: (n: number) => clicked.has(n) || fromMidi.has(n) };
   const notes: number[] = [];
   for (let n = 21; n <= 108; n++) notes.push(n);
   const whites = notes.filter((n) => !BLACK.has(n % 12));

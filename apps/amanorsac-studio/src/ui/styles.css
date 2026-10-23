@@ -1836,3 +1836,87 @@ input.as-well[type='number']::-webkit-inner-spin-button {
    blue engaged-overlay on a button came back out gold). Rotate pixels, not
    subtrees. Re-run the script to change the tint; do not add filters here.
    ========================================================================== */
+
+
+/* ═══════ Sound Designer (Montage-style performance builder) ═══════ */
+.sd{display:grid;grid-template-columns:250px minmax(0,1fr) 360px;gap:12px;height:calc(100vh - 150px);min-height:600px}
+.sd aside,.sd section{background:var(--as-color-panel,#0D1322);border:1px solid var(--as-color-line,#1D2740);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:8px;min-height:0}
+.sd-head{font-size:10px;letter-spacing:.2em;color:var(--as-color-text-3,#63739A);padding:2px 0 6px;border-bottom:1px solid var(--as-color-line-soft,#151E32)}
+.sd-head span{margin-left:6px;color:var(--as-color-text-2,#9AA9C7);letter-spacing:0}
+.sd-cats{display:flex;flex-direction:column;gap:2px;max-height:38%;overflow:auto}
+.sd-cats button{display:flex;justify-content:space-between;align-items:center;padding:6px 9px;border-radius:6px;font-size:11px;color:var(--as-color-text-2,#9AA9C7);background:none;border:none;cursor:pointer;text-align:left}
+.sd-cats button i{font-style:normal;font-size:9px;color:var(--as-color-text-3,#63739A)}
+.sd-cats button:hover{background:rgba(255,255,255,.04)}
+.sd-cats button.on{background:rgba(76,141,255,.15);color:#8FB8FF}
+.sd-list{flex:1;overflow:auto;display:flex;flex-direction:column;gap:3px}
+.sd-item{display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:7px;border:1px solid var(--as-color-line-soft,#151E32);background:rgba(255,255,255,.02);cursor:grab;touch-action:none}
+.sd-item:active{cursor:grabbing}
+.sd-item.busy{opacity:.5}
+.sd-item-t{flex:1;min-width:0;display:flex;flex-direction:column}
+.sd-item-t b{font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sd-item-t small{font-size:8.5px;letter-spacing:.08em;color:var(--as-color-text-3,#63739A)}
+.sd-plus{width:26px;height:26px;border-radius:7px;border:1px solid #2D4E88;background:rgba(76,141,255,.15);color:#8FB8FF;font-size:16px;cursor:pointer}
+.sd-toolbar{display:flex;gap:8px;align-items:center}
+.sd-toolbar .sd-name{font-size:16px;font-weight:600;min-width:260px}
+.sd-status{font-size:11px;color:var(--as-color-text-2,#9AA9C7);min-height:16px}
+.sd-parts{display:flex;flex-direction:column;gap:5px;flex:1;min-height:0;overflow:auto}
+.sd-part{display:flex;align-items:center;gap:10px;padding:6px 10px;border-radius:9px;border:1px solid var(--as-color-line-soft,#151E32);background:linear-gradient(90deg,color-mix(in srgb,var(--c) 14%,transparent),transparent 40%);border-left:4px solid var(--c);cursor:pointer;min-height:56px}
+.sd-part.empty{border-style:dashed;background:none;border-left-color:var(--as-color-line-soft,#151E32);color:var(--as-color-text-3,#63739A);justify-content:flex-start}
+.sd-part.on{outline:1px solid color-mix(in srgb,var(--c) 70%,#fff 10%);box-shadow:0 0 18px color-mix(in srgb,var(--c) 30%,transparent)}
+.sd-part.off{opacity:.5}
+.sd-part.drop{outline:2px dashed #8FB8FF;background:rgba(76,141,255,.12)}
+.sd-part-no{width:26px;height:26px;border-radius:50%;background:var(--c);color:#06090F;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;flex:0 0 26px}
+.sd-part-name{flex:1;min-width:0;display:flex;flex-direction:column}
+.sd-part-name b{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sd-part-name small{font-size:9px;letter-spacing:.08em;color:var(--as-color-text-3,#63739A)}
+.sd-part-ctl{display:flex;align-items:center;gap:8px}
+.sd-part-empty{font-size:11px;letter-spacing:.06em;padding-left:8px}
+.sd-oct{display:flex;align-items:center;gap:4px;font-size:10px;color:var(--as-color-text-2,#9AA9C7)}
+.sd-oct button{width:22px;height:22px;border-radius:6px;border:1px solid var(--as-color-line,#1D2740);background:none;color:inherit;cursor:pointer}
+.sd-part-actions{display:flex;gap:2px}
+.sd-part-actions button{width:24px;height:24px;border-radius:6px;border:1px solid var(--as-color-line-soft,#151E32);background:none;color:var(--as-color-text-3,#63739A);cursor:pointer;font-size:10px}
+.sd-part-actions button:hover:not(:disabled){color:#fff;border-color:var(--as-color-line,#1D2740)}
+.sd-part-actions button:disabled{opacity:.3}
+.sd-lane-wrap{flex:0 0 auto;border-top:1px solid var(--as-color-line-soft,#151E32);padding-top:8px}
+.sd-lanes{position:relative;width:100%;touch-action:none}
+.sd-bar{position:absolute;height:18px;border-radius:9px;background:linear-gradient(180deg,color-mix(in srgb,var(--c) 92%,#fff 8%),color-mix(in srgb,var(--c) 70%,#04070E));display:flex;align-items:center;justify-content:space-between;cursor:grab;color:#06090F;font-size:9.5px;font-weight:700;box-shadow:0 0 12px color-mix(in srgb,var(--c) 30%,transparent);touch-action:none;user-select:none}
+.sd-bar.on{outline:2px solid #fff}
+.sd-bar.off{opacity:.45}
+.sd-bar-label{flex:1;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px;pointer-events:none}
+.sd-bar-label small{font-weight:500;opacity:.8}
+.sd-h{width:12px;height:100%;cursor:ew-resize;flex:0 0 12px;border-radius:9px}
+.sd-h:hover{background:rgba(255,255,255,.35)}
+.sd-keys{position:relative;height:72px;display:flex;margin-top:6px;user-select:none}
+.sd-wk{flex:1;background:linear-gradient(180deg,#EFF3FA,#C2CBDC);border:1px solid #04070E;border-radius:0 0 4px 4px;cursor:pointer;touch-action:none}
+.sd-wk.lit{background:linear-gradient(180deg,#B7D9FF,#77ACF3)}
+.sd-bk{position:absolute;top:0;height:60%;background:linear-gradient(180deg,#293148,#090E19);border-radius:0 0 3px 3px;z-index:2;cursor:pointer;touch-action:none}
+.sd-bk.lit{background:linear-gradient(180deg,#5B97FF,#2D5CB8)}
+.sd-inspector{overflow:auto}
+.sd-inspector .sd-head{border-left:4px solid var(--c,#4C8DFF);padding-left:8px}
+.sd-row{display:flex;align-items:center;gap:6px}
+.sd-row input{width:80px}
+.sd-knobs{display:flex;flex-wrap:wrap;gap:8px}
+.sd-rack{margin-top:6px}
+.sd-rack .as-panel{padding:8px}
+.sd-empty{display:flex;flex-direction:column;gap:8px}
+
+/* ---- Preset Maker (simple preset/sound-design path) ---- */
+.pm{display:grid;grid-template-columns:250px minmax(0,1fr);gap:12px;height:calc(100vh - 150px);min-height:600px}
+.pm-browser{background:var(--as-color-panel,#0D1322);border:1px solid var(--as-color-line,#1D2740);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:8px;min-height:0}
+.pm-head{font-size:10px;letter-spacing:.2em;color:var(--as-color-text-3,#63739A);padding:2px 0 6px;border-bottom:1px solid var(--as-color-line-soft,#151E32)}
+.pm-head span{margin-left:6px;color:var(--as-color-text-2,#9AA9C7);letter-spacing:0}
+.pm-cats{display:flex;flex-direction:column;gap:2px;max-height:34%;overflow:auto}
+.pm-cats button{display:flex;justify-content:space-between;align-items:center;padding:6px 9px;border-radius:6px;font-size:11px;color:var(--as-color-text-2,#9AA9C7);background:none;border:none;cursor:pointer;text-align:left}
+.pm-cats button i{font-style:normal;font-size:9px;color:var(--as-color-text-3,#63739A)}
+.pm-cats button:hover{background:rgba(255,255,255,.04)}
+.pm-cats button.on{background:rgba(76,141,255,.15);color:#8FB8FF}
+.pm-list{flex:1;overflow:auto;display:flex;flex-direction:column;gap:3px}
+.pm-item{display:flex;flex-direction:column;align-items:flex-start;gap:1px;padding:7px 9px;border-radius:7px;border:1px solid var(--as-color-line-soft,#151E32);background:rgba(255,255,255,.02);cursor:pointer;text-align:left;color:inherit}
+.pm-item:hover:not(:disabled){border-color:var(--as-color-line,#1D2740);background:rgba(255,255,255,.05)}
+.pm-item.on{background:rgba(76,141,255,.15);border-color:#2D4E88;color:#8FB8FF}
+.pm-item:disabled{opacity:.5}
+.pm-item b{font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.pm-item small{font-size:8.5px;letter-spacing:.08em;color:var(--as-color-text-3,#63739A)}
+.pm-main{display:flex;flex-direction:column;gap:10px;min-height:0;overflow:auto}
+.pm-knobs{display:flex;flex-wrap:wrap;gap:14px;padding:6px 0}
+.pm-presets{display:flex;flex-wrap:wrap;gap:4px}

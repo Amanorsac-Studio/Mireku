@@ -84,6 +84,42 @@ container lives in `packages/aofas-format`, specified by
   It stops casual copying and other vendors' samplers; it cannot stop a
   determined reverse engineer, and the spec says so rather than implying more.
 
+## Catalogue and licensing (sound-library plan, 2026-09-03)
+
+Adapting the sampler to the Virtual Instrument Sound Library plan, so that one
+sampler can feed many Amanorsac apps.
+
+- **The new taxonomy lives in the AOFAS layer, not in `.jmi`.** The plan needs
+  grand / felt / upright / EP / strings / pad / shimmer / synth / bells; `.jmi`
+  has four `world` values with no piano among them. But `world` belongs to
+  `@jm/jmi-format` — the JM Signature product — and is baked into a JSON schema,
+  a C++ header, the FX defaults and 20+ files. Moving it to fit Amanorsac would
+  change a client's product to suit us. So `world` is untouched, and `category`
+  plus free-form `tags` are AOFAS-only, written into the card.
+- **Category is coarse, tags are free.** Ten shelves answer "where does this
+  live" across apps. Worship Grand, Neo-Soul EP and Glass Bell are tags, because
+  families multiply faster than any closed list can track.
+- **Licensing is PLAINTEXT, in the card.** CC BY sources oblige the product to
+  show a credit. Attribution sealed inside an encrypted payload is attribution
+  nobody can read, which defeats the obligation it exists to satisfy. The card
+  is still tamper-evident — its hash is bound into the index AAD — so public is
+  not the same as editable.
+- **The packer refuses rather than trusts.** A source that requires attribution
+  and carries no credit line fails the pack; a library that disclaims
+  attribution its sources demand fails validation. Both are mistakes that become
+  invisible the moment the file is sealed and copied to a stage laptop.
+- **`UNVERIFIED` is a first-class state.** A capture whose source instrument is
+  unknown is marked as such: usable internally, flagged everywhere it is listed,
+  not shippable until someone establishes where it came from. The alternative —
+  defaulting to `proprietary` — is precisely the laundering this module exists
+  to prevent, and the plan's own rule is that uncertain provenance does not ship.
+- **Provenance is sealed, credits are public.** Which upstream library each
+  sample came from, and what was done to it, is audit detail and lives in the
+  encrypted index. Only what must be shown to a user is public.
+- **Additive, no version bump.** The card and index gained optional members only;
+  the binary layout did not move. The C++ reader written against v1 keeps
+  working, because it already ignores members it does not recognise.
+
 ## Packing the piano
 
 - **One empty take.** `samples/A0_v2_rr3.wav` in `Piano.jmi.zip` is 44 bytes — a
@@ -96,6 +132,13 @@ container lives in `packages/aofas-format`, specified by
   way; re-sample A0 v2 rr3 and re-pack when convenient.
 - **`meta.author` was set to "Amanorsac Studio"** at pack time (`--author`). The
   instrument name was left as the capture recorded it.
+- **Re-packed 2026-09-03 as `category: grand-piano`, marked `--unverified`.** The
+  evidence for the category is the bundle itself: notes 21–108 (the full 88-key
+  range), decaying, four velocity layers, named "Piano". The category the
+  `world: mks` fallback would have produced is `synth`, which is wrong. It is
+  marked unverified because `captureMode: auto` means an external instrument
+  played every note, and nothing in the bundle records which one — so its
+  licence is unknown and it must not ship until that is established.
 
 ## Bug found while building this
 

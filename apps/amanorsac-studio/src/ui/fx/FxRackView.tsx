@@ -1,7 +1,7 @@
 import React, { useReducer, useRef, useState } from 'react';
 import type { FxType } from '@jm/jmi-format/web';
 import { FX_REGISTRY } from '@jm/jmi-format/web';
-import { MAX_SLOTS } from '../../engine/fx/rack';
+import { MAX_SLOTS, type FxRack } from '../../engine/fx/rack';
 import { useApp } from '../../state/appStore';
 import { services } from '../../state/services';
 import { Button, Input, Label, Panel, Select, Toggle } from '../common';
@@ -28,8 +28,12 @@ import { Knob } from './Knob';
  * plate button in the segmented plate language; the kit power icon arms the
  * unit.
  */
-export function FxRackView() {
-  const [, bump] = useReducer((n: number) => n + 1, 0);
+export function FxRackView({ rack: rackProp, onChanged }: { rack?: FxRack; onChanged?: () => void } = {}) {
+  const [, bumpLocal] = useReducer((n: number) => n + 1, 0);
+  const bump = () => {
+    bumpLocal();
+    onChanged?.();
+  };
   const tempo = useApp((s) => s.tempo);
   const setTempo = useApp((s) => s.setTempo);
   const [adding, setAdding] = useState(false);
@@ -48,7 +52,7 @@ export function FxRackView() {
   const [dragState, setDragState] = useState<{ from: number; to: number } | null>(null);
   const unitEls = useRef<(HTMLDivElement | null)[]>([]);
 
-  const rack = services.rack;
+  const rack = rackProp ?? services.rack;
   if (!rack)
     return (
       <Panel>

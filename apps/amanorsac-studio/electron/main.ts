@@ -177,6 +177,24 @@ ipcMain.handle(
   },
 );
 
+/**
+ * Decode a bundle sample, WAV or FLAC. FLAC is lossless and about a third the size, so library
+ * bundles ship in it; the decoded samples are bit-identical to the WAV they replaced.
+ */
+async function decodeSampleFile(p: string): Promise<{ sampleRate: number; channels: Float32Array[] }> {
+  const bytes = readFileSync(p);
+  if (!/\.flac$/i.test(p) && bytes.toString('ascii', 0, 4) !== 'fLaC') return decodeWav(bytes);
+  const { FLACDecoder } = await import('@wasm-audio-decoders/flac');
+  const dec = new FLACDecoder();
+  await dec.ready;
+  try {
+    const { channelData, samplesDecoded, sampleRate } = await dec.decodeFile(new Uint8Array(bytes));
+    return { sampleRate, channels: channelData.map((c) => c.subarray(0, samplesDecoded)) };
+  } finally {
+    dec.free();
+  }
+}
+
 ipcMain.handle('take:read', (_e, id: string, file: string) => {
   const p = join(sessionDir(id), 'samples', file);
   if (!existsSync(p)) return null;
@@ -204,6 +222,8 @@ interface ExportRequest {
   files: { from: string; to: string }[];
   /** decode each sample, mix to mono, re-encode (mono fold, §3.5) */
   foldToMono?: boolean;
+  /** Amanorsac catalogue shelf, sealed into the .aofas card */
+  category?: string;
   bitDepth?: 16 | 24;
 }
 
@@ -265,6 +285,7 @@ ipcMain.handle('export:bundle', (_e, req: ExportRequest) => {
       out,
       keyRing: makeKeyRing(),
       author: 'Amanorsac Studio',
+      category: req.category as never,
       // A take that captured nothing is reported in the validation issues
       // above; it must not stop the rest of the instrument being sealed.
       dropEmptySamples: true,
@@ -284,6 +305,122 @@ ipcMain.handle('export:bundle', (_e, req: ExportRequest) => {
     stats: result.stats ?? { sampleCount: 0, presetCount: 0, totalBytes },
     totalBytes,
   };
+});
+
+/* ---------------- IPC: Sanctuary library (open / edit / save in place) ---------------- */
+
+function sanctuaryLibraryDir(): string {
+  const d = join(homedir(), 'Documents', 'Amanorsac Studio', 'Sanctuary', 'Library');
+  mkdirSync(d, { recursive: true });
+  return d;
+}
+
+function readJson(path: string): unknown {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+ipcMain.handle('library:list', () => {
+  const lib = sanctuaryLibraryDir();
+  const out: { dir: string; name: string; world: string; category: string; sampleCount: number; zoneCount: number; sustaining: boolean }[] = [];
+  for (const e of readdirSync(lib, { withFileTypes: true })) {
+    if (!e.isDirectory() || !e.name.toLowerCase().endsWith('.jmi')) continue;
+    const dir = join(lib, e.name);
+    const inst = readJson(join(dir, 'instrument.json')) as {
+      meta?: { name?: string; world?: string };
+      soundType?: string;
+      zones?: { roundRobins: unknown[] }[];
+    } | null;
+    if (!inst?.meta) continue;
+    const side = readJson(join(dir, 'sanctuary.json')) as { category?: string } | null;
+    out.push({
+      dir,
+      name: inst.meta.name ?? e.name,
+      world: inst.meta.world ?? '',
+      category: side?.category ?? '',
+      sampleCount: (inst.zones ?? []).reduce((n, z) => n + z.roundRobins.length, 0),
+      zoneCount: (inst.zones ?? []).length,
+      sustaining: inst.soundType === 'sustaining',
+    });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+});
+
+ipcMain.handle('bundle:open', (_e, dir: string) => {
+  const instrument = readJson(join(dir, 'instrument.json'));
+  if (!instrument) throw new Error('Not a .jmi bundle: ' + dir);
+  const presetsDir = join(dir, 'presets');
+  const presets = existsSync(presetsDir)
+    ? readdirSync(presetsDir)
+        .filter((f) => f.toLowerCase().endsWith('.json'))
+        .sort()
+        .map((f) => ({ fileName: f, json: readFileSync(join(presetsDir, f), 'utf8') }))
+    : [];
+  const side = readJson(join(dir, 'sanctuary.json')) as { category?: string } | null;
+  return { dir, instrument, presets, category: side?.category ?? '' };
+});
+
+ipcMain.handle('bundle:readSample', async (_e, dir: string, file: string) => {
+  const p = join(dir, file.replace(/^[\\/]+/, ''));
+  if (!p.startsWith(dir) || !existsSync(p)) return null;
+  const { sampleRate, channels } = await decodeSampleFile(p);
+  return { sampleRate, channels: channels.map((c) => c.buffer) };
+});
+
+ipcMain.handle('bundle:save', (_e, req: { dir: string; name?: string; category?: string; presets: { fileName: string; json: string }[] }) => {
+  const instPath = join(req.dir, 'instrument.json');
+  const inst = readJson(instPath) as { meta: { name: string } } | null;
+  if (!inst) throw new Error('Not a .jmi bundle: ' + req.dir);
+  if (req.name && req.name.trim() && req.name.trim() !== inst.meta.name) {
+    inst.meta.name = req.name.trim();
+    writeFileSync(instPath, JSON.stringify(inst, null, 2), 'utf8');
+  }
+  if (req.category) {
+    const sidePath = join(req.dir, 'sanctuary.json');
+    const side = (readJson(sidePath) as Record<string, unknown> | null) ?? { tags: [] };
+    side.category = req.category;
+    writeFileSync(sidePath, JSON.stringify(side, null, 2), 'utf8');
+  }
+  const presetsDir = join(req.dir, 'presets');
+  mkdirSync(presetsDir, { recursive: true });
+  for (const f of readdirSync(presetsDir)) if (f.toLowerCase().endsWith('.json')) rmSync(join(presetsDir, f));
+  for (const p of req.presets) writeFileSync(join(presetsDir, p.fileName.replace(/[\\/]/g, '_')), p.json, 'utf8');
+  const result = validateBundle(req.dir);
+  return { ok: result.valid, issues: result.issues };
+});
+
+/* ---------------- IPC: layered sounds for Sanctuary ---------------- */
+
+function soundsDir(): string {
+  const d = join(sanctuaryLibraryDir(), 'Sounds');
+  mkdirSync(d, { recursive: true });
+  return d;
+}
+
+ipcMain.handle('sound:list', () => {
+  const out: { file: string; name: string; parts: number }[] = [];
+  for (const e of readdirSync(soundsDir())) {
+    if (!e.toLowerCase().endsWith('.sound.json')) continue;
+    const file = join(soundsDir(), e);
+    const j = readJson(file) as { name?: string; parts?: unknown[] } | null;
+    if (j) out.push({ file, name: j.name ?? e, parts: j.parts?.length ?? 0 });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+});
+
+ipcMain.handle('sound:load', (_e, file: string) => {
+  if (!file.startsWith(soundsDir())) throw new Error('Not a library sound: ' + file);
+  return readFileSync(file, 'utf8');
+});
+
+ipcMain.handle('sound:save', (_e, req: { name: string; json: string }) => {
+  const safe = req.name.trim().replace(/[<>:"/\\|?*]+/g, '').trim() || 'Sound';
+  const file = join(soundsDir(), `${safe}.sound.json`);
+  writeFileSync(file, req.json, 'utf8');
+  return { file };
 });
 
 /* ---------------- IPC: library import (X7L → .jmi) ---------------- */

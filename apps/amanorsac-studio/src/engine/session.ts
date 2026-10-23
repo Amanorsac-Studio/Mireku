@@ -4,6 +4,7 @@
  * and resumes exactly where it left off (§3.3).
  */
 
+import type { Category } from '@amanorsac/aofas-format/catalog';
 import type { CaptureMode, Channels, SoundType, VelocityLayer, World } from '@jm/jmi-format/web';
 import { DEFAULT_VELOCITY_MAP, defaultPlanNotes, midiToNoteName, sampleFileName } from '@jm/jmi-format/web';
 import type { PatchQueueState } from './patchQueue';
@@ -45,7 +46,17 @@ export interface TakeRecord {
 export interface SessionConfig {
   id: string;
   instrumentName: string;
+  /**
+   * The .jmi world. It drives FX defaults and cloth, and it belongs to the JM
+   * format — four values, no piano among them. Left exactly as it was.
+   */
   world: World;
+  /**
+   * The Amanorsac catalogue shelf, written into the sealed .aofas so every
+   * Amanorsac app can file this sound the same way. Independent of `world`
+   * on purpose: the JM format must not move to fit our taxonomy.
+   */
+  category?: Category;
   soundType: SoundType | 'auto-detect';
   channels: Channels;
   captureMode: CaptureMode;

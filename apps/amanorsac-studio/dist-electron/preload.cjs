@@ -37,6 +37,13 @@ var bridge = {
       import_electron.ipcRenderer.off("import:progress", listener);
     };
   },
+  listLibrary: () => import_electron.ipcRenderer.invoke("library:list"),
+  openBundle: (dir) => import_electron.ipcRenderer.invoke("bundle:open", dir),
+  readBundleSample: (dir, file) => import_electron.ipcRenderer.invoke("bundle:readSample", dir, file),
+  saveBundle: (req) => import_electron.ipcRenderer.invoke("bundle:save", req),
+  listSounds: () => import_electron.ipcRenderer.invoke("sound:list"),
+  loadSound: (file) => import_electron.ipcRenderer.invoke("sound:load", file),
+  saveSound: (req) => import_electron.ipcRenderer.invoke("sound:save", req),
   chooseDir: () => import_electron.ipcRenderer.invoke("dialog:chooseDir"),
   chooseFile: () => import_electron.ipcRenderer.invoke("dialog:chooseFile"),
   showItem: (p) => import_electron.ipcRenderer.invoke("shell:showItem", p)

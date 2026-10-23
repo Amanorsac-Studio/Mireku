@@ -26,7 +26,7 @@
             "enum": [
               "jmChorus", "tremoloAutoPan", "phaser", "flanger", "epPreamp",
               "vintageEq", "compressor", "tapeDelay", "digitalDelay",
-              "plateReverb", "hallShimmer", "widener"
+              "plateReverb", "hallShimmer", "widener", "svFilter"
             ]
           },
           "bypassed": { "type": "boolean" },

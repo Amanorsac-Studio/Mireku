@@ -19,6 +19,10 @@ export class WebAudioVoiceSink implements VoiceSink {
   private samples = new Map<string, LoadedSample>();
   manager: VoiceManager | null = null;
   releaseMs = 250;
+  /** amp attack; 0 = play the sample's own attack, which is what "as sampled" means */
+  attackMs = 0;
+  /** instrument output trim in dB, applied to every voice (0 = as sampled) */
+  trimDb = 0;
 
   constructor(
     private ctx: BaseAudioContext,
@@ -39,6 +43,11 @@ export class WebAudioVoiceSink implements VoiceSink {
     this.samples.clear();
   }
 
+  /** Silence every sounding voice (release tails included) with a short fade. */
+  stopAll(fadeMs = 30): void {
+    for (const [id] of this.nodes) this.release(id, fadeMs);
+  }
+
   start(pick: ZonePick, _note: number, _velocity: number): number {
     const sample = this.samples.get(pick.rr.file);
     const id = this.nextId++;
@@ -52,8 +61,25 @@ export class WebAudioVoiceSink implements VoiceSink {
       src.loopEnd = sample.loop.endSample / sample.buffer.sampleRate;
     }
     const gain = this.ctx.createGain();
-    gain.gain.value = 1; // levels live in the samples themselves — never normalize
-    src.connect(gain).connect(this.output);
+    // levels live in the samples; only the instrument's velocity curve / rt_decay scales them
+    const target = (pick.gain ?? 1) * Math.pow(10, this.trimDb / 20);
+    if (this.attackMs > 0) {
+      const t = this.ctx.currentTime;
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(target, t + this.attackMs / 1000);
+    } else {
+      gain.gain.value = target;
+    }
+    if (pick.cutoffHz) {
+      // velocity brightness: a note played below its layer's anchor is darkened a little
+      const lp = this.ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = pick.cutoffHz;
+      lp.Q.value = 0.707;
+      src.connect(lp).connect(gain).connect(this.output);
+    } else {
+      src.connect(gain).connect(this.output);
+    }
     src.onended = () => {
       this.nodes.delete(id);
       this.manager?.voiceEnded(id);
@@ -68,14 +94,19 @@ export class WebAudioVoiceSink implements VoiceSink {
     return id;
   }
 
-  release(voiceId: number): void {
+  release(voiceId: number, releaseMs?: number): void {
     const v = this.nodes.get(voiceId);
     if (!v) return;
     const t = this.ctx.currentTime;
-    const relS = this.releaseMs / 1000;
-    v.gain.gain.setValueAtTime(v.gain.gain.value, t);
-    v.gain.gain.linearRampToValueAtTime(0, t + relS);
-    v.src.stop(t + relS + 0.01);
+    const relS = (releaseMs ?? this.releaseMs) / 1000;
+    // -60 dB over releaseMs, the same convention and curve as Sanctuary: a damper falling, not a
+    // linear fade (which ends abruptly) and not a one-pole time constant (which rings on).
+    const from = Math.max(1e-4, v.gain.gain.value);
+    v.gain.gain.cancelScheduledValues(t);
+    v.gain.gain.setValueAtTime(from, t);
+    v.gain.gain.exponentialRampToValueAtTime(from * 1e-3, t + relS);
+    v.gain.gain.linearRampToValueAtTime(0, t + relS + 0.005);
+    v.src.stop(t + relS + 0.02);
     this.nodes.delete(voiceId);
   }
 }

@@ -136,7 +136,29 @@ class Phaser extends BaseFxUnit {
   private lfoDepth = this.ctx.createGain();
   private fb = this.ctx.createGain();
   private wet = this.ctx.createGain();
+  private dry = this.ctx.createGain();
   private stageIn = this.ctx.createGain();
+  /**
+   * BUG FOUND WHILE WIRING MIX — the feedback loop was SILENT, and it took the
+   * whole wet path with it.
+   *
+   * `stageIn -> allpass... -> fb -> stageIn` is a cycle, and the Web Audio
+   * spec only allows a cycle that contains at least one DelayNode: an
+   * implementation MUST mute any cycle without one. Chrome and
+   * node-web-audio-api both do, and because the muted sub-graph is the wet
+   * chain itself, the Capture phaser rendered its DRY INPUT and nothing else —
+   * rate, depth, feedback and stages all did nothing audible. Measured: wet
+   * peak 0.0 before, 0.82 after, with the identical graph plus this node.
+   *
+   * One DelayNode in the loop makes the cycle legal. `delayTime` 0 is the
+   * shortest the spec allows inside a cycle (it is rounded up to one render
+   * quantum, 128 frames), so the loop is a short comb rather than the plugin's
+   * per-sample recursion — but it is the tightest Web Audio permits, and a
+   * phaser that phases beats one that does not. The loop gain is still exactly
+   * `feedbackGain(feedback)` (< 1 everywhere, and the allpass chain is
+   * magnitude-flat), so stability is unchanged — fxStability covers it.
+   */
+  private fbDelay = this.ctx.createDelay(0.05);
 
   constructor(ctx: BaseAudioContext) {
     super(ctx, 'phaser');
@@ -152,7 +174,10 @@ class Phaser extends BaseFxUnit {
     this.lfo.connect(this.lfoDepth);
     for (const ap of this.allpass) this.lfoDepth.connect(ap.frequency);
     this.lfo.start();
-    this.wetIn.connect(this.wetOut); // dry path
+    // CLIENT REQUEST — Mix (wet/dry), appended to the shared FX registry. The
+    // dry path was a bare unity wire summed against a wet gain of 1; it is a
+    // true crossfade now, so mix 50 is the 50/50 blend the sum already had.
+    this.wetIn.connect(this.dry).connect(this.wetOut);
     this.wetIn.connect(this.stageIn);
     this.rebuildChain(4);
     this.applyAll();
@@ -162,6 +187,7 @@ class Phaser extends BaseFxUnit {
     this.stageIn.disconnect();
     for (const ap of this.allpass) ap.disconnect();
     this.fb.disconnect();
+    this.fbDelay.disconnect();
     this.wet.disconnect();
     let node: AudioNode = this.stageIn;
     for (let i = 0; i < stages; i++) {
@@ -169,7 +195,7 @@ class Phaser extends BaseFxUnit {
       node = this.allpass[i];
     }
     node.connect(this.wet).connect(this.wetOut);
-    node.connect(this.fb).connect(this.stageIn);
+    node.connect(this.fb).connect(this.fbDelay).connect(this.stageIn);
   }
 
   protected applyParam(id: string, value: ParamValue): void {
@@ -188,6 +214,12 @@ class Phaser extends BaseFxUnit {
       case 'stages':
         this.rebuildChain(Number(value));
         break;
+      case 'mix': {
+        const m = Number(value) / 100;
+        this.setAP(this.wet.gain, m);
+        this.setAP(this.dry.gain, 1 - m);
+        break;
+      }
     }
   }
 }
@@ -200,14 +232,15 @@ class Flanger extends BaseFxUnit {
   private lfo = makeLfo(this.ctx, this.delay.delayTime, 0.2, 0.001);
   private fb = this.ctx.createGain();
   private wet = this.ctx.createGain();
+  private dry = this.ctx.createGain();
 
   constructor(ctx: BaseAudioContext) {
     super(ctx, 'flanger');
     this.delay.delayTime.value = 0.002;
-    this.wetIn.connect(this.wetOut);
+    // CLIENT REQUEST — Mix (wet/dry). Was hard-wired at dry 1.0 / wet 0.7.
+    this.wetIn.connect(this.dry).connect(this.wetOut);
     this.wetIn.connect(this.delay).connect(this.wet).connect(this.wetOut);
     this.delay.connect(this.fb).connect(this.delay);
-    this.wet.gain.value = 0.7;
     this.applyAll();
   }
 
@@ -225,6 +258,12 @@ class Flanger extends BaseFxUnit {
       case 'manual':
         this.setAP(this.delay.delayTime, Number(value) / 1000);
         break;
+      case 'mix': {
+        const m = Number(value) / 100;
+        this.setAP(this.wet.gain, m);
+        this.setAP(this.dry.gain, 1 - m);
+        break;
+      }
     }
   }
 }
@@ -845,6 +884,67 @@ class Widener extends BaseFxUnit {
 }
 
 /* ------------------------------------------------------------------ */
+/* 13. Filter (resonant SVF-style: biquad + drive + mix)                */
+/* ------------------------------------------------------------------ */
+class SvFilter extends BaseFxUnit {
+  private drive = this.ctx.createWaveShaper();
+  private filt = this.ctx.createBiquadFilter();
+  private wet = this.ctx.createGain();
+  private dry = this.ctx.createGain();
+  private curves = new Map<number, Float32Array<ArrayBuffer>>();
+
+  constructor(ctx: BaseAudioContext) {
+    super(ctx, 'svFilter');
+    this.drive.oversample = '2x';
+    this.filt.type = 'lowpass';
+    this.wetIn.connect(this.drive).connect(this.filt).connect(this.wet).connect(this.wetOut);
+    this.wetIn.connect(this.dry).connect(this.wetOut);
+    this.applyAll();
+  }
+
+  private curveFor(amount: number): Float32Array<ArrayBuffer> {
+    const key = Math.round(amount * 20);
+    let c = this.curves.get(key);
+    if (c) return c;
+    const pre = 1 + amount * 9, post = 1 / Math.sqrt(pre);
+    c = new Float32Array(new ArrayBuffer(1024 * 4));
+    for (let i = 0; i < c.length; i++) {
+      const x = (i / (c.length - 1)) * 2 - 1;
+      c[i] = amount > 0 ? Math.tanh(x * pre) * post : x;
+    }
+    this.curves.set(key, c);
+    return c;
+  }
+
+  protected applyParam(id: string, value: ParamValue): void {
+    switch (id) {
+      case 'mode':
+        this.filt.type = value === 'highpass' ? 'highpass' : value === 'bandpass' ? 'bandpass' : 'lowpass';
+        this.applyParam('resonance', this.params.resonance);
+        break;
+      case 'cutoff':
+        this.setAP(this.filt.frequency, Number(value));
+        break;
+      case 'resonance': {
+        const r = Number(value) / 100;
+        // lowpass/highpass Q is in dB (flat at −3 dB); bandpass Q is linear
+        this.setAP(this.filt.Q, this.filt.type === 'bandpass' ? 0.7 + r * 11 : BUTTERWORTH_Q_DB + r * 27);
+        break;
+      }
+      case 'drive':
+        this.drive.curve = this.curveFor(Number(value) / 100);
+        break;
+      case 'mix': {
+        const m = Number(value) / 100;
+        this.setAP(this.wet.gain, m);
+        this.setAP(this.dry.gain, 1 - m);
+        break;
+      }
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
 
 export function createFxUnit(ctx: BaseAudioContext, type: FxType): BaseFxUnit {
   switch (type) {
@@ -872,6 +972,8 @@ export function createFxUnit(ctx: BaseAudioContext, type: FxType): BaseFxUnit {
       return new HallShimmer(ctx);
     case 'widener':
       return new Widener(ctx);
+    case 'svFilter':
+      return new SvFilter(ctx);
   }
 }
 

@@ -1,4 +1,4 @@
-// EngineTests.cpp — JM Signature engine unit tests (spec §7).
+// EngineTests.cpp — MIREKU engine unit tests (spec §7).
 // Console target; run directly or via ctest. Covers: FX registry integrity,
 // .jmi loading of a real testdata bundle, zone selection, RR cycling,
 // velocity-crossfade math, CC64 sustain logic, loop-seam continuity, and an
@@ -1914,7 +1914,7 @@ static void testFxMixDefaultIdentity()
 
 int main()
 {
-    std::printf ("JM Signature engine tests\n=========================\n");
+    std::printf ("MIREKU engine tests\n=========================\n");
     testFxDefaultsAreOff();
     testFxRackStructuralEdits();
     testReorderIsClickless();

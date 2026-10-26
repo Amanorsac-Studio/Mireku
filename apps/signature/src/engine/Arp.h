@@ -1,4 +1,4 @@
-// Arp.h — JM Signature modulation PHASE 2: the arpeggiator.
+// Arp.h — MIREKU modulation PHASE 2: the arpeggiator.
 //
 // Implements docs/JM-MODULATION-SPEC.html section E against the decisions in
 // docs/MODULATION-RESEARCH.md section 3. ONE GLOBAL ARP with per-slot enable

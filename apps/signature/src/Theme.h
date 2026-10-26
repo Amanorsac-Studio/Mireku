@@ -1,4 +1,4 @@
-// Theme.h — the ONE place for every colour, font and layout metric in JM Signature.
+// Theme.h — the ONE place for every colour, font and layout metric in MIREKU.
 // The UX passes (kente materials, JM engraved motif family) restyle by editing this
 // file + the LookAndFeel only. Spec §5 / design-reference README "Core tokens".
 #pragma once

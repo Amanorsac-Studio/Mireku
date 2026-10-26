@@ -1,5 +1,5 @@
 {
-  "_comment": "JM Signature audio regression reference. Regenerate DELIBERATELY with JMSignatureValidation --regression --rebaseline and commit the diff.",
+  "_comment": "JM Signature audio regression reference. Regenerate DELIBERATELY with MirekuValidation --regression --rebaseline and commit the diff.",
   "sampleRate": 48000.0,
   "seconds": 2.0,
   "toleranceDb": 0.5,

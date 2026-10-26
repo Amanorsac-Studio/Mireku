@@ -340,7 +340,7 @@ public:
         ChromePanel::paint (g);
         g.setColour (Theme::muted);
         g.setFont (Theme::ui (12.0f));
-        g.drawText ("ENTER YOUR JM SIGNATURE LICENCE KEY", 28, 62, getWidth() - 56, 16,
+        g.drawText ("ENTER YOUR MIREKU LICENCE KEY", 28, 62, getWidth() - 56, 16,
                     juce::Justification::centredLeft, false);
         g.setColour (status_.startsWith ("LICENCE ACTIVE") ? Theme::okGreen : Theme::muted);
         g.fillEllipse (30.0f, (float) key_.getBottom() + 18.0f, 8.0f, 8.0f);

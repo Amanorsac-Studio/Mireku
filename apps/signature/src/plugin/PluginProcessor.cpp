@@ -1209,7 +1209,7 @@ void JMSignatureProcessor::loadBundleIntoSlot (int slot, const BundleInfo& info)
     auto b = state.library.loadBundle (info.dir, err);
     if (b == nullptr)
     {
-        juce::Logger::writeToLog ("JM Signature: bundle load failed: " + err);
+        juce::Logger::writeToLog ("MIREKU: bundle load failed: " + err);
         return;
     }
     auto& s = state.slots[(size_t) slot];
@@ -1707,10 +1707,10 @@ void JMSignatureProcessor::syncSlotToDsp (int i)
                     eng.setBundle (nullptr);
                     state.libraryNotice = "\"" + missing + "\" is not in your library - slot "
                                         + juce::String::charToString ((juce::juce_wchar) ('A' + i)) + " is empty";
-                    juce::Logger::writeToLog ("JM Signature: " + state.libraryNotice);
+                    juce::Logger::writeToLog ("MIREKU: " + state.libraryNotice);
                     return;
                 }
-                juce::Logger::writeToLog ("JM Signature: " + state.libraryNotice);
+                juce::Logger::writeToLog ("MIREKU: " + state.libraryNotice);
             }
             juce::String err;
             if (auto b = dir.isDirectory() ? state.library.loadBundle (dir, err) : nullptr)

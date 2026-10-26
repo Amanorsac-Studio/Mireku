@@ -1,4 +1,4 @@
-// PluginProcessor.h — JM Signature audio processor: 4 slot engines + slot FX
+// PluginProcessor.h — MIREKU audio processor: 4 slot engines + slot FX
 // racks, master FX rack, macros, MIDI learn/map, transpose, state (spec §5).
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -10,6 +10,33 @@
 #include "../engine/MidiRouting.h"
 
 namespace jm {
+
+//==============================================================================
+// MIREKU rename — the standalone's settings file.
+//
+// StandalonePluginHolder names its PropertiesFile after the APPLICATION, so
+// renaming the product moves AppData/Roaming/<name>/<name>.settings — and that
+// one file holds the player's audio device type / device / rate / buffer size,
+// his enabled MIDI inputs, the window bounds and full-screen flag, and the
+// saved plugin state. These two live here, not in StandaloneApp.cpp, so the
+// path the app writes and the path the validation suite asserts are the same
+// expression and cannot drift apart.
+inline juce::PropertiesFile::Options standaloneSettingsOptions (const juce::String& appName)
+{
+    juce::PropertiesFile::Options o;
+    o.applicationName     = appName;
+    o.filenameSuffix      = ".settings";
+    o.osxLibrarySubFolder = "Application Support";
+    o.folderName          = {};
+    return o;
+}
+inline juce::File standaloneSettingsFile (const juce::String& appName)
+{
+    return standaloneSettingsOptions (appName).getDefaultFile();
+}
+/// The product's name before 2026-10-26, kept for the migration only.
+inline const char* legacyProductName() { return "JM Signature"; }
+inline const char* productName()       { return "MIREKU"; }
 
 class JMSignatureProcessor : public juce::AudioProcessor,
                              public ModApplier,
@@ -31,7 +58,7 @@ public:
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
-    const juce::String getName() const override { return "JM Signature"; }
+    const juce::String getName() const override { return "MIREKU"; }
     bool acceptsMidi() const override { return true; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }

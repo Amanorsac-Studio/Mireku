@@ -85,9 +85,9 @@ static void savePng (juce::Component& c, const juce::String& name)
 
 //==============================================================================
 // AUTHORING MODE — real-library probe (NOT a CTest; its result depends on which
-// bundles are on the machine, exactly like JMSignatureDevices).
+// bundles are on the machine, exactly like MirekuDevices).
 //
-//   JMSignatureSnapshot --probe-bundle <path-to.jmi> <preset name>
+//   MirekuSnapshot --probe-bundle <path-to.jmi> <preset name>
 //
 // It performs the REAL authoring save into a REAL bundle through the same
 // writeBundlePreset guard the app uses, prints where it went, and then
@@ -149,7 +149,7 @@ int main (int argc, char** argv)
                             argc >= 4 ? juce::String::fromUTF8 (argv[3]) : juce::String ("Authoring Probe"),
                             true);
 
-    std::printf ("JM Signature — client review round 2 self-check (1536x1024)\n"
+    std::printf ("MIREKU — client review round 2 self-check (1536x1024)\n"
                  "===========================================================\n");
 
     JmLookAndFeel lnf;
@@ -2355,7 +2355,7 @@ int main (int argc, char** argv)
         //----------------------------------------------------------------------
         std::printf ("\n== R8 (3) the client's library shape (2 in one world, 2 worlds empty) ==\n");
         const auto libRoot = juce::File::getSpecialLocation (juce::File::tempDirectory)
-                                 .getChildFile ("JMSignatureRound8Library");
+                                 .getChildFile ("MirekuRound8Library");
         {
             libRoot.deleteRecursively();
             libRoot.createDirectory();
@@ -2517,7 +2517,7 @@ int main (int argc, char** argv)
     //
     //   * the save lands in the wrong place (factory vs. user);
     //   * a write into a bundle leaves that bundle invalid — which would stop
-    //     it loading in JM Signature AND in JM Capture;
+    //     it loading in MIREKU AND in JM Capture;
     //   * the artist saves a patch and silently loses his modulation work,
     //     because the .jmi preset schema cannot carry it.
     //
@@ -2531,7 +2531,7 @@ int main (int argc, char** argv)
                      "==========================================================\n");
 
         const auto scratch = juce::File::getSpecialLocation (juce::File::tempDirectory)
-                                 .getChildFile ("JMSignatureAuthoringCheck");
+                                 .getChildFile ("MirekuAuthoringCheck");
         scratch.deleteRecursively();
         const auto libRoot = scratch.getChildFile ("Library");
         const auto presetRoot = scratch.getChildFile ("Presets");

@@ -10,7 +10,7 @@
 // hardware is plugged in, so it is deliberately NOT registered with CTest. Run
 // it and send the output when a device cannot be found.
 //
-//   build\JMSignatureDevices_artefacts\Release\JMSignatureDevices.exe
+//   build\MirekuDevices_artefacts\Release\MirekuDevices.exe
 //
 // It also prints the buffer sizes each device offers and the round-trip latency
 // JUCE reports for the default one, which is the raw material for the latency
@@ -48,7 +48,7 @@ int main()
 {
     juce::ScopedJuceInitialiser_GUI init;
 
-    std::cout << "JM Signature — audio device inventory\n"
+    std::cout << "MIREKU — audio device inventory\n"
               << "compiled device support:"
               << "  JUCE_ASIO=" << (int) JUCE_ASIO
               << "  JUCE_WASAPI=" << (int) JUCE_WASAPI

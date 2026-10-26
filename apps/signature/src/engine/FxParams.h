@@ -1,7 +1,7 @@
 // FxParams.h — canonical C++ FX + world-engine parameter registry.
 // MIRRORS packages/jmi-format/src/fx-params.ts EXACTLY (same ids, ranges,
 // defaults, enum choices) so preset JSON is portable between JM Capture and
-// JM Signature. fx-params.ts is the source of truth; change it first.
+// MIREKU. fx-params.ts is the source of truth; change it first.
 #pragma once
 #include <array>
 #include <map>
@@ -239,30 +239,48 @@ inline void applyDefaultRackOverrides (int world, FxType t, ParamValues& v)
 }
 
 // --------------------------------------- world engine controls (§5.2)
+//
+// NEUTRAL DEFAULTS. Every default below is the control's UNITY POINT — the
+// value at which the per-world voicing chain does nothing to the recorded
+// audio. Client instruction: "all effects should be off or default — it
+// shouldn't affect the sound." The FX rack was already bypassed by default;
+// the voicing chain in Sampler.h is a second stage, and its old defaults
+// (bark 30, warmth 40, air 30, glass 40, motion 30, swell 30, attack 20)
+// EQ'd and drove a freshly loaded instrument before a knob was touched.
+//
+// The unity point is read off the DSP (Sampler.h), not assumed, and it is not
+// always 50 — see the comment on WORLD_ENGINE_CONTROLS in
+// packages/jmi-format/src/fx-params.ts, which is the source of truth for this
+// table and carries the full derivation. In short:
+//   tine / body / glass   shelfDb (v) = (v-50)/50 * 8 dB   -> neutral at 50
+//   warmth / air / bark / motion / attack / swell  one-directional -> 0
+//   brightness            opens a per-voice LP              -> 100 (top end)
+//   tremolo/space/echo/shimmer/ensemble/chorusDepth  inert FX macros -> 0
+//   width / chorusMode    unchanged (0 width = mono, not neutral; enum)
 inline const std::vector<ParamSpec>& worldEngineControls (int world)
 {
     static const std::vector<ParamSpec> ctrls[4] = {
-        { { "bark", "Bark", ParamKind::Float, 0, 100, 30 },
+        { { "bark", "Bark", ParamKind::Float, 0, 100, 0 },
           { "tine", "Tine", ParamKind::Float, 0, 100, 50 },
           { "body", "Body", ParamKind::Float, 0, 100, 50 },
-          { "tremolo", "Tremolo", ParamKind::Float, 0, 100, 40 },
-          { "space", "Space", ParamKind::Float, 0, 100, 30 } },
+          { "tremolo", "Tremolo", ParamKind::Float, 0, 100, 0 },
+          { "space", "Space", ParamKind::Float, 0, 100, 0 } },
         { { "chorusMode", "Chorus Mode", ParamKind::Enum, 0, 2, 0, { "I", "II", "I+II" } },
-          { "chorusDepth", "Chorus Depth", ParamKind::Float, 0, 100, 60 },
+          { "chorusDepth", "Chorus Depth", ParamKind::Float, 0, 100, 0 },
           { "width", "Width", ParamKind::Float, 0, 100, 60 },
-          { "ensemble", "Ensemble", ParamKind::Float, 0, 100, 30 },
-          { "warmth", "Warmth", ParamKind::Float, 0, 100, 40 },
-          { "air", "Air", ParamKind::Float, 0, 100, 30 } },
-        { { "brightness", "Brightness", ParamKind::Float, 0, 100, 60 },
-          { "attack", "Attack", ParamKind::Float, 0, 100, 20 },
-          { "glass", "Glass", ParamKind::Float, 0, 100, 40 },
-          { "chorusDepth", "Chorus Depth", ParamKind::Float, 0, 100, 40 },
-          { "echo", "Echo", ParamKind::Float, 0, 100, 25 } },
-        { { "swell", "Swell", ParamKind::Float, 0, 100, 30 },
-          { "ensemble", "Ensemble", ParamKind::Float, 0, 100, 50 },
-          { "shimmer", "Shimmer", ParamKind::Float, 0, 100, 20 },
-          { "warmth", "Warmth", ParamKind::Float, 0, 100, 40 },
-          { "motion", "Motion", ParamKind::Float, 0, 100, 30 } },
+          { "ensemble", "Ensemble", ParamKind::Float, 0, 100, 0 },
+          { "warmth", "Warmth", ParamKind::Float, 0, 100, 0 },
+          { "air", "Air", ParamKind::Float, 0, 100, 0 } },
+        { { "brightness", "Brightness", ParamKind::Float, 0, 100, 100 },
+          { "attack", "Attack", ParamKind::Float, 0, 100, 0 },
+          { "glass", "Glass", ParamKind::Float, 0, 100, 50 },
+          { "chorusDepth", "Chorus Depth", ParamKind::Float, 0, 100, 0 },
+          { "echo", "Echo", ParamKind::Float, 0, 100, 0 } },
+        { { "swell", "Swell", ParamKind::Float, 0, 100, 0 },
+          { "ensemble", "Ensemble", ParamKind::Float, 0, 100, 0 },
+          { "shimmer", "Shimmer", ParamKind::Float, 0, 100, 0 },
+          { "warmth", "Warmth", ParamKind::Float, 0, 100, 0 },
+          { "motion", "Motion", ParamKind::Float, 0, 100, 0 } },
     };
     return ctrls[world < 0 || world > 3 ? 0 : world];
 }

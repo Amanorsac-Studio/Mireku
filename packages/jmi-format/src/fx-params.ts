@@ -256,36 +256,65 @@ export function buildDefaultRack(world: World, opts?: { bypassed?: boolean }): F
   }));
 }
 
-/** Model-page engine control ids per world, spec §5.2 (normalized 0..100 unless enum). */
+/**
+ * Model-page engine control ids per world, spec §5.2 (normalized 0..100 unless enum).
+ *
+ * EVERY DEFAULT HERE IS THE CONTROL'S UNITY POINT — the value at which the
+ * engine does nothing to the recorded audio. Client instruction: "all effects
+ * should be off or default — it shouldn't affect the sound." The FX rack was
+ * already bypassed by default, but the per-world voicing chain
+ * (apps/signature/src/engine/Sampler.h, applyVoicing + the per-voice drive and
+ * LP) is a SECOND processing stage, and its old defaults were not neutral.
+ *
+ * The unity point is read off the DSP, not assumed, and it is not always 50:
+ *   • `tine` / `body` / `glass` are `shelfDb(v) = (v-50)/50 * 8 dB`
+ *     — neutral at 50 (knob at 12 o'clock does nothing);
+ *   • `warmth` is `tilt = -v/100`, `air` is `highDb = v/100 * 8 dB`,
+ *     `bark` is a drive depth `v/100` plus a velocity-crossfade bias
+ *     `+v*0.30`, `motion` gates a pan/level LFO above 1, and `attack`/`swell`
+ *     only ever RAISE the amp attack (`max(atkMs, ...)`)
+ *     — all one-directional, so neutral is the bottom end, 0;
+ *   • `brightness` opens a per-voice velocity->brightness low-pass whose
+ *     cutoff rises with the control, so neutral is the TOP end, 100.
+ * The remaining controls (tremolo, space, echo, shimmer, ensemble,
+ * chorusDepth) are macros onto FX units and are consumed by nothing today;
+ * they are set to 0 = "nothing added" for consistency. `width` and
+ * `chorusMode` keep their values: 0 width would mean "collapse to mono", which
+ * is an active change rather than neutrality, and an enum has no off position.
+ *
+ * ONLY THE DEFAULTS MOVED. A saved preset that stores a value explicitly still
+ * loads at that value (engineParamsFromJmiPreset / paramValuesFromVar seed
+ * from these defaults and then overwrite every key the preset carries).
+ */
 export const WORLD_ENGINE_CONTROLS: Record<World, ParamSpec[]> = {
   'rhodes-ep': [
-    { id: 'bark', label: 'Bark', kind: 'float', min: 0, max: 100, default: 30 },
+    { id: 'bark', label: 'Bark', kind: 'float', min: 0, max: 100, default: 0 },
     { id: 'tine', label: 'Tine', kind: 'float', min: 0, max: 100, default: 50 },
     { id: 'body', label: 'Body', kind: 'float', min: 0, max: 100, default: 50 },
-    { id: 'tremolo', label: 'Tremolo', kind: 'float', min: 0, max: 100, default: 40 },
-    { id: 'space', label: 'Space', kind: 'float', min: 0, max: 100, default: 30 },
+    { id: 'tremolo', label: 'Tremolo', kind: 'float', min: 0, max: 100, default: 0 },
+    { id: 'space', label: 'Space', kind: 'float', min: 0, max: 100, default: 0 },
   ],
   mks: [
     { id: 'chorusMode', label: 'Chorus Mode', kind: 'enum', choices: ['I', 'II', 'I+II'], default: 'I' },
-    { id: 'chorusDepth', label: 'Chorus Depth', kind: 'float', min: 0, max: 100, default: 60 },
+    { id: 'chorusDepth', label: 'Chorus Depth', kind: 'float', min: 0, max: 100, default: 0 },
     { id: 'width', label: 'Width', kind: 'float', min: 0, max: 100, default: 60 },
-    { id: 'ensemble', label: 'Ensemble', kind: 'float', min: 0, max: 100, default: 30 },
-    { id: 'warmth', label: 'Warmth', kind: 'float', min: 0, max: 100, default: 40 },
-    { id: 'air', label: 'Air', kind: 'float', min: 0, max: 100, default: 30 },
+    { id: 'ensemble', label: 'Ensemble', kind: 'float', min: 0, max: 100, default: 0 },
+    { id: 'warmth', label: 'Warmth', kind: 'float', min: 0, max: 100, default: 0 },
+    { id: 'air', label: 'Air', kind: 'float', min: 0, max: 100, default: 0 },
   ],
   fm: [
-    { id: 'brightness', label: 'Brightness', kind: 'float', min: 0, max: 100, default: 60 },
-    { id: 'attack', label: 'Attack', kind: 'float', min: 0, max: 100, default: 20 },
-    { id: 'glass', label: 'Glass', kind: 'float', min: 0, max: 100, default: 40 },
-    { id: 'chorusDepth', label: 'Chorus Depth', kind: 'float', min: 0, max: 100, default: 40 },
-    { id: 'echo', label: 'Echo', kind: 'float', min: 0, max: 100, default: 25 },
+    { id: 'brightness', label: 'Brightness', kind: 'float', min: 0, max: 100, default: 100 },
+    { id: 'attack', label: 'Attack', kind: 'float', min: 0, max: 100, default: 0 },
+    { id: 'glass', label: 'Glass', kind: 'float', min: 0, max: 100, default: 50 },
+    { id: 'chorusDepth', label: 'Chorus Depth', kind: 'float', min: 0, max: 100, default: 0 },
+    { id: 'echo', label: 'Echo', kind: 'float', min: 0, max: 100, default: 0 },
   ],
   strings: [
-    { id: 'swell', label: 'Swell', kind: 'float', min: 0, max: 100, default: 30 },
-    { id: 'ensemble', label: 'Ensemble', kind: 'float', min: 0, max: 100, default: 50 },
-    { id: 'shimmer', label: 'Shimmer', kind: 'float', min: 0, max: 100, default: 20 },
-    { id: 'warmth', label: 'Warmth', kind: 'float', min: 0, max: 100, default: 40 },
-    { id: 'motion', label: 'Motion', kind: 'float', min: 0, max: 100, default: 30 },
+    { id: 'swell', label: 'Swell', kind: 'float', min: 0, max: 100, default: 0 },
+    { id: 'ensemble', label: 'Ensemble', kind: 'float', min: 0, max: 100, default: 0 },
+    { id: 'shimmer', label: 'Shimmer', kind: 'float', min: 0, max: 100, default: 0 },
+    { id: 'warmth', label: 'Warmth', kind: 'float', min: 0, max: 100, default: 0 },
+    { id: 'motion', label: 'Motion', kind: 'float', min: 0, max: 100, default: 0 },
   ],
 };
 

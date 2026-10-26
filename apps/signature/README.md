@@ -1,7 +1,7 @@
-# JM Signature
+# MIREKU
 
 JUCE 8 / C++20 instrument plugin (VST3 + AU + Standalone) — the playback half
-of the JM Signature Sound Library. Loads `.jmi` instrument bundles, four
+of the MIREKU Sound Library. Loads `.jmi` instrument bundles, four
 sound-world engines (Rhodes/EP · MKS · FM · Strings), a 4-slot Perform page,
 and the 12-unit JM FX rack.
 
@@ -25,7 +25,7 @@ cmake --build build --config Release
 
 JUCE 8.0.15 is used from `external/JUCE` when present, otherwise fetched via
 FetchContent (pinned tag). Outputs land in
-`build/JMSignature_artefacts/[Release/]{VST3,Standalone}`. AU is declared and
+`build/Mireku_artefacts/[Release/]{VST3,Standalone}`. AU is declared and
 builds on macOS only.
 
 ## Audio device support (standalone) — ASIO and WASAPI
@@ -48,7 +48,7 @@ built in and needs nothing installed. On a first launch with no saved settings
 the app now selects exclusive mode at 256 samples for you; after that, your own
 choice is remembered.
 
-**Diagnostics.** `build/JMSignatureDevices_artefacts/Release/JMSignatureDevices.exe`
+**Diagnostics.** `build/MirekuDevices_artefacts/Release/MirekuDevices.exe`
 prints every device type, every device under each, their sample rates, buffer
 sizes and reported latency. It is not a CTest (its output depends on the
 attached hardware) — run it and send the output when a device cannot be found.
@@ -75,18 +75,43 @@ To build with no ASIO support at all, configure with `-DJM_ASIO=OFF`. Either
 way, configure-time output states which path was taken:
 
 ```
--- JM Signature audio backends: WASAPI (shared/exclusive/low-latency) + DirectSound
--- JM Signature ASIO support  : ASIO headers bundled with JUCE (no download required)
+-- MIREKU audio backends: WASAPI (shared/exclusive/low-latency) + DirectSound
+-- MIREKU ASIO support  : ASIO headers bundled with JUCE (no download required)
 ```
 
 ## Runtime layout
 
-- Library folder: `~/Documents/JM Signature/Library` (change in any model
-  page → SETTINGS; stored in `~/Documents/JM Signature/settings.json`).
+- Library folder: `~/Documents/MIREKU/Library` (change in any model
+  page → SETTINGS; stored in `~/Documents/MIREKU/settings.json`).
   Dev fallback: when the library holds no bundles, `C:\JM VST\testdata`
   is scanned so the generated placeholder bundles play immediately.
-- User presets: `~/Documents/JM Signature/Presets/<world>/*.json` and
+- User presets: `~/Documents/MIREKU/Presets/<world>/*.json` and
   `.../Presets/Performance/*.json` (full snapshots).
+- Standalone settings (audio device type/device/rate/buffer, enabled MIDI
+  inputs, window bounds, saved plugin state):
+  `%APPDATA%\MIREKU\MIREKU.settings`.
+
+### Migration from "JM Signature" (the product's previous name)
+
+The product was renamed to MIREKU on 2026-10-26. On first run under the new
+name the app carries the old installation across and **never deletes or moves
+anything**:
+
+| old | new | how |
+|---|---|---|
+| `Documents/JM Signature/settings.json` | `Documents/MIREKU/settings.json` | copied (`Library::migrateFromLegacyAppDataDir`) |
+| `Documents/JM Signature/Presets/**` | `Documents/MIREKU/Presets/**` | copied, whole tree |
+| `%APPDATA%\JM Signature\JM Signature.settings` | `%APPDATA%\MIREKU\MIREKU.settings` | copied (`StandaloneApp.cpp`) |
+| `Documents/JM Signature/Library` (the .jmi bundles) | **left exactly where it is** | `settings.json` pins `libraryPath` absolutely and that is honoured over the default, so the existing folder keeps being scanned. Gigabytes of audio are never copied or moved. |
+
+Each copy happens only when the destination is absent, so it runs once and can
+never overwrite newer data. A legacy install with no `libraryPath` key gets one
+written explicitly, pointing at the old `Library` folder.
+
+The **VST3/AU plugin identity changed** with the rename (`PLUGIN_CODE`
+`JmSg` → `Mrku`). A DAW project saved against the old plugin will report it as
+missing and the instrument must be re-inserted; nothing migrates this, and
+nothing can.
 
 ## Architecture map
 
@@ -142,7 +167,7 @@ then click any knob to link it.
 
 ## Tests
 
-`JMSignatureTests` (ctest name `EngineTests`) covers: FX registry integrity vs
+`MirekuTests` (ctest name `EngineTests`) covers: FX registry integrity vs
 fx-params.ts, velocity-crossfade math, zone selection, loop-seam continuity
 (rendered synthetic loop, max sample delta asserted), CC64 defer/re-strike
 logic, real testdata bundle loading (via the shared jmi_format.h parser), RR

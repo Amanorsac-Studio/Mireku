@@ -1,8 +1,8 @@
-# JM Signature — JUCE 8 instrument plugin (VST3 + AU + Standalone) + console tests.
+# MIREKU — JUCE 8 instrument plugin (VST3 + AU + Standalone) + console tests.
 # Configure:  cmake -B build -G "Visual Studio 18 2026" -A x64
 # Build:      cmake --build build --config Release
 cmake_minimum_required(VERSION 3.24)
-project(JMSignature VERSION 1.0.0 LANGUAGES C CXX)
+project(Mireku VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -84,16 +84,28 @@ ASIO SDK and configure with -DJM_ASIO_SDK_DIR=<sdk>/common")
         endif()
     endif()
 endif()
-message(STATUS "JM Signature audio backends: WASAPI (shared/exclusive/low-latency) + DirectSound")
-message(STATUS "JM Signature ASIO support  : ${JM_ASIO_ORIGIN}")
+message(STATUS "MIREKU audio backends: WASAPI (shared/exclusive/low-latency) + DirectSound")
+message(STATUS "MIREKU ASIO support    : ${JM_ASIO_ORIGIN}")
 
 # ------------------------------------------------------------------ Plugin
-juce_add_plugin(JMSignature
+# PRODUCT RENAME (2026-10-26): "JM Signature" -> MIREKU, at the client's
+# instruction ("NAME OF APP CHANGE TO MIREKU, no more JM Signature Library").
+#
+#  * COMPANY_NAME is DELIBERATELY UNCHANGED. The client renamed the product,
+#    not the company, and PLUGIN_MANUFACTURER_CODE/BUNDLE_ID prefix follow the
+#    company. See DECISIONS-signature.md — this is an open question for him.
+#  * PLUGIN_CODE changes JmSg -> Mrku. THIS CHANGES THE PLUGIN'S IDENTITY: a
+#    DAW project that already references the VST3/AU will no longer find it,
+#    because hosts key plugins on the manufacturer+plugin code and the VST3
+#    unique id derived from them, not on the file name. That is cheap now and
+#    expensive after shipping, which is why it is being done in the same pass
+#    as the rename rather than later.
+juce_add_plugin(Mireku
     COMPANY_NAME              "JM Studios"
     PLUGIN_MANUFACTURER_CODE  JmSt
-    PLUGIN_CODE               JmSg
-    PRODUCT_NAME              "JM Signature"
-    BUNDLE_ID                 com.jmstudios.jmsignature
+    PLUGIN_CODE               Mrku
+    PRODUCT_NAME              "MIREKU"
+    BUNDLE_ID                 com.jmstudios.mireku
     IS_SYNTH                  TRUE
     NEEDS_MIDI_INPUT          TRUE
     NEEDS_MIDI_OUTPUT         FALSE
@@ -103,7 +115,7 @@ juce_add_plugin(JMSignature
     FORMATS                   VST3 AU Standalone   # AU is ignored by JUCE on non-Apple platforms
     VST3_CATEGORIES           Instrument)
 
-target_sources(JMSignature PRIVATE
+target_sources(Mireku PRIVATE
     src/plugin/PluginProcessor.cpp
     src/plugin/PluginEditor.cpp)
 
@@ -146,11 +158,11 @@ juce_add_binary_data(JMAssets HEADER_NAME JMAssets.h NAMESPACE JMAssets SOURCES
     resources/kit/rack-corner.png
     resources/kit/divider-gold.png
     resources/kit/flourish-gold.png)
-target_link_libraries(JMSignature PRIVATE JMAssets)
+target_link_libraries(Mireku PRIVATE JMAssets)
 
-target_include_directories(JMSignature PRIVATE src "${JMI_FORMAT_INCLUDE}")
+target_include_directories(Mireku PRIVATE src "${JMI_FORMAT_INCLUDE}")
 
-target_compile_definitions(JMSignature PUBLIC
+target_compile_definitions(Mireku PUBLIC
     JM_APP_VERSION="${PROJECT_VERSION}"
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
@@ -164,18 +176,18 @@ target_compile_definitions(JMSignature PUBLIC
     # that is where JUCE compiles juce_audio_devices.
     ${JM_AUDIO_BACKEND_DEFS})
 if(JM_ASIO_INCLUDE_DIR)
-    target_include_directories(JMSignature PUBLIC "${JM_ASIO_INCLUDE_DIR}")
+    target_include_directories(Mireku PUBLIC "${JM_ASIO_INCLUDE_DIR}")
 endif()
 
 # The custom standalone app lives ONLY in the Standalone target.
-if(TARGET JMSignature_Standalone)
-    target_sources(JMSignature_Standalone PRIVATE src/plugin/StandaloneApp.cpp)
-    target_include_directories(JMSignature_Standalone PRIVATE
+if(TARGET Mireku_Standalone)
+    target_sources(Mireku_Standalone PRIVATE src/plugin/StandaloneApp.cpp)
+    target_include_directories(Mireku_Standalone PRIVATE
         src "${JMI_FORMAT_INCLUDE}"
         "${CMAKE_CURRENT_BINARY_DIR}/juce_binarydata_JMAssets/JuceLibraryCode")
 endif()
 
-target_link_libraries(JMSignature PRIVATE
+target_link_libraries(Mireku PRIVATE
     juce::juce_audio_utils
     juce::juce_dsp
     PUBLIC
@@ -184,16 +196,16 @@ target_link_libraries(JMSignature PRIVATE
     juce::juce_recommended_warning_flags)
 
 # ------------------------------------------------------------------ Tests
-juce_add_console_app(JMSignatureTests PRODUCT_NAME "JMSignatureTests")
+juce_add_console_app(MirekuTests PRODUCT_NAME "MirekuTests")
 
-target_sources(JMSignatureTests PRIVATE tests/EngineTests.cpp)
-target_include_directories(JMSignatureTests PRIVATE src "${JMI_FORMAT_INCLUDE}")
-target_compile_definitions(JMSignatureTests PRIVATE
+target_sources(MirekuTests PRIVATE tests/EngineTests.cpp)
+target_include_directories(MirekuTests PRIVATE src "${JMI_FORMAT_INCLUDE}")
+target_compile_definitions(MirekuTests PRIVATE
     JM_APP_VERSION="${PROJECT_VERSION}"
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JM_TESTDATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../testdata")
-target_link_libraries(JMSignatureTests PRIVATE
+target_link_libraries(MirekuTests PRIVATE
     juce::juce_audio_formats
     juce::juce_dsp
     juce::juce_events
@@ -202,14 +214,14 @@ target_link_libraries(JMSignatureTests PRIVATE
 
 # ---------------------------------------------- V2 acceptance self-check
 # Offscreen 1000x720 render + control-centre measurement vs specs/screen-layouts.json.
-juce_add_console_app(JMSignatureSnapshot PRODUCT_NAME "JMSignatureSnapshot")
-target_sources(JMSignatureSnapshot PRIVATE
+juce_add_console_app(MirekuSnapshot PRODUCT_NAME "MirekuSnapshot")
+target_sources(MirekuSnapshot PRIVATE
     tests/SnapshotCheck.cpp
     src/plugin/PluginProcessor.cpp
     src/plugin/PluginEditor.cpp)
-target_include_directories(JMSignatureSnapshot PRIVATE src "${JMI_FORMAT_INCLUDE}"
+target_include_directories(MirekuSnapshot PRIVATE src "${JMI_FORMAT_INCLUDE}"
     "${CMAKE_CURRENT_BINARY_DIR}/juce_binarydata_JMAssets/JuceLibraryCode")
-target_compile_definitions(JMSignatureSnapshot PRIVATE
+target_compile_definitions(MirekuSnapshot PRIVATE
     JM_APP_VERSION="${PROJECT_VERSION}"
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
@@ -220,7 +232,7 @@ target_compile_definitions(JMSignatureSnapshot PRIVATE
     # the mirror against this file, so the two cannot drift apart unnoticed.
     JM_JMI_SCHEMA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../packages/jmi-format/schema"
     JM_LIBRARY_TESTDATA="${CMAKE_CURRENT_SOURCE_DIR}/../../testdata")
-target_link_libraries(JMSignatureSnapshot PRIVATE
+target_link_libraries(MirekuSnapshot PRIVATE
     JMAssets
     juce::juce_audio_utils
     juce::juce_dsp
@@ -230,20 +242,24 @@ target_link_libraries(JMSignatureSnapshot PRIVATE
 # ------------------------------------- Validation suite (standards §4.1 / §5)
 # The null test, the sample-rate/buffer-size matrix and the audio regression
 # harness. They exercise the PROCESSOR (not just the engine objects), so this
-# target compiles the plugin's shared code exactly as JMSignatureSnapshot does.
-juce_add_console_app(JMSignatureValidation PRODUCT_NAME "JMSignatureValidation")
-target_sources(JMSignatureValidation PRIVATE
+# target compiles the plugin's shared code exactly as MirekuSnapshot does.
+juce_add_console_app(MirekuValidation PRODUCT_NAME "MirekuValidation")
+target_sources(MirekuValidation PRIVATE
     tests/ValidationTests.cpp
     src/plugin/PluginProcessor.cpp
     src/plugin/PluginEditor.cpp)
-target_include_directories(JMSignatureValidation PRIVATE src "${JMI_FORMAT_INCLUDE}"
+target_include_directories(MirekuValidation PRIVATE src "${JMI_FORMAT_INCLUDE}"
     "${CMAKE_CURRENT_BINARY_DIR}/juce_binarydata_JMAssets/JuceLibraryCode")
-target_compile_definitions(JMSignatureValidation PRIVATE
+target_compile_definitions(MirekuValidation PRIVATE
     JM_APP_VERSION="${PROJECT_VERSION}"
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
-    JM_REF_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/refs")
-target_link_libraries(JMSignatureValidation PRIVATE
+    JM_REF_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/refs"
+    # NEUTRAL DEFAULTS acceptance test (--neutral): the default library it
+    # renders against. The test only READS bundles, and the CTest entry must
+    # not depend on which instruments a particular machine happens to have.
+    JM_LIBRARY_TESTDATA="${CMAKE_CURRENT_SOURCE_DIR}/../../testdata")
+target_link_libraries(MirekuValidation PRIVATE
     JMAssets
     juce::juce_audio_utils
     juce::juce_dsp
@@ -253,27 +269,27 @@ target_link_libraries(JMSignatureValidation PRIVATE
 # ------------------------------------------- Device inventory tool (R6/1)
 # Deliberately NOT a CTest: its output depends on what hardware is plugged in.
 # Run it and send the output when a device cannot be found in the app.
-juce_add_console_app(JMSignatureDevices PRODUCT_NAME "JMSignatureDevices")
-target_sources(JMSignatureDevices PRIVATE tests/DeviceCheck.cpp)
-target_compile_definitions(JMSignatureDevices PRIVATE
+juce_add_console_app(MirekuDevices PRODUCT_NAME "MirekuDevices")
+target_sources(MirekuDevices PRIVATE tests/DeviceCheck.cpp)
+target_compile_definitions(MirekuDevices PRIVATE
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     ${JM_AUDIO_BACKEND_DEFS})
 if(JM_ASIO_INCLUDE_DIR)
-    target_include_directories(JMSignatureDevices PRIVATE "${JM_ASIO_INCLUDE_DIR}")
+    target_include_directories(MirekuDevices PRIVATE "${JM_ASIO_INCLUDE_DIR}")
 endif()
-target_link_libraries(JMSignatureDevices PRIVATE
+target_link_libraries(MirekuDevices PRIVATE
     juce::juce_audio_devices
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags)
 
 enable_testing()
-add_test(NAME EngineTests COMMAND JMSignatureTests)
+add_test(NAME EngineTests COMMAND MirekuTests)
 # Client review round 3: the UI/arrangement self-check is a real test now, not a
 # manual tool - it carries the master-section, chrome, macro and letterbox assertions.
-add_test(NAME UiSelfCheck COMMAND JMSignatureSnapshot)
+add_test(NAME UiSelfCheck COMMAND MirekuSnapshot)
 # Client review round 5: the self-check must not depend on whatever bundles the
-# developer happens to have in their own "Documents/JM Signature/Library" folder
+# developer happens to have in their own "Documents/MIREKU/Library" folder
 # — with only the client's one-world Piano.jmi there, three of the four Perform
 # slots came up empty and the routing/audio assertions failed for no good reason.
 # AUTHORING MODE: the mode defaults to AUTHORING and is read from the
@@ -290,9 +306,17 @@ set_tests_properties(UiSelfCheck PROPERTIES
 # Three separate CTest entries out of one binary so a failure names itself in
 # the CI log. NullTest and RateBufferMatrix instantiate the processor, so they
 # get the same fixed library folder the UI self-check uses.
-add_test(NAME NullTest          COMMAND JMSignatureValidation --null)
-add_test(NAME RateBufferMatrix  COMMAND JMSignatureValidation --matrix)
-add_test(NAME AudioRegression   COMMAND JMSignatureValidation --regression)
+add_test(NAME NullTest          COMMAND MirekuValidation --null)
+add_test(NAME RateBufferMatrix  COMMAND MirekuValidation --matrix)
+add_test(NAME AudioRegression   COMMAND MirekuValidation --regression)
+# NEUTRAL DEFAULTS (2026-10-26): a note rendered at the shipped defaults must
+# BE the recorded audio, not an EQ'd version of it. See the long comment in
+# tests/ValidationTests.cpp. Point it at a real library by hand with
+#   MirekuValidation --neutral "<folder>"
+add_test(NAME NeutralDefaults   COMMAND MirekuValidation --neutral)
+# MIREKU rename (2026-10-26): the migration off the old product name. Runs
+# entirely in a temp folder; it never touches the developer's own Documents.
+add_test(NAME RenameMigration   COMMAND MirekuValidation --migration)
 set_tests_properties(NullTest RateBufferMatrix PROPERTIES
     ENVIRONMENT "JM_LIBRARY_DIR=${CMAKE_CURRENT_SOURCE_DIR}/../../testdata")
 set_tests_properties(RateBufferMatrix PROPERTIES TIMEOUT 900)

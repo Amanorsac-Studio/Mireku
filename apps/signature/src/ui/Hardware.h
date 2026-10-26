@@ -1,5 +1,5 @@
 // Hardware.h — ONE mature hardware button language for every segmented / tabbed
-// / plate control in JM Signature.
+// / plate control in MIREKU.
 //
 // Client review round 2, priority note: "pay very close attention to the way the
 // MAIN / AMP ENV / SETTINGS tabs look in the picture — very matured — it should

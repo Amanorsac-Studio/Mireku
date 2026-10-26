@@ -305,7 +305,7 @@ static void testResidencyPolyphonyUnderLoad()
 
 //==============================================================================
 /// Opt-in instrumentation: point JM_BUNDLE at a real .jmi directory (e.g. the
-/// client's "…/JM Signature/Library/Piano.jmi") to get load time and residency
+/// client's "…/MIREKU/Library/Piano.jmi") to get load time and residency
 /// figures for it. Defaults to the repo testdata placeholder, which has the same
 /// shape (hundreds of multi-second samples).
 static juce::File round5BundleDir()

@@ -1,7 +1,341 @@
-# DECISIONS — JM Signature (apps/signature)
+# DECISIONS — MIREKU (apps/signature)
 
 Judgment calls made while building the JUCE plugin, per JM-BUILD-SPEC.md §5.
-Owner: JM Signature build agent.
+Owner: MIREKU build agent.
+
+**The product was called "JM Signature" until 2026-10-26.** Everything dated
+before that entry uses the old name; the directory is still `apps/signature`
+and the format is still `.jmi` (see the rename entry for why).
+
+## Product rename to MIREKU, and neutral voicing defaults (2026-10-26)
+
+Two client instructions, done in one pass so the JUCE rebuild happened once:
+
+1. *"NAME OF APP CHANGE TO MIREKU, no more JM Signature Library."*
+2. *"all effects should be off or default — it shouldn't affect the sound."*
+
+### 1. What the rename touched
+
+| | before | after |
+|---|---|---|
+| `PRODUCT_NAME` (VST3 / AU / standalone artefact) | `JM Signature` | **`MIREKU`** |
+| `PLUGIN_CODE` | `JmSg` | **`Mrku`** |
+| `BUNDLE_ID` | `com.jmstudios.jmsignature` | `com.jmstudios.mireku` |
+| CMake project / targets | `JMSignature`, `JMSignature{Tests,Snapshot,Validation,Devices}` | `Mireku`, `Mireku{Tests,Snapshot,Validation,Devices}` |
+| build output folder | `build/JMSignature_artefacts` | `build/Mireku_artefacts` |
+| `AudioProcessor::getName()` | `JM Signature` | `MIREKU` |
+| standalone app name / window title | `JM Signature` | `MIREKU` |
+| branding text (Perform header, preset-browser plate, licence panel) | `JM SIGNATURE` | `MIREKU` |
+| `Documents/<product>/` (settings, presets, default library) | `JM Signature` | `MIREKU` |
+| `%APPDATA%\<product>\<product>.settings` | `JM Signature` | `MIREKU` |
+| log prefix | `JM Signature: …` | `MIREKU: …` |
+
+The VST3 class id moved with `PLUGIN_CODE`: the built
+`moduleinfo.json` now carries `...4A6D53744D726B75` ("JmSt"/"Mrku") where it
+carried `...4A6D53744A6D5367` ("JmSt"/"JmSg").
+
+### Deliberately NOT changed
+
+**`COMPANY_NAME` is still "JM Studios"**, and with it
+`PLUGIN_MANUFACTURER_CODE JmSt` and the `com.jmstudios.` bundle-id prefix. The
+client renamed the *product*; he said nothing about the company, and the
+company name is what a DAW groups plugins under and what an installer and a
+code-signing certificate are issued against. **Open question for him:** does
+"no more JM Signature" extend to the vendor string, i.e. should this ship as
+*MIREKU* / *Amanorsac Studio* / something else? Guessing it would have been a
+second identity change on top of the one that is already costly (below), so it
+is flagged rather than assumed.
+
+**`.jmi` and the `jmi-format` package keep their names.** It reads as "JM
+Instrument", James Mireku is JM either way, and renaming it would mean touching
+`instrument.schema.json`, `preset.schema.json`, the C++ reader
+(`packages/jmi-format/cpp/jmi_format.h`), the CLI, JM Capture, both apps and
+**every bundle the client has already made** — 25 of them. The format is the
+interchange contract between two shipping apps; the product name is not.
+
+**Internal C++ identifiers are unchanged**: `JMSignatureProcessor`,
+`JMSignatureEditor`, `JMStandaloneApp`, the `jm::` namespace, the `JM_*`
+compile definitions and env overrides (`JM_LIBRARY_DIR`, `JM_AUTHORING_MODE`,
+`JM_APP_VERSION`), the `JMAssets` binary-data target, and the `apps/signature`
+directory. None of them is visible to the player, and churning them would
+touch every file in the app for no product benefit. The two names a human
+reads and a build produces are what moved.
+
+### THE DAW-IDENTITY CONSEQUENCE — the client must be told
+
+Changing `PLUGIN_CODE` changes the plugin's **identity**, not just its file
+name. Hosts key an instrument on manufacturer code + plugin code (and, for
+VST3, the unique id derived from them). So:
+
+> **Any DAW project that already references the old plugin will report it as
+> missing.** The instrument has to be re-inserted and its patch re-chosen.
+> Nothing migrates this and nothing can — the old and new plugins are
+> different plugins as far as every host is concerned.
+
+This is nearly free today (the only projects affected are the client's own test
+sessions) and expensive the moment the beta is public, which is exactly why it
+was done in the same pass as the rename rather than deferred.
+
+### 2. The migration — his data is the part that matters
+
+Three things live under the product name, and the client has 25 bundles
+(2.3 GB), a pinned library path, his favourites, his presets, his audio-device
+choice and his window position in them.
+
+| what | where it was | what happens |
+|---|---|---|
+| `settings.json` — `libraryPath`, favourites, licence key, authoring mode | `Documents/JM Signature/settings.json` | **copied** to `Documents/MIREKU/settings.json` |
+| user + performance presets | `Documents/JM Signature/Presets/**` | **copied**, whole tree |
+| standalone settings — device type/device/rate/buffer, enabled MIDI inputs, window bounds, full-screen flag, saved plugin state | `%APPDATA%\JM Signature\JM Signature.settings` | **copied** to `%APPDATA%\MIREKU\MIREKU.settings` |
+| the `.jmi` library, 2.3 GB | `Documents/JM Signature/Library` | **left exactly where it is** |
+
+`Library::migrateAppDataDir()` (called from the `Library` constructor, before
+`loadSettings()`) does the first two; `Library::carryOverFileOnce()`, called
+from `JMStandaloneApp`'s constructor before `setStorageParameters`, does the
+third.
+
+**Why the library is not moved, and why that is safe.** `settings.json` pins
+`libraryPath` as an **absolute path** and `loadSettings()` honours it over
+`defaultLibraryDir()` — verified by reading every path through the code, not
+assumed: `libraryDir_` starts at `defaultLibraryDir()` and is overwritten by
+the stored key, `setLibraryDir()` writes `settingsLibraryDir_` back verbatim,
+and every other consumer (`userPresetDir`, `performancePresetDir`,
+`factoryPerformanceDir`, the authoring collect/import paths) hangs off
+`appDataDir()` and not off the library. The client's own file reads
+`"libraryPath": "C:\\Users\\amano\\Documents\\JM Signature\\Library"`, so
+carrying that one file across is enough for all 25 bundles to keep being
+scanned in place. Copying gigabytes of audio would be risk with no benefit,
+and *moving* it would break the previous build.
+
+**Deliberate properties of the migration:**
+
+- **Per item, not "does the new folder exist".** Any code that happens to
+  create `Documents/MIREKU` first (e.g. a `saveSettings()` on a fresh install)
+  cannot swallow the migration.
+- **Copy-once and never overwrite.** Each step is guarded on the destination
+  being absent, so it is idempotent and can never clobber something the player
+  has since changed. Asserted both ways in the test.
+- **Nothing is deleted or moved.** The old installation still stands on its
+  own, so if anything about the renamed build is wrong the previous one starts
+  up on its own data. (The old `build/JMSignature_artefacts/` tree was also
+  left in place — the client's standalone is running out of it right now.)
+- **The one gap the settings file cannot cover** is a legacy install with *no*
+  `libraryPath` key, which would fall through to the new, empty default folder.
+  If the old `Library` folder exists, the key is written explicitly. This
+  fix-up runs **only on the run that actually copied `settings.json`** — a
+  later run must never touch it, because "libraryPath is not a directory right
+  now" is also what an unplugged external drive looks like, and silently
+  repointing a player's library because a drive is asleep is worse than
+  scanning nothing and saying so.
+
+**Evidence.** New CTest `RenameMigration` (`MirekuValidation --migration`), 19
+assertions, all in a temp folder against the real functions:
+
+```
+standalone settings: C:\Users\amano\AppData\Roaming\MIREKU\MIREKU.settings
+                was: C:\Users\amano\AppData\Roaming\JM Signature\JM Signature.settings
+[PASS] settings.json carried over, byte-identical
+[PASS] whole Presets tree carried over (world presets AND performance snapshots)
+[PASS] the .jmi LIBRARY was NOT copied
+[PASS] nothing deleted or moved
+[PASS] the migrated settings still pin the EXISTING library folder
+[PASS] a second run never overwrites settings the player has since changed
+[PASS] a legacy install with no libraryPath gets one written
+[PASS] the AUDIO DEVICE CHOICE survived (type, device, rate, buffer)
+[PASS] the WINDOW BOUNDS and full-screen flag survived
+REAL legacy settings on this machine:
+  device type   Windows Audio (Low Latency Mode)
+  output device OUT 1-2 (4- BEHRINGER UMC 404HD 192k)
+  buffer        480 @ 48000.0 Hz
+  window        608 102 1152 768 (full screen)
+  plugin state  20565 bytes
+[PASS] ... all three came through the migration
+```
+
+The last block copies the client's **real** `JM Signature.settings` into the
+temp folder and migrates *that*, so the carry-over is proved on his actual
+device choice without writing a byte into `%APPDATA%`. The real `%APPDATA%`
+copy happens on his first launch of the renamed standalone — **the standalone
+was not launched here.**
+
+The Documents-side migration also ran for real on this machine (any `Library`
+construction triggers it) and produced `Documents/MIREKU/settings.json`
+byte-identical to the original, plus the full `Presets` tree
+(`mks/Amanorsac Try.json`, `Performance/Factory/{EP And Strings, Solo Rhodes,
+Stage Stack, Wide Keys}.json`), with **no `Library` folder** and the old
+`Documents/JM Signature` untouched.
+
+### 3. Neutral defaults — "it shouldn't affect the sound"
+
+The FX rack was already bypassed by default and `NullTest` proves bypass is
+sample-exact. But the sampler has a **second, non-bypassable stage**: the
+per-world voicing chain in `src/engine/Sampler.h` (`applyVoicing`, the
+per-voice Rhodes drive, and the FM brightness low-pass), which runs *before*
+the rack. Its shipped defaults were not at their unity points, so a freshly
+loaded instrument was already EQ'd and driven.
+
+**Unity points, read off the DSP rather than assumed.** A shelf centres at 50,
+but most of these controls are not shelves:
+
+| world | control | unity | old default | why |
+|---|---|---:|---:|---|
+| Rhodes/EP | `tine` | **50** | 50 ✓ | `shelfDb(v) = (v-50)/50 × 8 dB` peak at 3.2 kHz |
+| Rhodes/EP | `body` | **50** | 50 ✓ | same shelf law, low shelf at 200 Hz |
+| Rhodes/EP | `bark` | **0** | 30 | `drive = v/100`, gated `> 0.001`; **also** biases velocity-layer selection `selVel = vel + v×0.30`, **also** switches in the drive DC blocker at `v > 0.1`. Three effects, all one-directional, all off at 0. |
+| MKS | `warmth` | **0** | 40 | `tilt = −v/100`, applied when `|tilt| > 0.01` as a 1.1 kHz HF-shelf-down of `tilt × 7 dB`. One-directional. |
+| MKS | `air` | **0** | 30 | `highDb = v/100 × 8 dB` high shelf at 10 kHz. One-directional, so 30 was **+2.4 dB at 10 kHz**. |
+| FM | `glass` | **50** | 40 | `shelfDb(v)` bell at 6 kHz — a *shelf*, despite the name, so 40 was **−1.6 dB**. Centres at 50. |
+| FM | `attack` | **0** | 20 | `atkMs = max(atkMs, v × 2 ms)` — can only *lengthen* the amp attack. |
+| FM | `brightness` | **100** | 60 | opens the per-voice velocity→brightness LP: `cutoff = 900 × 2^(2 + 2.6(v·velCurve + (1−v)·0.75))`. One-directional **upwards**, so unity is the TOP of the range. |
+| Strings | `swell` | **0** | 30 | `atkMs = max(atkMs, 10 ms + v × 19.9 ms)` — lengthens only. |
+| Strings | `warmth` | **0** | 40 | same tilt law as MKS. |
+| Strings | `motion` | **0** | 30 | **not in the brief's table, but not neutral either**: gated at `v > 1`, it runs a 0.15 Hz pan + level LFO (±0.4 pan, −12 % level) inside `applyVoicing`. |
+
+**Two findings worth recording.**
+
+- **`motion` is a voicing processor, not an FX macro.** It was not on the list
+  the brief gave; reading `applyVoicing` found it modulating pan and level at
+  its default of 30. It is now 0.
+- **FM has no fully transparent setting, by architecture.** `v->useLp` is
+  `(world_ == 2)` — unconditional — so every FM note goes through a one-pole LP
+  whose cutoff tracks velocity. That is the *point* of an FM voice
+  (velocity→brightness is how FM instruments behave) rather than an EQ sitting
+  on the recorded audio, so it was NOT removed: removing it at `brightness
+  100` would be a DSP change, and a large one for soft notes (at velocity ~25
+  the cutoff is ~5 kHz). What was done is put the control at its most
+  transparent value, 100, and measure the residual honestly (below).
+
+**The inert macros.** `tremolo`, `space`, `echo`, `shimmer`, `ensemble` and the
+engine-level `chorusDepth` are macro names onto FX units and are read by
+**nothing** in the engine today — the only engine controls any code consumes
+are the voicing ones above plus the mod wheel's per-world mapping (world 2 →
+`brightness`, world 3 → `swell`). They are all set to **0 = "nothing added"**,
+so "everything at defaults" means one thing across the whole registry and the
+wiring, when it is written, starts from neutral. Two exceptions, stated rather
+than fudged:
+
+- **`width` stays at 60.** 0 on a width control means "collapse to mono", which
+  is an *active* change to the recorded stereo image, not neutrality. Its
+  unity value depends on the mapping that does not exist yet; when that macro
+  is wired it must be wired so its default means "as recorded".
+- **`chorusMode` stays at `I`.** An enum has no off position.
+
+**Does the knob still read naturally?** The UI draws knobs straight from the
+registry's min/max with no centre detent, so: `tine` / `body` / `glass` sit at
+**12 o'clock and do nothing** — turn either way to shape, which is exactly the
+right reading for a shelf. `bark`, `warmth`, `air`, `motion`, `swell`,
+`attack` and the macros sit **fully anticlockwise = off**, turn up to add.
+`brightness` sits **fully clockwise = fully open**, turn down to darken. All
+three readings are honest; none of them lands a neutral point somewhere
+arbitrary. No UI change was needed.
+
+**Saved presets do not shift — only the default did.** Both load paths seed
+from the registry default and then overwrite **every key the preset carries**
+(`engineParamsFromJmiPreset` for `.jmi` bundle presets, `paramValuesFromVar`
+for user presets and plugin state). Asserted:
+
+```
+[PASS] jmi preset storing bark:30 still loads at 30
+[PASS] jmi preset storing tine:72 still loads at 72
+[PASS] user preset storing warmth:40 still loads at 40 / air:30 at 30
+[PASS] a key the preset does not carry takes the new neutral default
+```
+
+A preset that *omits* a key does move, which is correct and unavoidable: an
+omitted key has always meant "whatever the default is".
+
+**`WORLD_ENGINE_CONTROLS` lives in the shared
+`packages/jmi-format/src/fx-params.ts`**, which both apps read. The change
+there is additive — the numbers plus one derivation comment — and nothing else
+in that package was touched; `dist/` was rebuilt with the package's own `tsc`
+and its 43 vitest assertions pass. `src/engine/FxParams.h` mirrors it, as it
+always has, and points at the `.ts` as the source of truth.
+
+### The acceptance test (new CTest `NeutralDefaults`)
+
+`MirekuValidation --neutral [library]`. A note is played at the **exact root
+key** of a zone, at the engine's rate set to the **source file's own sample
+rate**, so the playback rate is exactly 1.0 and no resampling (which is itself
+a filter) is in the way. The amp envelope's default decay is 0 ms, so once the
+attack has finished the envelope sits at **exactly 1.0** and the voice gain is
+a constant — the output must therefore be the recorded file times one scalar.
+That scalar is fitted by least squares (gain-blind on purpose, so a level
+change cannot hide an EQ) and the residual reported:
+
+```
+residual = 20·log10( ‖out − k·src‖ / ‖k·src‖ )
+```
+
+Each world is measured **twice**, at the shipped defaults and at the
+pre-rename defaults. The second half is not decoration: it is what proves the
+measurement can see the problem it guards against.
+
+Against the repo testdata (`48 kHz`), note 21, velocity 119:
+
+| world | shipped defaults | pre-rename defaults |
+|---|---:|---:|
+| RHODES / EP | **−151.39 dB** | −10.20 dB |
+| MKS | **−151.60 dB** | −32.91 dB |
+| FM | −60.88 dB | −51.04 dB |
+| STRINGS | **−151.82 dB** | −12.43 dB |
+
+Against the **client's own library** (`Documents/JM Signature/Library`,
+44.1 kHz, read-only — the test never writes into it):
+
+| world | instrument | shipped defaults | pre-rename defaults |
+|---|---|---:|---:|
+| RHODES / EP | `EP2` | **−152.06 dB** | −11.12 dB |
+| MKS | `MKS20` | **−151.89 dB** | −21.87 dB |
+| FM | — | (no FM instrument in his library) | |
+| STRINGS | `String` | **−151.90 dB** | −9.17 dB |
+
+−151 dB is the float noise floor: three of the four worlds now render the
+recorded audio **sample-exactly**, where before they were 9–33 dB away from it.
+FM improves by 9.8 dB and stops there, for the architectural reason above; its
+assertion is therefore "brightness 100 is strictly more transparent than the
+old 60", which is the strongest true statement available about that world.
+
+The test also asserts the fitted scalar **is** the voice's own gain
+(0.959055 vs 0.959055) — i.e. the only thing standing between the engine and
+the file is the velocity gain, nothing else — and that every voicing control's
+registry default equals its unity point, so a future edit to `fx-params.ts`
+that moves one of them fails here with the number named.
+
+Three test-only accessors were added to `SamplerEngine`
+(`voiceSampleFile`, `voiceZone`, `voiceGain`): there was no other way to know
+which round robin a note picked, and guessing it in the test would have made
+the test assert its own guess.
+
+### Verification
+
+- Release build (VST3 + Standalone + all four console targets): **exit 0**.
+  **No LNK1104.** The client's standalone *is* running (PID 41468) but out of
+  the old `build/JMSignature_artefacts/Release/Standalone`, and the renamed
+  build writes to `build/Mireku_artefacts/`, so the rename removed the relink
+  conflict instead of causing one. **The standalone was not launched.**
+- `ctest -C Release`: **100 % passed, 7/7** — `EngineTests` 3.20 s,
+  `UiSelfCheck` 10.78 s, `NullTest` 1.62 s, `RateBufferMatrix` 3.09 s,
+  `AudioRegression` 0.64 s, `NeutralDefaults` 0.77 s, `RenameMigration` 0.10 s.
+- `pluginval --strictness-level 10 --skip-gui-tests` on
+  `Mireku_artefacts/Release/VST3/MIREKU.vst3`: **SUCCESS**, exit 0.
+- `packages/jmi-format`: `tsc` clean, `vitest run` **43/43**.
+
+**`AudioRegression` did NOT move, and that is correct — no re-baseline was
+needed.** The brief expected it to fail because its reference was rendered with
+the old voicing defaults. It was not: `renderRegression()` in
+`tests/ValidationTests.cpp` builds an `FxRackDsp` + `MasterLimiter` and feeds
+them three **synthetic** signals (log sweep, impulse, white noise) through a
+fixed FX patch. It never constructs a `SamplerEngine`, never loads a bundle and
+never reads an engine parameter, so the voicing chain is not in its signal path
+at all. `tests/refs/audio-regression.json` is therefore **unchanged** —
+re-baselining it would have written a no-op diff while claiming a tone change
+that this test cannot see. The test that *does* cover the voicing stage is the
+new `NeutralDefaults`, with the before/after table above.
+
+**Gap noticed, not fixed:** `jmi::Instrument::neutralVoicing`
+(`playback.voicing == "neutral"`) is parsed by the C++ reader and read by
+**nothing**. If the intent was a per-bundle "do not voice this instrument"
+flag, it is dead — worth a decision of its own rather than a drive-by.
 
 ## Authoring mode (2026-10-22)
 

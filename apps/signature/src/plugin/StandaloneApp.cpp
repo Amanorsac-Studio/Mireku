@@ -225,15 +225,31 @@ class JMStandaloneApp final : public juce::JUCEApplication
 public:
     JMStandaloneApp()
     {
-        juce::PropertiesFile::Options options;
-        options.applicationName     = "JM Signature";
-        options.filenameSuffix      = ".settings";
-        options.osxLibrarySubFolder = "Application Support";
-        options.folderName          = "";
+        // Built from the shared helper in PluginProcessor.h so the path the app
+        // writes and the path the migration (and its test) computes are one
+        // expression.
+        const auto options = standaloneSettingsOptions (productName());
+
+        // ------------------------------------------------- MIREKU rename
+        // The holder's settings file is named after the application, so the
+        // rename moves AppData/Roaming/<name>/<name>.settings — and that one
+        // file carries the player's AUDIO DEVICE CHOICE (type, device, rate,
+        // buffer size), his enabled MIDI inputs, the window bounds/full-screen
+        // flag and the saved plugin state. Renaming without this block would
+        // silently drop all of it and send him back to whatever endpoint
+        // Windows calls the default, which is exactly the round-6 complaint.
+        //
+        // The old file is COPIED, never moved: the previous build keeps
+        // working on its own copy. The copy happens only when the new file is
+        // absent, so it runs once and can never overwrite newer settings.
+        Library::carryOverFileOnce (standaloneSettingsFile (legacyProductName()),
+                                    standaloneSettingsFile (productName()),
+                                    "standalone settings (audio device, MIDI inputs, window, state)");
+
         appProperties_.setStorageParameters (options);
     }
 
-    const juce::String getApplicationName() override           { return "JM Signature"; }
+    const juce::String getApplicationName() override           { return productName(); }
     const juce::String getApplicationVersion() override        { return JucePlugin_VersionString; }
     bool moreThanOneInstanceAllowed() override                 { return true; }
     void anotherInstanceStarted (const juce::String&) override {}

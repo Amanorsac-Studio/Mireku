@@ -458,17 +458,134 @@ public:
     Library()
     {
         fm_.registerBasicFormats();
+        migrateFromLegacyAppDataDir();          // MIREKU rename: BEFORE loadSettings()
         loadSettings();
     }
 
     // ------------------------------------------------------------- settings
     static juce::File appDataDir()
     {
+        return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("MIREKU");
+    }
+    /// PRE-RENAME location (the product was "JM Signature" until 2026-10-26).
+    /// Kept for ever, not deleted: the client has 25 bundles / 2.3 GB, a
+    /// settings.json and his preset folders under the old name.
+    static juce::File legacyAppDataDir()
+    {
         return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("JM Signature");
     }
     static juce::File defaultLibraryDir() { return appDataDir().getChildFile ("Library"); }
     static juce::File userPresetDir()     { return appDataDir().getChildFile ("Presets"); }
     static juce::File settingsFile()      { return appDataDir().getChildFile ("settings.json"); }
+
+    static juce::File legacyLibraryDir()  { return legacyAppDataDir().getChildFile ("Library"); }
+    static juce::File legacyUserPresetDir() { return legacyAppDataDir().getChildFile ("Presets"); }
+    static juce::File legacySettingsFile()  { return legacyAppDataDir().getChildFile ("settings.json"); }
+
+    //=========================================================== MIREKU rename
+    /// The product was renamed from "JM Signature" to MIREKU, which moves
+    /// Documents/<product>/ wholesale. Carry the old installation's settings
+    /// and presets across on the first run under the new name, so a rename
+    /// never costs the player his library path, his favourites, his mode or
+    /// his patches.
+    ///
+    /// Deliberate properties:
+    ///  * PER ITEM, not "does the new folder exist" — any later code that
+    ///    happens to create Documents/MIREKU first cannot swallow the
+    ///    migration, and the function is idempotent: a destination that
+    ///    already exists is never overwritten.
+    ///  * THE OLD COPY IS NEVER DELETED OR MOVED. If anything about the new
+    ///    build is wrong the previous one still starts up on its own data.
+    ///  * THE 2.3 GB .jmi LIBRARY IS NOT COPIED OR MOVED. settings.json pins
+    ///    `libraryPath` as an ABSOLUTE PATH and loadSettings() honours it over
+    ///    defaultLibraryDir(), so carrying the settings file across is enough
+    ///    for the existing library folder to keep being scanned exactly where
+    ///    it is. Bulk-copying gigabytes of audio would be risk with no benefit.
+    ///  * The one case the settings file cannot cover is a legacy install with
+    ///    NO libraryPath key (it would fall through to the new, empty default
+    ///    folder). If the old Library folder exists, the key is written
+    ///    explicitly so that case lands on his bundles too.
+    /// Returns a human-readable summary of what it did (empty = nothing to do).
+    static juce::String migrateFromLegacyAppDataDir()
+    {
+        return migrateAppDataDir (legacyAppDataDir(), appDataDir());
+    }
+
+    /// The same migration against explicit roots. Exists so the validation
+    /// suite can exercise every branch — including the no-libraryPath case and
+    /// the "run it twice" case — in a temp folder instead of against the
+    /// developer's own Documents.
+    static juce::String migrateAppDataDir (const juce::File& oldRoot, const juce::File& newRoot)
+    {
+        if (! oldRoot.isDirectory() || oldRoot == newRoot) return {};
+
+        const auto oldSettings = oldRoot.getChildFile ("settings.json");
+        const auto newSettings = newRoot.getChildFile ("settings.json");
+        const auto oldPresets  = oldRoot.getChildFile ("Presets");
+        const auto newPresets  = newRoot.getChildFile ("Presets");
+        const auto oldLibrary  = oldRoot.getChildFile ("Library");
+
+        juce::StringArray done;
+
+        // ---- settings.json (libraryPath, favourites, licence key, mode)
+        if (! newSettings.existsAsFile() && oldSettings.existsAsFile())
+        {
+            newRoot.createDirectory();
+            if (oldSettings.copyFileTo (newSettings)) done.add ("settings.json");
+        }
+
+        // ---- Presets/<world>/*.json and Presets/Performance/**
+        if (! newPresets.isDirectory() && oldPresets.isDirectory())
+        {
+            newRoot.createDirectory();
+            if (oldPresets.copyDirectoryTo (newPresets)) done.add ("Presets");
+        }
+
+        // ---- make the library path explicit if the old settings did not.
+        // ONLY on the run that actually carried settings.json across. A later
+        // run must never touch it: "libraryPath points somewhere that is not a
+        // directory right now" is also what a player sees when his external
+        // drive is unplugged, and silently repointing his library at an old
+        // folder because a drive is asleep would be worse than scanning
+        // nothing and saying so.
+        if (done.contains ("settings.json") && newSettings.existsAsFile() && oldLibrary.isDirectory())
+        {
+            auto v = juce::JSON::parse (newSettings.loadFileAsString());
+            if (auto* o = v.getDynamicObject())
+            {
+                const juce::String pinned = o->getProperty ("libraryPath").toString();
+                if (pinned.isEmpty() || ! juce::File (pinned).isDirectory())
+                {
+                    o->setProperty ("libraryPath", oldLibrary.getFullPathName());
+                    newSettings.replaceWithText (juce::JSON::toString (juce::var (o)));
+                    done.add ("libraryPath -> " + oldLibrary.getFullPathName());
+                }
+            }
+        }
+
+        if (done.isEmpty()) return {};
+        const auto msg = "MIREKU: carried over from \"JM Signature\": " + done.joinIntoString (", ")
+                       + " (the old folder was left in place)";
+        juce::Logger::writeToLog (msg);
+        return msg;
+    }
+
+    /// Copy one file across ONCE, for a rename. Never overwrites, never moves
+    /// or deletes the source. Returns a log line, or {} when there was nothing
+    /// to do. Shared by the Documents-side migration above and the standalone
+    /// settings migration in plugin/StandaloneApp.cpp.
+    static juce::String carryOverFileOnce (const juce::File& from, const juce::File& to,
+                                           const juce::String& what)
+    {
+        if (to.existsAsFile() || ! from.existsAsFile() || from == to) return {};
+        to.getParentDirectory().createDirectory();
+        const bool ok = from.copyFileTo (to);
+        const auto msg = juce::String ("MIREKU: ") + what
+                       + (ok ? " carried over from " : " COULD NOT be carried over from ")
+                       + from.getFullPathName();
+        juce::Logger::writeToLog (msg);
+        return msg;
+    }
 
     juce::File libraryDir() const { return libraryDir_; }
     void setLibraryDir (const juce::File& f)
@@ -537,7 +654,7 @@ public:
         // Round 5: JM_LIBRARY_DIR overrides the scanned folder for THIS process
         // only and is never written back. The UI self-check sets it so the test
         // runs against the repo testdata instead of whatever happens to be in
-        // the developer's own "JM Signature/Library" folder — that dependency
+        // the developer's own "MIREKU/Library" folder — that dependency
         // was silently failing the self-check as soon as a real client bundle
         // (one world only) landed there.
         if (auto env = juce::SystemStats::getEnvironmentVariable ("JM_LIBRARY_DIR", {}); env.isNotEmpty())

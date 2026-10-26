@@ -1,4 +1,4 @@
-// Sampler.h — the JM Signature sample playback engine (spec §5.1, §5.2, §5.4).
+// Sampler.h — the MIREKU sample playback engine (spec §5.1, §5.2, §5.4).
 // One SamplerEngine per Perform slot. 64-voice polyphony, zone selection by
 // note+velocity, per-zone round-robin cycling, ±1 st repitch, crossfaded loop
 // playback, ±8-velocity equal-power layer crossfade, per-patch amp ADSR,
@@ -214,6 +214,25 @@ public:
     double voiceBaseRatio (int idx) const
     {
         return idx >= 0 && idx < (int) voices_.size() ? voices_[(size_t) idx].ratio : 0.0;
+    }
+    /// Which recorded file a sounding voice is playing, which zone it came from,
+    /// and the constant gain applied to it. Used by the NEUTRAL-DEFAULTS
+    /// acceptance test (tests/ValidationTests.cpp, `--neutral`) to compare the
+    /// engine's output against the source audio on disk; there is no other way
+    /// to know which round robin a note picked.
+    juce::File voiceSampleFile (int idx) const
+    {
+        if (idx < 0 || idx >= (int) voices_.size()) return {};
+        auto& v = voices_[(size_t) idx];
+        return v.sample != nullptr ? v.sample->file : juce::File();
+    }
+    int voiceZone (int idx) const
+    {
+        return idx >= 0 && idx < (int) voices_.size() ? voices_[(size_t) idx].zone : -1;
+    }
+    float voiceGain (int idx) const
+    {
+        return idx >= 0 && idx < (int) voices_.size() ? voices_[(size_t) idx].gain : 0.0f;
     }
 
     void sustainPedal (bool down)

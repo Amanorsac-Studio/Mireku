@@ -1,4 +1,4 @@
-// ValidationTests.cpp -- JM Signature validation suite.
+// ValidationTests.cpp -- MIREKU validation suite.
 //
 // The three standards from
 // docs/pedal-style-effect-plugin-development-guide.md that the engine tests
@@ -20,12 +20,20 @@
 //                           compared against a committed reference so a
 //                           refactor cannot silently change the tone.
 //
-// Console target. `ctest` runs it three times, once per section:
-//     JMSignatureValidation --null | --matrix | --regression
+//   NEUTRAL DEFAULTS  -- client instruction "all effects should be off or
+//                           default -- it shouldn't affect the sound": a note
+//                           rendered at the shipped defaults must BE the
+//                           recorded audio from the bundle, not an EQ'd or
+//                           driven version of it. This is about the per-world
+//                           VOICING chain, which (unlike the FX rack) cannot
+//                           be bypassed. See the section comment below.
+//
+// Console target. `ctest` runs it four times, once per section:
+//     MirekuValidation --null | --matrix | --regression | --neutral | --migration
 // With no argument every section runs.
 //
 // RE-BASELINING THE AUDIO REGRESSION (deliberate act, see S5 below):
-//     JMSignatureValidation --regression --rebaseline
+//     MirekuValidation --regression --rebaseline
 // rewrites tests/refs/audio-regression.json. That file is committed, so the
 // re-baseline shows up as a reviewable diff in the pull request that changes
 // the tone. Nothing rewrites it automatically and CI never passes --rebaseline.
@@ -776,8 +784,8 @@ static void testAudioRegression (bool rebaseline, const juce::File& refFile)
     juce::var rootVar (new juce::DynamicObject());
     auto* root = rootVar.getDynamicObject();
     root->setProperty ("_comment",
-                       "JM Signature audio regression reference. Regenerate DELIBERATELY with "
-                       "JMSignatureValidation --regression --rebaseline and commit the diff.");
+                       "MIREKU audio regression reference. Regenerate DELIBERATELY with "
+                       "MirekuValidation --regression --rebaseline and commit the diff.");
     root->setProperty ("sampleRate", sr);
     root->setProperty ("seconds", 2.0);
     root->setProperty ("toleranceDb", kToleranceDb);
@@ -842,7 +850,7 @@ static void testAudioRegression (bool rebaseline, const juce::File& refFile)
         CHECK (ok, msg);
         if (! ok)
             std::printf ("        ^ if this tone change was INTENDED, re-baseline deliberately:\n"
-                         "          JMSignatureValidation --regression --rebaseline\n"
+                         "          MirekuValidation --regression --rebaseline\n"
                          "          and commit %s with the change that caused it.\n",
                          refFile.getFileName().toRawUTF8());
     }
@@ -857,25 +865,520 @@ static void testAudioRegression (bool rebaseline, const juce::File& refFile)
 }
 
 //==============================================================================
+// NEUTRAL DEFAULTS — the acceptance test for the client's
+//   "all effects should be off or default — it shouldn't affect the sound."
+//
+// The FX rack is bypassed by default and the null test above proves bypass is
+// sample-exact. But the sampler has a SECOND, non-bypassable processing stage:
+// the per-world voicing chain in engine/Sampler.h (applyVoicing, the per-voice
+// Rhodes drive and the FM brightness low-pass). Its shipped defaults used to
+// EQ and drive a freshly loaded instrument before the player touched anything
+// (bark 30 = drive + velocity bias, warmth 40 = tilt -0.4, air 30 = +2.4 dB at
+// 10 kHz, glass 40 = -1.6 dB at 6 kHz, motion 30 = a pan/level LFO).
+//
+// THE MEASUREMENT. A note is played at the exact root key of a zone, so the
+// playback rate is exactly 1.0 and no resampling is involved, with the amp
+// envelope's decay at its default 0 ms — so once the attack has finished the
+// envelope sits at EXACTLY 1.0 and the voice gain is a constant. The engine's
+// output in that window must therefore be the recorded file times one scalar.
+// We fit that scalar by least squares (which is what "allowing for the amp
+// envelope and velocity gain" means, and it is deliberately gain-BLIND so a
+// level change cannot hide an EQ) and report the residual:
+//
+//     residual = 20*log10( ||out - k*src|| / ||k*src|| )
+//
+// -inf dB is "the output IS the recorded audio". Anything that filters,
+// drives, pans or modulates shows up here however small.
+//
+// The test measures each world TWICE — at the shipped defaults and at the
+// pre-2026-10-26 defaults — and asserts the first is neutral AND the second is
+// not. The second half matters: it is what proves the measurement can see the
+// problem it is guarding against, rather than passing because it is blind.
+//==============================================================================
+namespace {
+
+/// The defaults this product shipped with before the neutral-defaults pass.
+/// Kept here, in the test only, as the "before" column of the acceptance
+/// table — nothing in the product reads it.
+const std::vector<std::pair<const char*, float>>& legacyVoicingDefaults (int world)
+{
+    static const std::vector<std::pair<const char*, float>> legacy[4] = {
+        { { "bark", 30.0f }, { "tine", 50.0f }, { "body", 50.0f } },
+        { { "warmth", 40.0f }, { "air", 30.0f } },
+        { { "brightness", 60.0f }, { "attack", 20.0f }, { "glass", 40.0f } },
+        { { "swell", 30.0f }, { "warmth", 40.0f }, { "motion", 30.0f } },
+    };
+    return legacy[juce::jlimit (0, 3, world)];
+}
+
+struct NeutralMeasurement
+{
+    bool valid = false;
+    const char* why = "";
+    double k = 0.0;                  // best-fit constant gain
+    double residualDb = kSilenceDb;  // 0 => the output is the recorded audio
+    double voiceGain = 0.0;
+    int note = 0, vel = 0, zone = -1;
+    juce::File source;
+};
+
+/// Plays one note at the engine's CURRENT settings and compares the rendered
+/// audio with the file on disk that the voice is actually playing.
+NeutralMeasurement measureAgainstSource (SamplerEngine& eng, double sr, int note, int vel,
+                                         int skipSamples, int windowSamples)
+{
+    NeutralMeasurement m;
+    m.note = note; m.vel = vel;
+
+    eng.prepare (sr, 512);                 // resets the voicing filters and all voices
+    eng.noteOn (note, vel);
+    if (eng.activeVoices() != 1) { m.why = "the note did not produce exactly one voice"; return m; }
+
+    const int vi = eng.firstActiveVoice();
+    if (std::abs (eng.voiceBaseRatio (vi) - 1.0) > 1.0e-9)
+    { m.why = "the voice is not playing at rate 1.0 (wrong root note)"; return m; }
+
+    m.source    = eng.voiceSampleFile (vi);
+    m.zone      = eng.voiceZone (vi);
+    m.voiceGain = eng.voiceGain (vi);
+    if (! m.source.existsAsFile()) { m.why = "the voice's source file is not on disk"; return m; }
+
+    // ---- render
+    const int total = skipSamples + windowSamples;
+    std::vector<float> outL, outR;
+    outL.reserve ((size_t) total); outR.reserve ((size_t) total);
+    juce::AudioBuffer<float> buf (2, 512);
+    for (int pos = 0; pos < total; pos += 512)
+    {
+        const int n = juce::jmin (512, total - pos);
+        buf.clear();
+        eng.render (buf, n);
+        for (int i = 0; i < n; ++i) { outL.push_back (buf.getSample (0, i)); outR.push_back (buf.getSample (1, i)); }
+    }
+    if (eng.activeVoices() != 1) { m.why = "the voice stopped inside the measurement window"; return m; }
+
+    // ---- the recorded audio, straight off disk
+    juce::AudioFormatManager fm;
+    fm.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> r (fm.createReaderFor (m.source));
+    if (r == nullptr) { m.why = "the source file could not be read"; return m; }
+    if ((juce::int64) total > r->lengthInSamples) { m.why = "the source file is shorter than the window"; return m; }
+    juce::AudioBuffer<float> src ((int) juce::jmax (1u, r->numChannels), windowSamples);
+    r->read (&src, 0, windowSamples, skipSamples, true, true);
+    const int srcR = src.getNumChannels() > 1 ? 1 : 0;
+
+    // ---- least-squares fit of ONE scalar across both channels, then residual
+    double num = 0.0, den = 0.0;
+    for (int i = 0; i < windowSamples; ++i)
+    {
+        const double sl = src.getSample (0, i), sr2 = src.getSample (srcR, i);
+        num += sl * outL[(size_t) (skipSamples + i)] + sr2 * outR[(size_t) (skipSamples + i)];
+        den += sl * sl + sr2 * sr2;
+    }
+    if (den <= 1.0e-20) { m.why = "the source window is silent"; return m; }
+    m.k = num / den;
+
+    double err = 0.0, ref = 0.0;
+    for (int i = 0; i < windowSamples; ++i)
+    {
+        const double sl = m.k * src.getSample (0, i), sr2 = m.k * src.getSample (srcR, i);
+        const double dl = outL[(size_t) (skipSamples + i)] - sl;
+        const double dr = outR[(size_t) (skipSamples + i)] - sr2;
+        err += dl * dl + dr * dr;
+        ref += sl * sl + sr2 * sr2;
+    }
+    if (ref <= 1.0e-20) { m.why = "the fitted reference is silent"; return m; }
+    m.residualDb = dbOf (std::sqrt (err / ref));
+    m.valid = true;
+    return m;
+}
+
+} // namespace
+
+static void testNeutralDefaults (const juce::File& libraryDir)
+{
+    std::printf ("\n== NEUTRAL DEFAULTS: a freshly loaded instrument plays the recorded audio ==\n");
+    std::printf ("   library: %s\n", libraryDir.getFullPathName().toRawUTF8());
+    Library lib;
+    lib.setLibraryDirTransient (libraryDir);
+
+    // ---------------------------------------------------- per world
+    for (int world = 0; world < 4; ++world)
+    {
+        const auto forWorld = lib.bundlesForWorld (world);
+        if (forWorld.empty())
+        {
+            std::printf ("  %-12s (skipped: no instrument in this library)\n", worldName (world));
+            continue;
+        }
+
+        juce::String err;
+        auto bundle = lib.loadBundle (forWorld.front().dir, err);
+        if (bundle == nullptr || bundle->inst.zones.empty())
+        {
+            std::printf ("  [FAIL] %s: cannot load %s (%s)\n", worldName (world),
+                         forWorld.front().dir.getFullPathName().toRawUTF8(), err.toRawUTF8());
+            ++failures;
+            continue;
+        }
+
+        // The engine runs at the SOURCE FILE'S OWN RATE. The playback rate is
+        // `2^((note-root)/12) * fileRate/hostRate`, so only at the file's own
+        // rate is a root note played back at exactly 1.0 with no resampling —
+        // and resampling is a filter, which would mask the thing being
+        // measured. The client's own bundles are 44.1 kHz while the repo
+        // testdata is 48 kHz, so this cannot be a constant.
+        double sr = 48000.0;
+        {
+            juce::AudioFormatManager fm;
+            fm.registerBasicFormats();
+            const auto& z = bundle->inst.zones.front();
+            if (! z.roundRobins.empty())
+            {
+                const auto f = forWorld.front().dir.getChildFile (
+                    juce::String (z.roundRobins.front().file).replaceCharacter ('/', juce::File::getSeparatorChar()));
+                std::unique_ptr<juce::AudioFormatReader> r (fm.createReaderFor (f));
+                if (r != nullptr && r->sampleRate > 0.0) sr = r->sampleRate;
+            }
+        }
+        // 50 ms clears every default attack (2 ms decaying, 10 ms sustaining,
+        // and the 10 ms floor the Strings swell imposes at its unity point),
+        // after which decayMs = 0 puts the envelope at exactly 1.0 and holds
+        // it there — so the output is the recorded audio times one constant.
+        const int skip = (int) (sr * 0.05), window = 8000;
+
+        SamplerEngine eng;
+        eng.setWorld (world);                       // seeds the SHIPPED defaults
+        eng.prepare (sr, 512);
+        eng.setBundle (bundle);
+
+        // The hardest case for every world: the root note of a zone (rate
+        // exactly 1.0) at the strongest velocity the instrument offers, so no
+        // layer crossfade is in play and the FM brightness LP is at its widest.
+        const int note = bundle->inst.zones.front().rootNote;
+        NeutralMeasurement now;
+        for (int vel : { 119, 95, 63, 23 })
+        {
+            now = measureAgainstSource (eng, sr, note, vel, skip, window);
+            if (now.valid) break;
+        }
+
+        char msg[320];
+        if (! now.valid)
+        {
+            std::printf ("  [FAIL] %s: could not measure (%s)\n", worldName (world), now.why);
+            ++failures;
+            continue;
+        }
+
+        // the same note through the engine with the PRE-RENAME defaults
+        for (auto& [id, v] : legacyVoicingDefaults (world)) eng.setEngineParam (id, v);
+        const auto before = measureAgainstSource (eng, sr, note, now.vel, skip, window);
+        // and back to the shipped defaults for the record
+        eng.setWorld (world);
+
+        std::printf ("  %-12s %-28s note %3d vel %3d  gain %.4f (fit %.4f)\n",
+                     worldName (world), now.source.getFileName().toRawUTF8(),
+                     now.note, now.vel, now.voiceGain, now.k);
+        std::printf ("               residual vs the recorded file:  shipped defaults %8.2f dB"
+                     "   pre-rename defaults %8.2f dB\n",
+                     now.residualDb, before.valid ? before.residualDb : 0.0);
+
+        std::snprintf (msg, sizeof msg,
+                       "%s: the fitted gain is the voice's own gain (%.6f vs %.6f)",
+                       worldName (world), now.k, now.voiceGain);
+        CHECK (std::abs (now.k - now.voiceGain) < 1.0e-4, msg);
+
+        if (world == 2)
+        {
+            // FM is the one world with no fully transparent setting: a
+            // velocity->brightness low-pass is the FM voice architecture, not an
+            // EQ, and it is in circuit for every FM note at every setting (see
+            // Sampler.h, `v->useLp = (world_ == 2)`). `brightness` is
+            // one-directional and its unity point is therefore the TOP of the
+            // range: at 100 the cutoff is as high as the engine will put it.
+            // What this test can and does assert is that the shipped default is
+            // the most transparent value available.
+            std::snprintf (msg, sizeof msg,
+                           "%s: brightness 100 is more transparent than the old 60 "
+                           "(%.2f dB vs %.2f dB residual)",
+                           worldName (world), now.residualDb,
+                           before.valid ? before.residualDb : 0.0);
+            CHECK (before.valid && now.residualDb < before.residualDb - 1.0, msg);
+        }
+        else
+        {
+            std::snprintf (msg, sizeof msg,
+                           "%s: output IS the recorded audio at the shipped defaults "
+                           "(residual %.2f dB)", worldName (world), now.residualDb);
+            CHECK (now.residualDb < -120.0, msg);
+
+            std::snprintf (msg, sizeof msg,
+                           "%s: the pre-rename defaults were NOT neutral, and this test sees it "
+                           "(residual %.2f dB)", worldName (world),
+                           before.valid ? before.residualDb : 0.0);
+            CHECK (before.valid && before.residualDb > -60.0, msg);
+        }
+    }
+
+    // ------------------------------------------- saved presets must not shift
+    std::printf ("\n  -- a saved preset still loads at the value it stored --\n");
+    {
+        // the .jmi path (bundle presets, shared with JM Capture)
+        jmi::Preset p;
+        std::string perr;
+        const bool parsed = jmi::JsonParser::parse (R"({ "bark": 30, "tine": 72 })", p.engine, perr);
+        CHECK (parsed, "the preset fixture parsed");
+        const auto got = engineParamsFromJmiPreset (p, 0);
+        CHECK (std::abs (got.at ("bark") - 30.0f) < 1.0e-6f,
+               "jmi preset storing bark:30 still loads at 30 (the DEFAULT moved, the value did not)");
+        CHECK (std::abs (got.at ("tine") - 72.0f) < 1.0e-6f, "jmi preset storing tine:72 still loads at 72");
+        CHECK (std::abs (got.at ("space") - 0.0f) < 1.0e-6f,
+               "a key the preset does not carry takes the new neutral default (space = 0)");
+
+        // the user-preset / plugin-state path
+        auto v = juce::JSON::parse (R"({ "warmth": 40, "air": 30 })");
+        const auto mks = paramValuesFromVar (v, worldEngineControls (1));
+        CHECK (std::abs (mks.at ("warmth") - 40.0f) < 1.0e-6f, "user preset storing warmth:40 still loads at 40");
+        CHECK (std::abs (mks.at ("air") - 30.0f) < 1.0e-6f, "user preset storing air:30 still loads at 30");
+        CHECK (std::abs (mks.at ("chorusDepth") - 0.0f) < 1.0e-6f,
+               "an absent key takes the new neutral default (chorusDepth = 0)");
+    }
+
+    // ------------------------------------------- the defaults ARE the unity points
+    std::printf ("\n  -- the registry's defaults are the unity points, per world --\n");
+    {
+        struct { int world; const char* id; float unity; } expect[] = {
+            { 0, "bark", 0 }, { 0, "tine", 50 }, { 0, "body", 50 },
+            { 1, "warmth", 0 }, { 1, "air", 0 },
+            { 2, "brightness", 100 }, { 2, "attack", 0 }, { 2, "glass", 50 },
+            { 3, "swell", 0 }, { 3, "warmth", 0 }, { 3, "motion", 0 },
+        };
+        bool ok = true;
+        for (auto& e : expect)
+        {
+            float def = -1.0f;
+            for (auto& s : worldEngineControls (e.world)) if (s.id == e.id) def = s.def;
+            if (std::abs (def - e.unity) > 1.0e-6f)
+            {
+                std::printf ("  [FAIL] %s.%s default is %.1f, unity point is %.1f\n",
+                             worldName (e.world), e.id, def, e.unity);
+                ok = false;
+            }
+        }
+        CHECK (ok, "every voicing control in WORLD_ENGINE_CONTROLS defaults to its unity point");
+    }
+}
+
+//==============================================================================
+// MIREKU RENAME — the migration.
+//
+// The product was "JM Signature" until 2026-10-26. Renaming it moves
+// Documents/<product>/ and AppData/Roaming/<product>/<product>.settings, and
+// the client has 25 bundles (2.3 GB), his library path, his favourites, his
+// presets, his ASIO/WASAPI device choice and his window bounds living in
+// exactly those places. Everything here is exercised in a TEMP FOLDER against
+// the real functions — the test never touches the developer's own Documents,
+// and it asserts the real paths separately.
+//==============================================================================
+static void testRenameMigration()
+{
+    std::printf ("\n== MIREKU rename: migration off the old product name ==\n");
+
+    // ------------------------------------------------ the real paths
+    const auto newSettings = standaloneSettingsFile (productName());
+    const auto oldSettings = standaloneSettingsFile (legacyProductName());
+    std::printf ("  standalone settings: %s\n                  was: %s\n",
+                 newSettings.getFullPathName().toRawUTF8(), oldSettings.getFullPathName().toRawUTF8());
+    CHECK (newSettings.getFileName() == juce::String (productName()) + ".settings"
+             && newSettings.getParentDirectory().getFileName() == productName(),
+           "the standalone settings file is named after the NEW product name");
+    CHECK (oldSettings != newSettings && oldSettings.getParentDirectory().getFileName() == legacyProductName(),
+           "the legacy standalone settings path is a different file (so the rename would have lost it)");
+    CHECK (Library::appDataDir().getFileName() == productName()
+             && Library::legacyAppDataDir().getFileName() == legacyProductName(),
+           "Documents/<product> resolves to the new name, with the old one still addressable");
+
+    // ------------------------------------------------ the Documents side
+    auto root = juce::File::createTempFile ("MirekuMigration");
+    root.deleteFile();
+    root.createDirectory();
+    const auto oldRoot = root.getChildFile ("JM Signature");
+    const auto newRoot = root.getChildFile ("MIREKU");
+
+    // A legacy installation shaped exactly like the client's: settings.json
+    // pinning the library by ABSOLUTE PATH, a user preset and a factory
+    // performance snapshot, and a Library folder with a bundle in it.
+    const auto oldLibrary = oldRoot.getChildFile ("Library");
+    oldLibrary.getChildFile ("EP2.jmi").createDirectory();
+    auto writeFixture = [] (const juce::File& f, const juce::String& text)
+    {
+        f.getParentDirectory().createDirectory();
+        f.replaceWithText (text);
+    };
+    writeFixture (oldRoot.getChildFile ("Presets/mks/Amanorsac Try.json"), R"({"name":"Amanorsac Try"})");
+    writeFixture (oldRoot.getChildFile ("Presets/Performance/Factory/Stage Stack.json"), R"({"name":"Stage Stack"})");
+    oldRoot.getChildFile ("settings.json").replaceWithText (
+        juce::String (R"({"libraryPath":")") + oldLibrary.getFullPathName().replace ("\\", "\\\\")
+        + R"(","favorites":["2|Amanorsac Try"],"licenseKey":"","mode":"authoring"})");
+
+    const auto report = Library::migrateAppDataDir (oldRoot, newRoot);
+    std::printf ("  %s\n", report.isEmpty() ? "(nothing migrated)" : report.toRawUTF8());
+
+    CHECK (newRoot.getChildFile ("settings.json").existsAsFile(), "settings.json was carried over");
+    CHECK (newRoot.getChildFile ("settings.json").loadFileAsString()
+             == oldRoot.getChildFile ("settings.json").loadFileAsString(),
+           "the carried-over settings.json is byte-identical (library path, favourites, mode)");
+    CHECK (newRoot.getChildFile ("Presets/mks/Amanorsac Try.json").existsAsFile()
+             && newRoot.getChildFile ("Presets/Performance/Factory/Stage Stack.json").existsAsFile(),
+           "the whole Presets tree was carried over (world presets AND performance snapshots)");
+    CHECK (! newRoot.getChildFile ("Library").exists(),
+           "the .jmi LIBRARY was NOT copied (2.3 GB of audio is left exactly where it is)");
+    CHECK (oldRoot.getChildFile ("settings.json").existsAsFile()
+             && oldRoot.getChildFile ("Presets").isDirectory()
+             && oldLibrary.isDirectory(),
+           "nothing was deleted or moved: the old installation still stands on its own");
+
+    // the migrated settings must still point the scan at the OLD library folder
+    {
+        auto v = juce::JSON::parse (newRoot.getChildFile ("settings.json").loadFileAsString());
+        CHECK (v.getProperty ("libraryPath", {}).toString() == oldLibrary.getFullPathName(),
+               "the migrated settings still pin the EXISTING library folder, so his 25 bundles keep working");
+    }
+
+    // running it a second time must be a no-op, not an overwrite
+    newRoot.getChildFile ("settings.json").replaceWithText (R"({"libraryPath":"D:\\elsewhere"})");
+    const auto again = Library::migrateAppDataDir (oldRoot, newRoot);
+    CHECK (juce::JSON::parse (newRoot.getChildFile ("settings.json").loadFileAsString())
+             .getProperty ("libraryPath", {}).toString() == "D:\\elsewhere",
+           "a second run never overwrites settings the player has since changed");
+    CHECK (again.isEmpty() || ! again.contains ("settings.json"), "the second run reports nothing new to do");
+
+    // ------------------------------------------------ a legacy install with NO libraryPath key
+    {
+        const auto o2 = root.getChildFile ("Legacy2"), n2 = root.getChildFile ("New2");
+        o2.getChildFile ("Library/EP2.jmi").createDirectory();
+        o2.getChildFile ("settings.json").replaceWithText (R"({"favorites":[],"licenseKey":""})");
+        Library::migrateAppDataDir (o2, n2);
+        auto v = juce::JSON::parse (n2.getChildFile ("settings.json").loadFileAsString());
+        CHECK (v.getProperty ("libraryPath", {}).toString() == o2.getChildFile ("Library").getFullPathName(),
+               "a legacy install with no libraryPath gets one written, pointing at its own Library folder");
+    }
+
+    // ------------------------------------------------ the standalone settings file
+    // The real app copies standaloneSettingsFile(legacy) -> ...(new) through
+    // this exact function; here it runs on a fixture carrying the client's own
+    // device choice and window bounds.
+    {
+        const auto from = root.getChildFile ("JM Signature.settings");
+        const auto to   = root.getChildFile ("sub/MIREKU.settings");
+        const char* fixture =
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<PROPERTIES>\n"
+            "  <VALUE name=\"audioSetup\">\n"
+            "    <DEVICESETUP deviceType=\"Windows Audio (Low Latency Mode)\" "
+            "audioOutputDeviceName=\"OUT 1-2 (4- BEHRINGER UMC 404HD 192k)\" "
+            "audioDeviceRate=\"48000.0\" audioDeviceBufferSize=\"480\"/>\n"
+            "  </VALUE>\n"
+            "  <VALUE name=\"jmWindowBounds\" val=\"608 102 1152 768\"/>\n"
+            "  <VALUE name=\"jmWindowFullScreen\" val=\"1\"/>\n</PROPERTIES>\n";
+        from.replaceWithText (fixture);
+
+        const auto line = Library::carryOverFileOnce (from, to, "standalone settings");
+        std::printf ("  %s\n", line.isEmpty() ? "(nothing migrated)" : line.toRawUTF8());
+        CHECK (to.existsAsFile(), "the standalone settings file was carried over");
+
+        // read it back the way JUCE will, and check the two things a rename
+        // would silently have cost him
+        juce::PropertiesFile pf (to, standaloneSettingsOptions (productName()));
+        // JUCE stores an XML value as the child of its <VALUE> node, so this
+        // comes back as the DEVICESETUP element itself — the same element
+        // AudioDeviceManager::initialise() is handed on startup.
+        auto setup = pf.getXmlValue ("audioSetup");
+        CHECK (setup != nullptr
+                 && setup->hasTagName ("DEVICESETUP")
+                 && setup->getStringAttribute ("deviceType") == "Windows Audio (Low Latency Mode)"
+                 && setup->getStringAttribute ("audioOutputDeviceName").contains ("UMC 404HD")
+                 && setup->getStringAttribute ("audioDeviceBufferSize") == "480",
+               "the AUDIO DEVICE CHOICE survived (type, device, rate, buffer)");
+        CHECK (pf.getValue ("jmWindowBounds") == "608 102 1152 768" && pf.getBoolValue ("jmWindowFullScreen"),
+               "the WINDOW BOUNDS and full-screen flag survived");
+
+        // and it, too, must be copy-once and leave the old file alone
+        to.replaceWithText ("<PROPERTIES/>");
+        CHECK (Library::carryOverFileOnce (from, to, "standalone settings").isEmpty()
+                 && to.loadFileAsString() == "<PROPERTIES/>",
+               "the standalone copy is once-only and never overwrites");
+        CHECK (from.existsAsFile(), "the old standalone settings file is left in place");
+    }
+
+    // ---------------- the same thing on the REAL legacy file, if one is here
+    // Read-only: his file is COPIED into the temp folder and the migration is
+    // run there, so this proves the carry-over on his actual settings without
+    // writing a byte into AppData. The app does the real copy on first launch.
+    if (oldSettings.existsAsFile())
+    {
+        const auto fixture = root.getChildFile ("real/JM Signature.settings");
+        fixture.getParentDirectory().createDirectory();
+        oldSettings.copyFileTo (fixture);
+        const auto to = root.getChildFile ("real-new/MIREKU.settings");
+        Library::carryOverFileOnce (fixture, to, "standalone settings");
+
+        juce::PropertiesFile pf (to, standaloneSettingsOptions (productName()));
+        auto setup = pf.getXmlValue ("audioSetup");
+        const juce::String type = setup != nullptr ? setup->getStringAttribute ("deviceType") : juce::String();
+        const juce::String dev  = setup != nullptr ? setup->getStringAttribute ("audioOutputDeviceName") : juce::String();
+        std::printf ("  REAL legacy settings on this machine:\n"
+                     "    device type   %s\n    output device %s\n    buffer        %s @ %s Hz\n"
+                     "    window        %s%s\n    plugin state  %d bytes\n",
+                     type.toRawUTF8(), dev.toRawUTF8(),
+                     setup != nullptr ? setup->getStringAttribute ("audioDeviceBufferSize").toRawUTF8() : "",
+                     setup != nullptr ? setup->getStringAttribute ("audioDeviceRate").toRawUTF8() : "",
+                     pf.getValue ("jmWindowBounds").toRawUTF8(),
+                     pf.getBoolValue ("jmWindowFullScreen") ? " (full screen)" : "",
+                     pf.getValue ("filterState").length());
+        CHECK (type.isNotEmpty() && dev.isNotEmpty(),
+               "the real legacy file's device type and output device came through the migration");
+        CHECK (pf.getValue ("jmWindowBounds").isNotEmpty(),
+               "the real legacy file's window bounds came through the migration");
+        CHECK (pf.getValue ("filterState").isNotEmpty(),
+               "the real legacy file's saved plugin state came through the migration");
+    }
+    else
+        std::printf ("  (no legacy standalone settings on this machine to re-check against)\n");
+
+    root.deleteRecursively();
+}
+
+//==============================================================================
 int main (int argc, char* argv[])
 {
-    bool doNull = true, doMatrix = true, doRegression = true, rebaseline = false;
+    bool doNull = true, doMatrix = true, doRegression = true, doNeutral = true,
+         doMigration = true, rebaseline = false;
+    juce::File neutralLibrary (JM_LIBRARY_TESTDATA);
     for (int i = 1; i < argc; ++i)
     {
         const juce::String a (argv[i]);
-        if (a == "--null" || a == "--matrix" || a == "--regression")
+        if (a == "--null" || a == "--matrix" || a == "--regression" || a == "--neutral"
+            || a == "--migration")
         {
-            doNull = doMatrix = doRegression = false;
+            doNull = doMatrix = doRegression = doNeutral = doMigration = false;
             if (a == "--null") doNull = true;
             if (a == "--matrix") doMatrix = true;
             if (a == "--regression") doRegression = true;
+            if (a == "--neutral") doNeutral = true;
+            if (a == "--migration") doMigration = true;
+            // `--neutral <folder>` runs the acceptance test against a real
+            // library (e.g. the client's own) instead of the repo testdata.
+            // READ-ONLY: nothing in this test writes into the folder.
+            if (a == "--neutral" && i + 1 < argc && juce::File (argv[i + 1]).isDirectory())
+                neutralLibrary = juce::File (argv[++i]);
         }
         else if (a == "--rebaseline") rebaseline = true;
     }
     if (juce::SystemStats::getEnvironmentVariable ("JM_REBASELINE", {}).isNotEmpty())
         rebaseline = true;
 
-    std::printf ("JM Signature validation suite\n=============================\n");
+    std::printf ("MIREKU validation suite\n=============================\n");
 
     if (doNull)
     {
@@ -888,6 +1391,10 @@ int main (int argc, char* argv[])
         testRateAndBufferMatrix();
     if (doRegression)
         testAudioRegression (rebaseline, juce::File (JM_REF_DIR).getChildFile ("audio-regression.json"));
+    if (doNeutral)
+        testNeutralDefaults (neutralLibrary);
+    if (doMigration)
+        testRenameMigration();
 
     std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL TESTS PASSED" : "TESTS FAILED",
                  failures, failures == 1 ? "" : "s");

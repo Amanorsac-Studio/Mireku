@@ -566,7 +566,7 @@ inline bool copyInto (const juce::File& src, const juce::File& dst)
     return src.copyFileTo (dst);
 }
 
-/// `libraryDir` = the .jmi library; `presetRoot` = Documents/JM Signature/Presets.
+/// `libraryDir` = the .jmi library; `presetRoot` = Documents/MIREKU/Presets.
 inline CollectResult collect (const juce::File& libraryDir, const juce::File& presetRoot,
                               const juce::File& settingsJson, const juce::File& destRoot,
                               Mode mode)
@@ -771,7 +771,7 @@ inline ImportResult importCollection (const juce::File& collectionRoot, const ju
     auto man = juce::JSON::parse (mf.loadFileAsString());
     if (man.getProperty ("kind", "").toString() != "jm-signature-authoring-collection")
     {
-        r.message = "not a JM Signature authoring collection";
+        r.message = "not a MIREKU authoring collection";
         return r;
     }
     if ((int) man.getProperty ("version", 0) > kCollectionVersion)

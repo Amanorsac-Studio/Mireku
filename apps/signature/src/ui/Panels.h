@@ -385,7 +385,7 @@ public:
                                  juce::RectanglePlacement::centred, 1.0f);
         g.setColour (Theme::goldHi);
         g.setFont (Theme::display (18.0f));
-        g.drawText ("JM SIGNATURE", inner.removeFromTop (24.0f), juce::Justification::centred, false);
+        g.drawText ("MIREKU", inner.removeFromTop (24.0f), juce::Justification::centred, false);
         g.setColour (Theme::muted);
         g.setFont (Theme::ui (10.0f));
         g.drawText ("SOUND LIBRARY", inner.removeFromTop (16.0f), juce::Justification::centred, false);

@@ -1,4 +1,4 @@
-// Antialias.h — anti-aliasing and DC-management primitives for the JM Signature
+// Antialias.h — anti-aliasing and DC-management primitives for the MIREKU
 // DSP, per `pedal-style-effect-plugin-development-guide.md` §1.3 and §2.
 //
 // §1.3: "Any nonlinear waveshaper ... generates harmonics above Nyquist that

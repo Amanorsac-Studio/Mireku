@@ -1,4 +1,4 @@
-// Modulation.h — JM Signature modulation system, phase 1 (LFOs + matrix).
+// Modulation.h — MIREKU modulation system, phase 1 (LFOs + matrix).
 //
 // Implements docs/JM-MODULATION-SPEC.html section C/D against the decisions in
 // docs/MODULATION-RESEARCH.md. The two structural rules that shape everything

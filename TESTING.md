@@ -51,9 +51,9 @@ Launch: `npm run dev -w jm-capture` (dev) or the packaged app.
 
 ### Export
 - [ ] Export writes `.jmi` folder + `.jmi.zip`, validation summary shows sample count/size/warnings
-- [ ] Exported bundle passes `jmi validate` and loads in JM Signature with zero changes
+- [ ] Exported bundle passes `jmi validate` and loads in MIREKU with zero changes
 
-## JM Signature
+## MIREKU
 
 Launch the Standalone build, or load the VST3 in a DAW.
 

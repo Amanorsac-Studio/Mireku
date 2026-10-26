@@ -1199,6 +1199,33 @@ static void testRenameMigration()
              && Library::legacyAppDataDir().getFileName() == legacyProductName(),
            "Documents/<product> resolves to the new name, with the old one still addressable");
 
+    // ---------------------------------------------- THE VENDOR RENAME (2026-10-26)
+    // COMPANY_NAME moved "JM Studios" -> "Mireku", with PLUGIN_MANUFACTURER_CODE
+    // and the bundle-id prefix. That changes the plugin's IDENTITY (hosts key on
+    // manufacturer+plugin code) but it must move NOTHING the player owns, and
+    // this is the assertion of that rather than a claim about it: every path
+    // this app reads or writes is derived from the PRODUCT name, so there is no
+    // second migration to write. If a future change ever routes a user path
+    // through the company name, these fail and the migration gets extended.
+    {
+        const juce::StringArray userPaths {
+            Library::appDataDir().getFullPathName(),
+            Library::defaultLibraryDir().getFullPathName(),
+            Library::userPresetDir().getFullPathName(),
+            Library::settingsFile().getFullPathName(),
+            standaloneSettingsFile (productName()).getFullPathName()
+        };
+        bool anyVendor = false;
+        for (auto& p : userPaths)
+            if (p.containsIgnoreCase ("JM Studios") || p.containsIgnoreCase ("jmstudios"))
+                anyVendor = true;
+        CHECK (! anyVendor,
+               "NO path the player's data lives in contains the company name, so changing the "
+               "company moved none of it and needs no migration of its own");
+        CHECK (userPaths[0].contains (productName()) && userPaths[4].contains (productName()),
+               "...they are all derived from the PRODUCT name, which did not change in this pass");
+    }
+
     // ------------------------------------------------ the Documents side
     auto root = juce::File::createTempFile ("MirekuMigration");
     root.deleteFile();

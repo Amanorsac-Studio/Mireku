@@ -55,6 +55,13 @@ inline constexpr const char* kAppVersion = JM_APP_VERSION;
 inline constexpr int kCollectionVersion = 1;
 inline constexpr const char* kLedgerFileName = "authoring.json";
 inline constexpr const char* kManifestFileName = "authoring-collection.json";
+/// VENDOR RENAME (2026-10-26): these two `kind` tags named the old product.
+/// They are written as MIREKU now; the legacy collection tag is still ACCEPTED
+/// on import (see importCollection) so a collection the artist already made
+/// does not become unreadable because the product was renamed.
+inline constexpr const char* kLedgerKind = "mireku-authoring-ledger";
+inline constexpr const char* kCollectionKind = "mireku-authoring-collection";
+inline constexpr const char* kLegacyCollectionKind = "jm-signature-authoring-collection";
 
 //==============================================================================
 enum class Mode
@@ -298,7 +305,7 @@ inline std::vector<LedgerEntry> readLedger (const juce::File& bundleDir)
 inline bool writeLedger (const juce::File& bundleDir, const std::vector<LedgerEntry>& entries)
 {
     auto* o = new juce::DynamicObject();
-    o->setProperty ("kind", "jm-signature-authoring-ledger");
+    o->setProperty ("kind", kLedgerKind);
     o->setProperty ("version", kCollectionVersion);
     o->setProperty ("bundle", bundleDir.getFileName());
     o->setProperty ("updatedAt", juce::Time::getCurrentTime().toISO8601 (true));
@@ -355,6 +362,7 @@ struct WriteResult
     juce::File file;
     juce::String message;
     juce::String note;        ///< non-fatal remark (e.g. a clamp, or a .bak written)
+    juce::File backup;        ///< the .bak this write left behind, if any
 };
 
 inline bool looksLikeBundle (const juce::File& dir)
@@ -363,12 +371,120 @@ inline bool looksLikeBundle (const juce::File& dir)
         && dir.getChildFile ("instrument.json").existsAsFile();
 }
 
+//==============================================================================
+// THE GUARD ITSELF, factored out so there is exactly ONE of it.
+//
+// It was written for "write a preset into the user's library"; the authoring
+// workflow (2026-10-26) also has to write `meta.world` into instrument.json and
+// to rename a preset. Those are the same risky act — replacing a file inside a
+// bundle the client is using — so they go through the same six steps rather
+// than through a second, subtly different copy of them:
+//
+//   1. the folder must be writable AT ALL (proved with a probe file, so a
+//      read-only library is reported instead of half-damaging something);
+//   2. a replace that the caller did not ask for is refused (this is what makes
+//      SAVE AS unable to clobber an existing preset — see SaveIntent);
+//   3. whatever is about to be replaced is copied to <name>.bak;
+//   4. the bytes are written;
+//   5. the file is READ BACK and handed to the caller's validator;
+//   6. if the validator rejects it, the .bak is restored (or the new file
+//      deleted) so the bundle is left EXACTLY as it was.
+//
+// `validate` is called with the text that was actually read back from disk and
+// may explain itself through `why`. It must be strict: it is the only thing
+// standing between a bad write and a bundle that fails `npx jmi validate`.
+template <typename Validate>
+inline WriteResult guardedReplace (const juce::File& target, const juce::String& text,
+                                   bool allowReplace, Validate&& validate)
+{
+    WriteResult r;
+    auto dir = target.getParentDirectory();
+    if (! dir.isDirectory() && ! dir.createDirectory().wasOk())
+    {
+        r.message = "cannot create " + dir.getFullPathName() + " (read-only library?)";
+        return r;
+    }
+    {
+        auto probe = dir.getChildFile (".jm-write-probe");
+        if (! probe.replaceWithText ("probe"))
+        {
+            r.message = "that folder is not writable: " + dir.getFullPathName();
+            return r;
+        }
+        probe.deleteFile();
+    }
+
+    const bool existed = target.existsAsFile();
+    if (existed && ! allowReplace)
+    {
+        r.message = "\"" + target.getFileNameWithoutExtension() + "\" already exists";
+        r.file = target;
+        return r;
+    }
+
+    juce::String previous;
+    juce::File bak;
+    if (existed)
+    {
+        previous = target.loadFileAsString();
+        bak = target.getSiblingFile (target.getFileName() + ".bak");
+        bak.deleteFile();
+        if (! target.copyFileTo (bak)) bak = juce::File();
+    }
+
+    if (! target.replaceWithText (text))
+    {
+        r.message = "could not write " + target.getFullPathName();
+        return r;
+    }
+
+    juce::String why;
+    if (! validate (target.loadFileAsString(), why))
+    {
+        if (existed) target.replaceWithText (previous);
+        else target.deleteFile();
+        r.message = "the written file did not read back valid, so nothing was changed"
+                  + (why.isEmpty() ? juce::String() : " (" + why + ")");
+        return r;
+    }
+
+    r.ok = true;
+    r.file = target;
+    r.backup = bak;
+    if (bak != juce::File())
+        r.note = "replaced the previous version (kept as " + bak.getFileName() + ")";
+    return r;
+}
+
 /// `exactText` writes those bytes verbatim once they have been validated. The
 /// import path uses it so a preset comes back byte for byte (re-serialising
 /// would be semantically identical but could differ in number formatting, and
 /// "byte for byte" is the only promise worth making about someone's work).
+inline juce::File bundlePresetFile (const juce::File& bundleDir, const juce::String& name)
+{
+    return bundleDir.getChildFile ("presets")
+                    .getChildFile (juce::File::createLegalFileName (name.trim()) + ".json");
+}
+
+/// The preset validator: the schema mirror AND the C++ loader the plugin itself
+/// uses must both accept what came back off the disk.
+inline bool presetTextIsValid (const juce::String& text, juce::String& why)
+{
+    auto check = checkBundlePresetVar (juce::JSON::parse (text));
+    if (! check.ok) { why = check.errors.joinIntoString ("; "); return false; }
+    jmi::JsonValue jv;
+    std::string perr;
+    jmi::Preset probe;
+    if (! (jmi::JsonParser::parse (text.toStdString(), jv, perr) && jmi::parsePreset (jv, probe, perr)))
+    { why = juce::String (perr); return false; }
+    return true;
+}
+
+/// `allowReplace == false` is SAVE AS: it refuses to stand on an existing
+/// preset rather than quietly backing it up, because "I meant to make a new one
+/// and it ate the old one" is the failure this whole feature exists to prevent.
 inline WriteResult writeBundlePresetText (const juce::File& bundleDir, const juce::String& rawName,
-                                          const juce::String& exactText)
+                                          const juce::String& exactText, bool allowReplace = true)
 {
     WriteResult r;
     const auto name = rawName.trim();
@@ -382,101 +498,274 @@ inline WriteResult writeBundlePresetText (const juce::File& bundleDir, const juc
         return r;
     }
 
-    // ---- 2. schema check in memory
+    // ---- schema check IN MEMORY, before anything on disk is opened
     auto check = checkBundlePresetVar (juce::JSON::parse (exactText));
     if (! check.ok)
     {
         r.message = "the patch does not fit the .jmi preset format: " + check.errors.joinIntoString ("; ");
         return r;
     }
-    const auto& text = exactText;
 
-    // ---- 3. is presets/ writable at all?
-    auto presets = bundleDir.getChildFile ("presets");
-    if (! presets.isDirectory() && ! presets.createDirectory().wasOk())
-    {
-        r.message = "cannot create " + presets.getFullPathName() + " (read-only library?)";
-        return r;
-    }
-    {
-        auto probe = presets.getChildFile (".jm-write-probe");
-        if (! probe.replaceWithText ("probe"))
-        {
-            r.message = "the bundle's presets folder is not writable: " + presets.getFullPathName();
-            return r;
-        }
-        probe.deleteFile();
-    }
+    r = guardedReplace (bundlePresetFile (bundleDir, name), exactText, allowReplace, presetTextIsValid);
+    if (! r.ok) return r;
 
-    auto target = presets.getChildFile (juce::File::createLegalFileName (name) + ".json");
-
-    // ---- 4. back up what we are about to replace
-    juce::File bak;
-    juce::String previous;
-    if (target.existsAsFile())
-    {
-        previous = target.loadFileAsString();
-        bak = presets.getChildFile (target.getFileName() + ".bak");
-        bak.deleteFile();
-        if (! target.copyFileTo (bak)) bak = juce::File();
-    }
-
-    // ---- 5. write, read back, re-validate
-    if (! target.replaceWithText (text))
-    {
-        r.message = "could not write " + target.getFullPathName();
-        return r;
-    }
-    bool good = false;
-    {
-        auto back = juce::JSON::parse (target.loadFileAsString());
-        if (checkBundlePresetVar (back).ok)
-        {
-            // and the C++ loader the plugin itself uses must accept it too
-            jmi::JsonValue jv;
-            std::string perr;
-            jmi::Preset probe;
-            good = jmi::JsonParser::parse (target.loadFileAsString().toStdString(), jv, perr)
-                && jmi::parsePreset (jv, probe, perr);
-        }
-    }
-    if (! good)
-    {
-        // leave the bundle exactly as it was
-        if (previous.isNotEmpty()) target.replaceWithText (previous);
-        else target.deleteFile();
-        r.message = "the written preset did not read back valid — the bundle was left unchanged";
-        return r;
-    }
-
-    // ---- 6. provenance, in a sidecar OUTSIDE presets/
+    // ---- provenance, in a sidecar OUTSIDE presets/
     LedgerEntry e;
-    e.file = target.getFileName();
+    e.file = r.file.getFileName();
     e.presetName = name;
     e.savedAt = juce::Time::getCurrentTime().toISO8601 (true);
     e.appVersion = kAppVersion;
-    if (bak != juce::File()) e.replaced = bak.getFileName();
+    if (r.backup != juce::File()) e.replaced = r.backup.getFileName();
     recordInLedger (bundleDir, e);
 
-    r.ok = true;
-    r.file = target;
-    r.message = "saved to FACTORY: " + bundleDir.getFileName() + "/presets/" + target.getFileName();
-    if (bak != juce::File())
-        r.note = (r.note.isNotEmpty() ? r.note + " | " : juce::String())
-               + "replaced the previous version (kept as " + bak.getFileName() + ")";
+    r.message = "saved to FACTORY: " + bundleDir.getFileName() + "/presets/" + r.file.getFileName();
     return r;
 }
 
 /// The save path: serialises the patch, applying the one legitimate clamp (the
 /// schema's releaseMs minimum is 1 ms), then writes it through the guard above.
 inline WriteResult writeBundlePreset (const juce::File& bundleDir, const juce::String& name,
-                                      juce::var presetVar)
+                                      juce::var presetVar, bool allowReplace = true)
 {
     juce::String clampNote;
     clampAmpEnvelopeVar (presetVar, clampNote);
-    auto r = writeBundlePresetText (bundleDir, name, juce::JSON::toString (presetVar, false));
+    auto r = writeBundlePresetText (bundleDir, name, juce::JSON::toString (presetVar, false), allowReplace);
     if (r.ok && clampNote.isNotEmpty())
         r.note = clampNote + (r.note.isNotEmpty() ? " | " + r.note : juce::String());
+    return r;
+}
+
+//==============================================================================
+// RENAME a preset inside a bundle (authoring workflow, 2026-10-26).
+//
+// A preset's name lives in TWO places — the `name` property and the file name —
+// and `jmi::loadInstrument` reads the property while the browser's FACTORY list
+// is built from it too, so changing one without the other produces a preset
+// that is called one thing and found under another. This moves both, through
+// the same guard, and refuses to land on a name that is already taken.
+//
+// The old file is kept as <old>.json.bak rather than deleted: a rename is a
+// destructive edit of someone's work, and the undo has to exist on disk.
+//==============================================================================
+inline WriteResult renameBundlePreset (const juce::File& bundleDir, const juce::String& oldName,
+                                       const juce::String& rawNewName)
+{
+    WriteResult r;
+    const auto newName = rawNewName.trim();
+    if (newName.isEmpty()) { r.message = "a preset needs a name"; return r; }
+    if (newName.length() > 128) { r.message = "a preset name is at most 128 characters"; return r; }
+    if (! looksLikeBundle (bundleDir))
+    {
+        r.message = "not a .jmi bundle: " + bundleDir.getFullPathName();
+        return r;
+    }
+
+    auto from = bundlePresetFile (bundleDir, oldName);
+    if (! from.existsAsFile())
+    {
+        r.message = "there is no preset called \"" + oldName + "\" in " + bundleDir.getFileName();
+        return r;
+    }
+    auto to = bundlePresetFile (bundleDir, newName);
+    const bool sameFile = to == from;
+
+    auto v = juce::JSON::parse (from.loadFileAsString());
+    if (auto* o = v.getDynamicObject()) o->setProperty ("name", newName);
+    else { r.message = "\"" + oldName + "\" is not a JSON object"; return r; }
+
+    auto check = checkBundlePresetVar (v);
+    if (! check.ok)
+    {
+        r.message = "renaming would not fit the .jmi preset format: " + check.errors.joinIntoString ("; ");
+        return r;
+    }
+
+    const auto text = juce::JSON::toString (v, false);
+    r = guardedReplace (to, text, sameFile, presetTextIsValid);
+    if (! r.ok)
+    {
+        if (! sameFile && r.message.contains ("already exists"))
+            r.message = "\"" + newName + "\" already exists in " + bundleDir.getFileName();
+        return r;
+    }
+
+    // The old file goes to a .bak, so the rename is undoable by hand and the
+    // preset is never listed twice. (`*.json.bak` is outside the `*.json` glob
+    // that loadInstrument and `npx jmi validate` walk, so it is inert.)
+    if (! sameFile)
+    {
+        auto bak = from.getSiblingFile (from.getFileName() + ".bak");
+        bak.deleteFile();
+        if (from.copyFileTo (bak)) from.deleteFile();
+        else from.deleteFile();
+        r.note = "the old file was kept as " + bak.getFileName();
+    }
+
+    // the ledger follows the file, so provenance is not orphaned by a rename
+    {
+        auto entries = readLedger (bundleDir);
+        bool had = false;
+        for (auto it = entries.begin(); it != entries.end();)
+        {
+            if (it->file == from.getFileName()) { had = true; it = entries.erase (it); }
+            else if (! sameFile && it->file == to.getFileName()) it = entries.erase (it);
+            else ++it;
+        }
+        LedgerEntry e;
+        e.file = to.getFileName();
+        e.presetName = newName;
+        e.savedAt = juce::Time::getCurrentTime().toISO8601 (true);
+        e.appVersion = kAppVersion;
+        if (! sameFile) e.replaced = from.getFileName() + ".bak";
+        entries.push_back (e);
+        juce::ignoreUnused (had);
+        writeLedger (bundleDir, entries);
+    }
+
+    r.message = "renamed to \"" + newName + "\" in " + bundleDir.getFileName()
+              + "/presets/" + to.getFileName();
+    return r;
+}
+
+//==============================================================================
+// RE-CATEGORISING AN INSTRUMENT — writing `meta.world` into instrument.json.
+//
+// This is the client's ask: "James should be able to move sounds to categories
+// he wants". The four categories are the four worlds, and the category rule he
+// applied is that STRINGS is the catch-all — organs, bells, pads, choirs and
+// brass are all `strings`, because they are not a piano/Rhodes/EP, not an MKS
+// and not FM.
+//
+// instrument.json is the file that makes a bundle a bundle, so this is the
+// most dangerous write in the app, and it is deliberately the NARROWEST one:
+//
+//   * the document is re-serialised from the parsed JSON with exactly ONE
+//     property changed, and the result is then proved to differ from the
+//     original in `meta.world` AND NOWHERE ELSE (varsDifferOnlyAt below). That
+//     comparison is on the parsed values, so JSON formatting cannot hide a
+//     change and reformatting cannot be mistaken for one;
+//   * the written file is read back and re-parsed with the SAME reader the
+//     plugin and `jmi validate` use (jmi::parseInstrumentJson), and must come
+//     back carrying the new world;
+//   * on any failure the previous instrument.json is restored from its .bak.
+//
+// `samples/` is never opened, and nothing else in the bundle is touched.
+//==============================================================================
+
+/// Deep-compares two parsed JSON values and reports the first difference as a
+/// dotted path. `allowedPath` (e.g. "meta.world") is the one difference that is
+/// permitted and MUST be present; anything else, including a missing or extra
+/// property, is reported.
+inline bool varsDifferOnlyAt (const juce::var& a, const juce::var& b,
+                              const juce::String& allowedPath, juce::String& problem)
+{
+    bool sawAllowed = false;
+
+    // recursive worker: appends to `problem` on the first unexpected difference
+    struct Walk
+    {
+        const juce::String& allowed;
+        juce::String& problem;
+        bool& sawAllowed;
+
+        bool operator() (const juce::var& x, const juce::var& y, const juce::String& path)
+        {
+            auto* xo = x.getDynamicObject();
+            auto* yo = y.getDynamicObject();
+            if ((xo != nullptr) != (yo != nullptr)) { problem = path + ": object/non-object"; return false; }
+            if (xo != nullptr)
+            {
+                if (xo->getProperties().size() != yo->getProperties().size())
+                { problem = path + ": property count changed"; return false; }
+                for (auto& p : xo->getProperties())
+                {
+                    const auto sub = path.isEmpty() ? p.name.toString() : path + "." + p.name.toString();
+                    if (! yo->hasProperty (p.name)) { problem = sub + ": missing"; return false; }
+                    if (! (*this) (p.value, yo->getProperty (p.name), sub)) return false;
+                }
+                return true;
+            }
+
+            auto* xa = x.getArray();
+            auto* ya = y.getArray();
+            if ((xa != nullptr) != (ya != nullptr)) { problem = path + ": array/non-array"; return false; }
+            if (xa != nullptr)
+            {
+                if (xa->size() != ya->size()) { problem = path + ": array length changed"; return false; }
+                for (int i = 0; i < xa->size(); ++i)
+                    if (! (*this) (xa->getReference (i), ya->getReference (i),
+                                   path + "[" + juce::String (i) + "]")) return false;
+                return true;
+            }
+
+            const bool equal = x.isVoid() == y.isVoid()
+                            && ((x.isDouble() || x.isInt() || x.isInt64())
+                                && (y.isDouble() || y.isInt() || y.isInt64())
+                                    ? std::abs ((double) x - (double) y) <= 1.0e-12
+                                    : x.toString() == y.toString());
+            if (equal) return true;
+            if (path == allowed) { sawAllowed = true; return true; }
+            problem = path + ": changed from \"" + x.toString() + "\" to \"" + y.toString() + "\"";
+            return false;
+        }
+    } walk { allowedPath, problem, sawAllowed };
+
+    if (! walk (a, b, {})) return false;
+    if (! sawAllowed) { problem = allowedPath + ": nothing actually changed"; return false; }
+    return true;
+}
+
+/// `worldId` is a .jmi `meta.world` enum value: rhodes-ep | mks | fm | strings.
+inline WriteResult writeInstrumentWorld (const juce::File& bundleDir, const juce::String& worldId)
+{
+    WriteResult r;
+    static const juce::StringArray allowed { "rhodes-ep", "mks", "fm", "strings" };
+    if (! allowed.contains (worldId))
+    {
+        r.message = "\"" + worldId + "\" is not one of the four categories";
+        return r;
+    }
+    if (! looksLikeBundle (bundleDir))
+    {
+        r.message = bundleDir == juce::File()
+                      ? "there is no instrument bundle here to move"
+                      : "not a .jmi bundle: " + bundleDir.getFullPathName();
+        return r;
+    }
+
+    auto ij = bundleDir.getChildFile ("instrument.json");
+    const auto originalText = ij.loadFileAsString();
+    const auto original = juce::JSON::parse (originalText);
+    auto* root = original.getDynamicObject();
+    auto* meta = root != nullptr ? root->getProperty ("meta").getDynamicObject() : nullptr;
+    if (meta == nullptr) { r.message = "instrument.json has no meta object"; return r; }
+    if (meta->getProperty ("world").toString() == worldId)
+    {
+        r.message = "already in that category";
+        return r;
+    }
+
+    // one property, on a fresh parse of the same bytes
+    auto edited = juce::JSON::parse (originalText);
+    edited.getDynamicObject()->getProperty ("meta").getDynamicObject()->setProperty ("world", worldId);
+
+    auto validate = [&] (const juce::String& back, juce::String& why)
+    {
+        auto parsedBack = juce::JSON::parse (back);
+        if (! varsDifferOnlyAt (original, parsedBack, "meta.world", why)) return false;
+        jmi::Instrument inst;
+        std::string err;
+        if (! jmi::parseInstrumentJson (back.toStdString(), inst, err))
+        { why = juce::String (err); return false; }
+        if (juce::String (jmi::worldId (inst.meta.world)) != worldId)
+        { why = "the reader did not report the new category"; return false; }
+        return true;
+    };
+
+    r = guardedReplace (ij, juce::JSON::toString (edited, false), true, validate);
+    if (! r.ok) return r;
+
+    r.message = "moved " + bundleDir.getFileName() + " to " + worldId;
     return r;
 }
 
@@ -692,7 +981,7 @@ inline CollectResult collect (const juce::File& libraryDir, const juce::File& pr
 
     // ------------------------------------------------------------------ manifest
     auto* m = new juce::DynamicObject();
-    m->setProperty ("kind", "jm-signature-authoring-collection");
+    m->setProperty ("kind", kCollectionKind);
     m->setProperty ("version", kCollectionVersion);
     m->setProperty ("appVersion", kAppVersion);
     m->setProperty ("jmiPresetFormatVersion", 1);
@@ -769,10 +1058,16 @@ inline ImportResult importCollection (const juce::File& collectionRoot, const ju
         return r;
     }
     auto man = juce::JSON::parse (mf.loadFileAsString());
-    if (man.getProperty ("kind", "").toString() != "jm-signature-authoring-collection")
+    // The product was renamed to MIREKU, so the manifest "kind" moved with it;
+    // a collection written by a pre-rename build is still accepted, because
+    // refusing to read the artist's work over a changed string would be absurd.
     {
-        r.message = "not a MIREKU authoring collection";
-        return r;
+        const auto kind = man.getProperty ("kind", "").toString();
+        if (kind != kCollectionKind && kind != kLegacyCollectionKind)
+        {
+            r.message = "not a MIREKU authoring collection";
+            return r;
+        }
     }
     if ((int) man.getProperty ("version", 0) > kCollectionVersion)
     {

@@ -188,10 +188,52 @@ class PlateButton : public juce::Button
 public:
     explicit PlateButton (const juce::String& text = {}) : juce::Button (text) { setButtonText (text); }
     void setFontHeight (float h) { fontH_ = h; }
+
+    //=================================================== AUTHORING WORKFLOW (2026-10-26)
+    /// DESTRUCTIVE register, for OVERWRITE. Same plate, same geometry, but the
+    /// fill, rim and lettering are in the warning colour — so the control that
+    /// replaces an artist's work does not look like the one that does not. The
+    /// pattern is already in the kit (RemoveChipButton takes warnRed on hover);
+    /// this makes it the resting state, because a save-over is destructive
+    /// before you touch it, not only once you are over it.
+    /// `armed` is the second, brighter state: the click that will actually do it.
+    void setDanger (bool b) { danger_ = b; repaint(); }
+    void setArmed (bool b)  { armed_ = b;  repaint(); }
+    bool isArmed() const    { return armed_; }
+
     void paintButton (juce::Graphics& g, bool hover, bool down) override
     {
-        drawPlateButton (g, getLocalBounds().toFloat(), getButtonText(), getToggleState(),
-                         hover, down, isEnabled(), fontH_);
+        if (danger_)
+        {
+            auto r = getLocalBounds().toFloat();
+            drawPlateButton (g, r, {}, false, false, down, isEnabled(), fontH_);
+            const bool tiny = r.getHeight() < 26.0f;
+            const auto inner = tiny ? r.reduced (2.0f) : kit::pillInner (r);
+            const float rad  = tiny ? 3.0f : kit::pillRadius (inner);
+            const float a = isEnabled() ? 1.0f : HwState::disabledAlpha;
+            // RESTING carries no fill: a filled warn plate is already spoken for
+            // by the modulation-boundary notice two rows below, and two filled
+            // red plates in one column read as one thing. Resting is an outline
+            // and red lettering; ARMED is the filled plate. The escalation is
+            // what distinguishes "this would replace something" from "the next
+            // click replaces it".
+            if (armed_ || hover)
+            {
+                g.setColour (Theme::warnRed.withAlpha ((armed_ ? 0.30f : 0.12f) * a));
+                g.fillRoundedRectangle (inner, rad);
+            }
+            g.setColour (Theme::warnRed.withAlpha ((armed_ ? 1.0f : 0.62f) * a));
+            g.drawRoundedRectangle (inner.reduced (0.5f), rad, armed_ ? 1.8f : 1.0f);
+            auto textArea = (down && isEnabled()) ? r.translated (0.0f, HwState::pressedOffset) : r;
+            g.setFont (Theme::display (fontH_ > 0.0f ? fontH_
+                                                     : juce::jlimit (9.0f, 15.0f, r.getHeight() * 0.42f)));
+            g.setColour ((armed_ ? Theme::warnRed.brighter (0.5f)
+                                 : Theme::warnRed.withMultipliedSaturation (0.72f)).withAlpha (a));
+            g.drawText (getButtonText().toUpperCase(), textArea, juce::Justification::centred, false);
+        }
+        else
+            drawPlateButton (g, getLocalBounds().toFloat(), getButtonText(), getToggleState(),
+                             hover, down, isEnabled(), fontH_);
         if (hasKeyboardFocus (false))
         {
             g.setColour (HwState::focus);
@@ -200,6 +242,7 @@ public:
     }
 private:
     float fontH_ = 0.0f;
+    bool danger_ = false, armed_ = false;
 };
 
 //====================================================== CLIENT REVIEW R7 (2/3)

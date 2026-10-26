@@ -1,8 +1,16 @@
-# JM Signature Sound Library — Build Specification
+# MIREKU Sound Library — Build Specification
+
+> **Naming note (2026-10-26).** The instrument shipped in this brief as
+> "JM Signature" and the vendor as "JM Studios". At the client's instruction
+> ("NAME OF APP CHANGE TO MIREKU, no more JM Signature Library", then "change
+> everything to Mireku") the product is **MIREKU** and the vendor is
+> **Mireku**. The on-disk format stays `.jmi` and the source directory stays
+> `apps/signature` — see DECISIONS-signature.md for why. Read every "JM
+> Signature" below as MIREKU.
 
 **Read this entire document before writing any code. It is the complete, final brief. Build both applications start-to-finish without asking for clarification — every decision has been made. Where a genuine ambiguity remains, make the professional-standard choice, note it in `DECISIONS.md` at the repo root, and keep going.**
 
-Client: James Mireku (JM Studios). Developer/owner: Nene. Brand: gold shield monogram on black, condensed caps, boutique/premium feel.
+Client: James Mireku (Mireku). Developer/owner: Nene. Brand: gold shield monogram on black, condensed caps, boutique/premium feel.
 
 ---
 
@@ -11,9 +19,9 @@ Client: James Mireku (JM Studios). Developer/owner: Nene. Brand: gold shield mon
 Two applications, one shared format, built **in parallel**:
 
 1. **JM Capture** — a guided sampling application James uses to record his instruments (raw, no FX), shape them with an FX rack, and export portable instrument bundles.
-2. **JM Signature** — a VST3/AU instrument (plus standalone) with four sound-world engines and a Perform page, which loads those bundles natively.
+2. **MIREKU** (`apps/signature`) — a VST3/AU instrument (plus standalone) with four sound-world engines and a Perform page, which loads those bundles natively.
 
-**Definition of done:** both apps complete, tested, and "sounds-ready" — JM Capture fully able to record/export, JM Signature fully playable against **generated placeholder bundles** (see §6). When James's real bundles arrive later, they drop into the VST's library folder with **zero code changes**.
+**Definition of done:** both apps complete, tested, and "sounds-ready" — JM Capture fully able to record/export, MIREKU fully playable against **generated placeholder bundles** (see §6). When James's real bundles arrive later, they drop into the VST's library folder with **zero code changes**.
 
 A separate **UX design document** will arrive later. Therefore: build all UI now as clean, functional, dark-themed (near-black `#0C0A07`, gold accent `#D9A648`, cream text `#EFE7D4`) interfaces, but **architect every view for reskinning** — strict separation of UI layer from engine/state, all colors/fonts/dimensions in one theme/tokens module per app, no styling hardcoded into components. The UX doc will restyle, not restructure.
 
@@ -28,7 +36,7 @@ jm-signature/
 │  └─ jmi-format/            ← shared: .jmi schema (JSON Schema + TS types + C++ header), validator, docs
 ├─ apps/
 │  ├─ capture/               ← JM Capture (Electron + TypeScript + Web Audio/Web MIDI)
-│  └─ signature/             ← JM Signature (JUCE 8 / C++20, CMake; VST3 + AU + Standalone targets)
+│  └─ signature/             ← MIREKU (JUCE 8 / C++20, CMake; VST3 + AU + Standalone targets)
 ├─ tools/
 │  └─ placeholder-gen/       ← Node script that synthesizes the 4 placeholder .jmi bundles
 └─ testdata/                 ← generated placeholder bundles live here after build
@@ -132,12 +140,12 @@ Reverbs: FDN or Freeverb-class is fine; quality over novelty. Default racks per 
 
 ---
 
-## 5. App 2 — JM Signature (JUCE 8, C++20, CMake)
+## 5. App 2 — MIREKU (JUCE 8, C++20, CMake)
 
 Targets: VST3, AU, Standalone (mac universal + Windows x64). Resizable GPU-drawn UI. All UI through a central `Theme` struct (colors, fonts, metrics) for the later UX pass.
 
 ### 5.1 Sample engine
-- Loads `.jmi` bundles from a user library folder (configurable; default `~/Documents/JM Signature/Library`). Scans at startup + manual rescan.
+- Loads `.jmi` bundles from a user library folder (configurable; default `~/Documents/MIREKU/Library`). Scans at startup + manual rescan.
 - Disk-streamed playback (preload attack buffers ~64k samples, stream tails), 64-voice polyphony with sensible voice stealing.
 - Zone selection by note + velocity window, RR round-cycling per zone, ±1 st repitch for unsampled keys, loop playback with crossfade for sustaining bundles, per-layer velocity crossfade (±8 velocity overlap region, equal-power).
 - Amp envelope per patch (A/D/S/R; defaults: decaying 2 ms/—/100/250 ms, sustaining 10 ms/—/100/400 ms).

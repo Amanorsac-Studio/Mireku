@@ -90,11 +90,36 @@ public:
 
         saveName_.setTextToShowWhenEmpty ("New preset name", Theme::muted);
         saveName_.setFont (Theme::ui (13.0f));
+        // Typing a new name is also the gesture that means "I am not
+        // overwriting", so it disarms a primed OVERWRITE.
+        saveName_.onTextChange = [this] { if (overArmed_) { overArmed_ = false; syncOverButton(); } };
         addAndMakeVisible (saveName_);
-        saveBtn_.setButtonText ("SAVE");
+        saveBtn_.setButtonText ("SAVE AS");
         saveBtn_.setFontHeight (11.0f);
-        saveBtn_.onClick = [this] { doSave(); };
+        saveBtn_.setTooltip ("Saves what is on screen as a NEW preset under the typed name. "
+                             "Never replaces an existing one.");
+        saveBtn_.onClick = [this] { doSaveAs(); };
         addAndMakeVisible (saveBtn_);
+
+        // ------------------------------- AUTHORING WORKFLOW: SAVE OVER vs SAVE AS
+        // "save it over the sound or as a different preset" are two acts, and
+        // overwriting someone's work by accident is the failure that loses
+        // trust. So they are two controls that cannot be confused:
+        //
+        //   * SAVE AS reads the NAME FIELD and refuses to replace anything;
+        //   * OVERWRITE reads nothing — it NAMES, in its own label, the preset
+        //     that is loaded and about to be replaced — wears the destructive
+        //     register (warn red, not gold), sits on its own row, and takes two
+        //     clicks: the first arms it and spells out the consequence in the
+        //     destination line, the second does it.
+        //
+        // It is hidden entirely when there is no preset of that name to
+        // replace, so its presence alone means "there is something here to
+        // stand on". The arm times out, so a stray click cannot stay live.
+        overBtn_.setFontHeight (10.0f);
+        overBtn_.setDanger (true);
+        overBtn_.onClick = [this] { doSaveOver(); };
+        addChildComponent (overBtn_);
 
         // ------------------------------------------------- AUTHORING MODE
         // The whole point of this control is that a save must not be a guess.
@@ -115,7 +140,7 @@ public:
         altSaveBtn_.setFontHeight (10.0f);
         altSaveBtn_.setTooltip ("Saves slots, macros, modulation and the arpeggiator - "
                                 "everything a patch cannot hold");
-        altSaveBtn_.onClick = [this] { doSave (true); };
+        altSaveBtn_.onClick = [this] { doSavePerformanceInstead(); };
         addChildComponent (altSaveBtn_);
         rebuild();
     }
@@ -171,8 +196,12 @@ public:
         const int page = proc_.state.currentPage;
         destLine_ = proc_.saveDestinationLine (page);
         boundaryLine_ = proc_.modBoundaryLine (page);
+        overTarget_ = proc_.saveOverTargetName (page);
+        overLine_ = proc_.saveOverLine (page);
+        overArmed_ = false;
         resultIsGood_ = false;
         altSaveBtn_.setVisible (boundaryLine_.isNotEmpty());
+        syncOverButton();
         if (compact_) resized();        // the block's height depends on those lines
         repaint();
     }
@@ -183,6 +212,7 @@ public:
     {
         using L = Theme::L;
         int h = L::brSaveH + 2 + 6;
+        if (overTarget_.isNotEmpty()) h += L::brOverH + 2;
         if (destLine_.isNotEmpty()) h += L::brInfoH + 2;
         if (boundaryLine_.isNotEmpty()) h += L::brWarnH + 4 + L::brAltH;
         return h;
@@ -191,11 +221,30 @@ public:
     // Self-check hooks: the save block is the whole feature, so it has to be
     // assertable without synthesising clicks into a TextEditor.
     juce::String destinationText() const { return destLine_; }
+    /// What is actually DRAWN in the info area: the destination normally, and
+    /// the consequence of the next click while OVERWRITE is armed.
+    juce::String infoLineText() const
+    {
+        return overArmed_ && overLine_.isNotEmpty() ? overLine_ : destLine_;
+    }
     juce::String boundaryText() const { return boundaryLine_; }
     bool alternativeSaveOffered() const { return altSaveBtn_.isVisible(); }
     juce::Rectangle<int> listBounds() const { return list_.getBounds(); }
     void setSaveName (const juce::String& n) { saveName_.setText (n, false); }
-    void pressSave (bool performanceInstead = false) { doSave (performanceInstead); }
+    void pressSave (bool performanceInstead = false)
+    {
+        if (performanceInstead) doSavePerformanceInstead();
+        else doSaveAs();
+    }
+    // --- SAVE OVER vs SAVE AS, assertable without synthesising mouse clicks
+    bool overwriteOffered() const { return overBtn_.isVisible(); }
+    juce::String overwriteButtonText() const { return overBtn_.getButtonText(); }
+    bool overwriteArmed() const { return overBtn_.isArmed(); }
+    juce::String overwriteText() const { return overLine_; }
+    void pressOverwrite() { doSaveOver(); }
+    void disarmOverwrite() { overArmed_ = false; syncOverButton(); }
+    bool renameRow (int index, const juce::String& newName) { return applyRename (index, newName); }
+    bool recategoriseRow (int index, int world) { return applyRecategorise (index, world); }
 
     void resized() override
     {
@@ -231,11 +280,15 @@ public:
 
         const int saveY = compact_ ? listBottom + 6 : L::brSaveY;
         auto save = juce::Rectangle<int> (12, saveY, w - 24, L::brSaveH);
-        saveBtn_.setBounds (save.removeFromRight (62));
+        saveBtn_.setBounds (save.removeFromRight (74));
         save.removeFromRight (6);
         saveName_.setBounds (save);
 
-        int y = compact_ ? saveY + L::brSaveH + 2 : L::brInfoY;
+        // OVERWRITE sits on its own full-width row directly under SAVE AS.
+        const int overY = compact_ ? saveY + L::brSaveH + 2 : L::brOverY;
+        overBtn_.setBounds (12, overY, w - 24, L::brOverH);
+
+        int y = compact_ ? (overBtn_.isVisible() ? overY + L::brOverH + 2 : overY) : L::brInfoY;
         infoArea_ = juce::Rectangle<int> (14, y, w - 28, L::brInfoH);
         y = compact_ ? y + L::brInfoH + 2 : L::brWarnY;
         warnArea_ = juce::Rectangle<int> (14, y, w - 28, L::brWarnH);
@@ -276,13 +329,18 @@ public:
         // Where this save goes, and what it cannot take with it. Drawn, not
         // hidden behind a dialog, and present on every repaint — so "where did
         // my save go?" is answered before it is asked.
-        if (destLine_.isNotEmpty() && ! infoArea_.isEmpty())
+        // While OVERWRITE is armed the destination line is REPLACED by what the
+        // next click will actually do, in the warning colour — the one moment a
+        // save-over is a click away is the one moment to spell it out.
+        const auto infoText = infoLineText();
+        if (infoText.isNotEmpty() && ! infoArea_.isEmpty())
         {
-            g.setColour (resultIsGood_ ? Theme::okGreen
+            g.setColour (overArmed_ ? Theme::warnRed
+                                    : resultIsGood_ ? Theme::okGreen
                                        : destLine_.startsWith ("NOT SAVED") ? Theme::warnRed
                                                                             : Theme::muted.brighter (0.25f));
             g.setFont (Theme::ui (10.5f));
-            g.drawFittedText (destLine_, infoArea_, juce::Justification::topLeft, 3, 0.9f);
+            g.drawFittedText (infoText, infoArea_, juce::Justification::topLeft, 3, 0.9f);
         }
         if (boundaryLine_.isNotEmpty() && ! warnArea_.isEmpty())
         {
@@ -438,14 +496,38 @@ private:
         if (e.mods.isPopupMenu())
         {
             juce::PopupMenu m;
+            m.addSectionHeader (r.name.removeCharacters (juce::String::fromUTF8 ("\xE2\x96\xA0")).trim());
             m.addItem (1, "Toggle Favorite");
+            // NAME AND RENAME: a preset is renamed from the row that carries
+            // it, which is the only place its old name is on screen.
+            if (r.kind != Row::Bundle) m.addItem (3, "Rename...");
             if (r.kind == Row::UserPreset || r.kind == Row::Performance) m.addItem (2, "Delete preset");
+
+            // MOVE TO ANOTHER CATEGORY. Only for an instrument, and only in
+            // AUTHORING mode: it edits the bundle's own instrument.json, which
+            // is factory content being authored, not something a player of the
+            // shipped product should be able to do to his library by accident.
+            if (r.kind == Row::Bundle && proc_.state.library.isAuthoring())
+            {
+                const int currentWorld = proc_.state.library.find (r.file) != nullptr
+                                           ? proc_.state.library.find (r.file)->world : -1;
+                juce::PopupMenu cats;
+                for (int w = 0; w < 4; ++w)
+                    cats.addItem (10 + w, juce::String (worldName (w)).toUpperCase()
+                                          + (w == 3 ? "   (everything else)" : juce::String()),
+                                  w != currentWorld, w == currentWorld);
+                m.addSeparator();
+                m.addSubMenu ("Move to category", cats);
+            }
+
             // R3(A): targeted so it inherits the JM chrome LookAndFeel (an
             // untargeted menu falls back to the host's default JUCE look)
-            m.showMenuAsync (styledMenu (m, list_), [this, r] (int res)
+            m.showMenuAsync (styledMenu (m, list_), [this, r, row] (int res)
             {
                 if (res == 1) proc_.state.library.toggleFavorite (r.favKey());
                 else if (res == 2) { r.file.moveToTrash(); }
+                else if (res == 3) { promptRename (row); return; }
+                else if (res >= 10 && res <= 13) { applyRecategorise (row, res - 10); return; }
                 rebuild();
             });
             return;
@@ -453,24 +535,96 @@ private:
         activateRow (row);
     }
 
-    /// AUTHORING MODE. `performanceInstead` is the one-click escape from the
-    /// format boundary: on a model page it saves the PERFORMANCE snapshot (which
-    /// does carry modulation, the macros and the arp) rather than the patch.
-    void doSave (bool performanceInstead = false)
+    /// The OVERWRITE row's label and state, from the processor's own answer to
+    /// "what would a save-over replace?".
+    void syncOverButton()
+    {
+        const bool offer = overTarget_.isNotEmpty();
+        overBtn_.setVisible (offer);
+        overBtn_.setArmed (overArmed_);
+        overBtn_.setButtonText (! offer ? juce::String()
+                                : overArmed_ ? "CLICK AGAIN TO REPLACE \"" + overTarget_ + "\""
+                                             : "OVERWRITE \"" + overTarget_ + "\"");
+        overBtn_.setTooltip (overLine_);
+    }
+
+    /// SAVE AS — a NEW preset under the typed name. It can fail, and when it
+    /// fails because the name is taken it says so instead of replacing anything.
+    void doSaveAs()
     {
         auto name = saveName_.getText().trim();
-        if (name.isEmpty()) return;
-        const bool patch = proc_.state.currentPage <= 3 && ! performanceInstead;
+        if (name.isEmpty())
+        {
+            destLine_ = "NOT SAVED - type a name first (or use OVERWRITE to replace the loaded preset)";
+            resultIsGood_ = false;
+            repaint();
+            return;
+        }
+        const bool patch = proc_.state.currentPage <= 3;
         auto out = patch
-            ? proc_.saveInstrumentPreset (slotForWorld (proc_.state, proc_.state.currentPage), name)
-            : proc_.savePerformanceSnapshot (name);
+            ? proc_.saveInstrumentPreset (slotForWorld (proc_.state, proc_.state.currentPage), name,
+                                          JMSignatureProcessor::SaveIntent::saveAs)
+            : proc_.savePerformanceSnapshot (name, JMSignatureProcessor::SaveIntent::saveAs);
+        reportSave (out, out.ok);
+    }
 
-        saveName_.clear();
+    /// SAVE OVER — replaces the preset that is loaded, keeping a .bak. Two
+    /// clicks: the first arms and explains, the second commits. The arm goes
+    /// stale after a few seconds so it can never sit waiting for a stray click.
+    void doSaveOver()
+    {
+        if (overTarget_.isEmpty()) return;
+        const auto now = juce::Time::getMillisecondCounter();
+        if (! overArmed_ || now - overArmedAtMs_ > kArmWindowMs)
+        {
+            overArmed_ = true;
+            overArmedAtMs_ = now;
+            syncOverButton();
+            repaint();
+            return;
+        }
+        overArmed_ = false;
+        const auto target = overTarget_;
+        auto out = proc_.state.currentPage <= 3
+            ? proc_.saveInstrumentPreset (slotForWorld (proc_.state, proc_.state.currentPage), target,
+                                          JMSignatureProcessor::SaveIntent::saveOver)
+            : proc_.savePerformanceSnapshot (target, JMSignatureProcessor::SaveIntent::saveOver);
+        reportSave (out, out.ok);
+    }
+
+    /// The one-click escape from the format boundary: on a model page it saves
+    /// the PERFORMANCE snapshot (which does carry modulation, the macros and the
+    /// arp) rather than the patch. Named from the typed field, falling back to
+    /// the performance that is loaded, so the button always has something to do.
+    void doSavePerformanceInstead()
+    {
+        auto name = saveName_.getText().trim();
+        if (name.isEmpty()) name = proc_.state.performPresetName.trim();
+        if (name.isEmpty())
+        {
+            destLine_ = "NOT SAVED - type a name for the performance first";
+            resultIsGood_ = false;
+            repaint();
+            return;
+        }
+        // A performance save from here is deliberately save-OVER-if-it-exists:
+        // the artist pressed the button that rescues his modulation work, and
+        // refusing it over a name clash would be the wrong moment to be strict.
+        reportSave (proc_.savePerformanceSnapshot (name,
+                        JMSignatureProcessor::SaveIntent::saveOver), true);
+    }
+
+    void reportSave (const JMSignatureProcessor::SaveOutcome& out, bool clearName)
+    {
+        if (out.ok && clearName) saveName_.clear();
         // A factory save belongs on the FACTORY tab and a user save on USER —
         // landing on the wrong tab is exactly how "where did my save go?" starts.
-        const bool toFactory = out.dest == authoring::SaveDest::bundleFactory
-                            || out.dest == authoring::SaveDest::performanceFactory;
-        tabs_[toFactory ? 1 : 0].setToggleState (true, juce::dontSendNotification);
+        if (out.ok)
+        {
+            const bool toFactory = out.dest == authoring::SaveDest::bundleFactory
+                                || out.dest == authoring::SaveDest::performanceFactory;
+            tabs_[toFactory ? 1 : 0].setToggleState (true, juce::dontSendNotification);
+        }
         rebuild();
 
         // ...and say what actually happened, in place of what was going to.
@@ -478,6 +632,71 @@ private:
         destLine_ = out.ok ? out.message : juce::String ("NOT SAVED - ") + out.message;
         if (out.note.isNotEmpty()) destLine_ += "  (" + out.note + ")";
         repaint();
+    }
+
+    //======================================================= NAME AND RENAME
+    /// The rename itself, separated from the dialog so the self-check can
+    /// exercise the whole path (which references it has to keep coherent is the
+    /// interesting part, and that lives in the processor).
+    bool applyRename (int index, const juce::String& newName)
+    {
+        if (index < 0 || index >= (int) rows_.size()) return false;
+        auto r = rows_[(size_t) index];
+        JMSignatureProcessor::RenameOutcome out;
+        switch (r.kind)
+        {
+            case Row::FactoryPreset:
+            case Row::UserPreset:
+                out = proc_.renameInstrumentPreset (r.slot, r.name, newName);
+                break;
+            case Row::Performance:
+                out = proc_.renamePerformancePreset (r.file, newName);
+                break;
+            case Row::Bundle:
+                out.message = "an instrument is renamed by renaming its .jmi folder, not from here";
+                break;
+        }
+        rebuild();
+        resultIsGood_ = out.ok;
+        destLine_ = out.ok ? out.message : juce::String ("NOT RENAMED - ") + out.message;
+        if (out.note.isNotEmpty()) destLine_ += "  (" + out.note + ")";
+        repaint();
+        return out.ok;
+    }
+
+    void promptRename (int index)
+    {
+        if (index < 0 || index >= (int) rows_.size()) return;
+        const auto oldName = rows_[(size_t) index].name;
+        auto* aw = new juce::AlertWindow ("Rename preset",
+                                          "New name for \"" + oldName + "\":",
+                                          juce::MessageBoxIconType::NoIcon);
+        aw->addTextEditor ("name", oldName, {});
+        aw->addButton ("RENAME", 1, juce::KeyPress (juce::KeyPress::returnKey));
+        aw->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        aw->enterModalState (true, juce::ModalCallbackFunction::create (
+            [this, aw, index] (int res)
+            {
+                if (res == 1) applyRename (index, aw->getTextEditorContents ("name"));
+                delete aw;
+            }), false);
+    }
+
+    //================================================== MOVE TO ANOTHER CATEGORY
+    bool applyRecategorise (int index, int world)
+    {
+        if (index < 0 || index >= (int) rows_.size()) return false;
+        auto r = rows_[(size_t) index];
+        if (r.kind != Row::Bundle) return false;
+        auto out = proc_.recategoriseBundle (r.file, world);
+        // The instrument has left this page (the processor moved currentPage to
+        // its new one), so the list is rebuilt against where it now lives.
+        rebuild();
+        resultIsGood_ = out.ok;
+        destLine_ = out.ok ? out.message : juce::String ("NOT MOVED - ") + out.message;
+        if (out.note.isNotEmpty()) destLine_ += "  (" + out.note + ")";
+        repaint();
+        return out.ok;
     }
 
     JMSignatureProcessor& proc_;
@@ -488,8 +707,12 @@ private:
     std::array<ux::TabCellButton, 3> tabs_;
     ux::PlateButton saveBtn_;
     ux::PlateButton altSaveBtn_;                    // AUTHORING MODE: the save that keeps modulation
-    juce::String destLine_, boundaryLine_;
+    ux::PlateButton overBtn_;                       // SAVE OVER, in the destructive register
+    juce::String destLine_, boundaryLine_, overTarget_, overLine_;
     bool resultIsGood_ = false;
+    bool overArmed_ = false;
+    juce::uint32 overArmedAtMs_ = 0;
+    static constexpr juce::uint32 kArmWindowMs = 6000;
     std::unique_ptr<juce::DrawableButton> filterBtn_;
     std::unique_ptr<juce::Drawable> searchIcon_ { assets::makeIcon (assets::Icon::search, Theme::muted) };
     std::unique_ptr<juce::Drawable> starIcon_ { ux::makePackIcon (ux::PackIcon::star, Theme::gold) };

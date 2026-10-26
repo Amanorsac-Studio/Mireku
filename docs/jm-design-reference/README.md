@@ -1,6 +1,6 @@
-# JM Signature — Design Reference Pack
+# MIREKU (formerly JM Signature) — Design Reference Pack
 
-**For Claude Code:** these images are the visual ground truth for the JM Signature Sound Library build (see JM-BUILD-SPEC.md). Read every image in this pack before building any UI. Where an image and written spec conflict on *look and feel*, `ui-reference/` wins; on *functionality and parameters*, the build spec wins.
+**For Claude Code:** these images are the visual ground truth for the MIREKU Sound Library build (see JM-BUILD-SPEC.md). Read every image in this pack before building any UI. Where an image and written spec conflict on *look and feel*, `ui-reference/` wins; on *functionality and parameters*, the build spec wins.
 
 ## The design law
 

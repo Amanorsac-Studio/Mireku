@@ -3,7 +3,7 @@
 JUCE 8 / C++20 instrument plugin (VST3 + AU + Standalone) — the playback half
 of the MIREKU Sound Library. Loads `.jmi` instrument bundles, four
 sound-world engines (Rhodes/EP · MKS · FM · Strings), a 4-slot Perform page,
-and the 12-unit JM FX rack.
+and the 12-unit MIREKU FX rack.
 
 ## Build (Windows)
 
@@ -109,9 +109,31 @@ never overwrite newer data. A legacy install with no `libraryPath` key gets one
 written explicitly, pointing at the old `Library` folder.
 
 The **VST3/AU plugin identity changed** with the rename (`PLUGIN_CODE`
-`JmSg` → `Mrku`). A DAW project saved against the old plugin will report it as
+`JmSg` → `Mrku`) and changed **again** with the vendor rename
+(`COMPANY_NAME` "JM Studios" → "Mireku", `PLUGIN_MANUFACTURER_CODE`
+`JmSt` → `Mrek`, bundle id `com.jmstudios.mireku` → `com.mireku.mireku`).
+A DAW project saved against either earlier build will report the plugin as
 missing and the instrument must be re-inserted; nothing migrates this, and
-nothing can.
+nothing can. The vendor rename moves **no user data** — every path the app
+reads or writes is derived from the product name, which is asserted by the
+`RenameMigration` test — so it needs no migration of its own.
+
+## Authoring workflow (authoring mode)
+
+In authoring mode (gear → Authoring mode…, or `"mode"` in `settings.json`),
+saves become factory content and the preset browser becomes an editor:
+
+| gesture | where | what it does |
+|---|---|---|
+| **SAVE AS** | name field + button | creates a NEW preset under the typed name. **Refuses** to replace one that already exists, and says which name is in the way. |
+| **OVERWRITE "<name>"** | its own row, warning register | replaces **the preset that is loaded** — named in the button's own label, never taken from the name field. Two clicks: the first arms it and spells out the consequence, the second writes. Always leaves a `.json.bak`. |
+| **SAVE PERFORMANCE INSTEAD** | appears only when a patch would lose modulation | saves the performance snapshot, which does carry the LFOs, the matrix, the macros and the arp. |
+| **Rename…** | right-click a preset row | moves the file, the `name` inside it, the authoring ledger entry, the browser list, the slot's patch name and the favourite star together. |
+| **Move to category ▸** | right-click an instrument row | rewrites `meta.world` in the bundle's `instrument.json` through the same guarded write (schema check, write probe, `.bak`, read back, re-validate, restore on failure). `STRINGS` is the catch-all — organs, bells, pads, choirs, brass. |
+
+A performance preset recalls its instruments as well as its parameters: each
+slot's `.jmi` bundle is re-attached on load, substituting another instrument of
+the same category when the saved path has gone.
 
 ## Architecture map
 

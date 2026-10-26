@@ -7,6 +7,369 @@ Owner: MIREKU build agent.
 before that entry uses the old name; the directory is still `apps/signature`
 and the format is still `.jmi` (see the rename entry for why).
 
+## Vendor rename to Mireku + the authoring editing workflow (2026-10-26, second pass)
+
+Two client instructions, done in one pass so the JUCE rebuild happened once:
+
+1. The open question left by the rename above — *"does 'no more JM Signature'
+   extend to the vendor string?"* — answered: **"change everything to Mireku."**
+2. *"for testing and preset building purposes, James should be able to move
+   sounds to categories he wants, he should be able to change effects and
+   settings and save it over the sound or as a different preset, name and
+   rename, and also create performances."*
+
+---
+
+# 1. The vendor rename
+
+| | before | after |
+|---|---|---|
+| `COMPANY_NAME` | `JM Studios` | **`Mireku`** |
+| `PLUGIN_MANUFACTURER_CODE` | `JmSt` | **`Mrek`** |
+| `BUNDLE_ID` | `com.jmstudios.mireku` | **`com.mireku.mireku`** |
+
+**The two four-character codes are deliberately different strings.** `Mrek` is
+the *vendor* (Mireku, the company a DAW groups plugins under) and `Mrku` stays
+the *product* (MIREKU, this instrument). Making them identical would have been
+legal and would have cost a second Mireku product its own plugin code later.
+
+### THE DAW-IDENTITY CONSEQUENCE, again — the client knows and accepts it
+
+Hosts key an instrument on manufacturer code + plugin code and, for VST3, on the
+unique id derived from both. The built `moduleinfo.json` CID moved:
+
+```
+...4A6D53744A6D5367   "JmSt" + "JmSg"   original
+...4A6D53744D726B75   "JmSt" + "Mrku"   after the product rename
+...4D72656B4D726B75   "Mrek" + "Mrku"   now
+```
+
+> **Any DAW project that references either earlier build will report the plugin
+> as missing.** It has to be re-inserted and its patch re-chosen. Nothing
+> migrates this and nothing can.
+
+This is free today (only the client's own test sessions exist) and expensive the
+moment the beta is public, which is why both identity changes happened before it.
+
+### The migration needed no extension, and that is ASSERTED, not claimed
+
+`RenameMigration` gained a group that walks every path the app reads or writes —
+`appDataDir`, `defaultLibraryDir`, `userPresetDir`, `settingsFile` and the
+standalone `%APPDATA%` settings file — and asserts that **none of them contains
+the company name** and that they are all derived from the *product* name, which
+did not move in this pass. `COMPANY_NAME` reaches only the plugin's metadata;
+`juce::PropertiesFile::Options` here is keyed on `applicationName` and
+`BUNDLE_ID` is a macOS bundle identifier. So nothing the player owns moved, and
+if a future change ever routes a user path through the company name those two
+assertions fail and the migration gets extended then.
+
+### What else the sweep changed
+
+Product-facing text only:
+
+| file | change |
+|---|---|
+| `apps/signature/CMakeLists.txt` | the three fields above, with the identity note |
+| `apps/signature/README.md` | the FX rack line, the identity paragraph, a new authoring-workflow section |
+| `apps/signature/tests/refs/audio-regression.json` | the `_comment` (data unchanged — see below) |
+| `docs/JM-BUILD-SPEC.md` | title, client line, §0 product list, tree, §5 heading, the default library path, plus a naming note at the top saying to read every "JM Signature" below as MIREKU |
+| `README.md`, `TESTING.md`, `docs/jm-design-reference/README.md` | product + vendor names |
+| `package.json`, `apps/capture/package.json`, `apps/capture/README.md` | "JM Signature Sound Library" → "MIREKU Sound Library"; Capture's `author` → `Mireku` |
+| `apps/capture/electron/main.ts`, `src/engine/export.ts` | the hardcoded `meta.author` default a new bundle is stamped with, `JM Studios` → `Mireku` |
+| `src/engine/Authoring.h` | the collection/ledger `kind` tags → `mireku-authoring-*` |
+
+`AudioRegression` did not move: the reference file's numbers are untouched and
+the test reads JSON properties, not bytes.
+
+**The authoring collection still reads the old tag.** `importCollection` accepts
+`jm-signature-authoring-collection` as well as `mireku-authoring-collection` —
+refusing to read work the artist has already exported, because a string in a
+manifest changed, would be absurd.
+
+### Deliberately NOT changed, and why
+
+- **`.jmi` and the `jmi-format` package.** Unchanged, as agreed: the schema, the
+  C++ reader, the CLI, both apps and all 25 of the client's bundles depend on it.
+- **`packages/jmi-format` was not touched at all** (per the brief's stop-and-
+  report rule — it has uncommitted work from another product). Two things in it
+  still carry the old vendor and are **reported, not changed**: `README.md` line
+  3 ("the shared contract between JM Capture and JM Signature") and the schema
+  `$id`s, which are `https://jmstudios.example/schema/...`. The `$id` is an
+  opaque identifier, not a URL anything fetches, so changing it is cosmetic and
+  would invalidate nothing — but it is in that package, so it is his call.
+- **Internal C++ identifiers.** `JMSignatureProcessor`, `JMSignatureEditor`,
+  `JMStandaloneApp`, the `jm::` namespace, the `JM_*` compile definitions and env
+  overrides (`JM_LIBRARY_DIR`, `JM_AUTHORING_MODE`, `JM_APP_VERSION`,
+  `JM_JMI_SCHEMA_DIR`), the `JMAssets` binary-data target and the
+  `apps/signature` directory all stay. None is visible to the player; renaming
+  them would touch every file in the app and buy nothing. **Stated here rather
+  than skipped silently.**
+- **"JM Capture" is still called JM Capture.** The client renamed *this*
+  product and the vendor; renaming a second shipping product was not asked for.
+  Its *description* and its vendor string now say Mireku.
+- **The gold "JM" shield.** `resources/svg/jm-shield-reference.svg` is the brand
+  monogram from the client's own design pack, drawn in the header and on the
+  browser's brand plate above the word MIREKU. Replacing a logo is an art
+  decision, not a string substitution — **flagged for him**, not guessed at.
+- **The legacy `"JM Signature"` strings in `Library.h`, `PluginProcessor.h` and
+  `ValidationTests.cpp`** are the migration's description of *where the old
+  installation is*. They must never change.
+
+---
+
+# 2. The authoring editing workflow
+
+The mode already decided *where* a save goes. This pass is the editing on top of
+it. Nothing in `FxDsp.h`, `FxParams.h`, `fx-params.ts`, the sampler, the
+modulation engine or the `.jmi` schema was touched, and nothing was added to the
+audio thread.
+
+## 2a. Moving an instrument to another category
+
+**The write.** `meta.world` inside the bundle's `instrument.json` — the file
+that makes a bundle a bundle, and therefore the most dangerous write in the app.
+
+**The guard was REUSED, not re-written.** The six steps that protected a preset
+save (folder writable → refuse an unasked-for replace → `.bak` → write → read
+back → validate → restore on failure) are now
+`authoring::guardedReplace (target, text, allowReplace, validate)`, and
+`writeBundlePresetText`, `renameBundlePreset`, `writeInstrumentWorld` and the
+user-preset/performance renames all go through that one function. There is one
+guard in the codebase, not four near-copies.
+
+**The validator is what makes this write narrow.** `writeInstrumentWorld`
+re-serialises the document from a fresh parse with exactly one property changed,
+and then proves on the bytes that came back off the disk:
+
+1. `varsDifferOnlyAt (original, readBack, "meta.world")` — a recursive compare of
+   the two parsed documents that reports the first unexpected difference as a
+   dotted path, requires `meta.world` to have actually changed, and fails on a
+   changed property count, a changed array length, a missing key or any other
+   altered value. It compares *parsed values*, so JSON reformatting cannot hide a
+   change and cannot be mistaken for one — which is the thing a textual diff of a
+   re-serialised 29-zone instrument.json could not tell you.
+2. `jmi::parseInstrumentJson` — the same reader the plugin and `npx jmi validate`
+   use — must accept it and report the new world.
+
+Either check failing restores `instrument.json.bak`. `samples/` is never opened.
+
+**Keeping the app coherent is the other half, and it is in the processor, not the
+UI** (`recategoriseBundle`):
+
+- the library is re-scanned, so every list built from it — the browser rows and
+  each Perform slot's instrument chooser — is rebuilt against the new world;
+- **any slot playing it moves with it**: the slot's world, the loaded bundle's
+  own `world` / `meta.world`, and the engine's world, together. The slot's
+  **voicing controls and FX rack are re-seeded** from the new world's defaults,
+  because those controls are per-world and are meaningless in the world the
+  instrument just left — and the outcome *says* so rather than doing it quietly;
+- **the current page follows the instrument** to its new page. "The instrument
+  moves pages immediately" is answered by the app being where it went, not by a
+  message about it.
+
+**Gated on authoring mode** (right-click an instrument row → *Move to category*,
+with the current one ticked and disabled). It edits the customer's library; a
+player of the shipped product should not be able to re-file his own library by
+accident.
+
+**The client's rule is carried in the menu, not only in a doc:** STRINGS reads
+"STRINGS   (everything else)", because it is the catch-all for anything that is
+not a piano/Rhodes/EP, an MKS or FM — organs, bells, pads, choirs, brass.
+
+## 2b. SAVE OVER vs SAVE AS
+
+Two acts, so **two calls with two guarantees** rather than one call with a flag:
+
+```
+SaveIntent::saveAs    REFUSES to replace anything; says which name is in the way
+SaveIntent::saveOver  replaces one named preset and ALWAYS leaves a .json.bak
+```
+
+A SAVE AS collision in authoring mode is a **refusal, not a fall-back to the
+user folder** — falling back would answer "that name is taken" by quietly
+putting the patch somewhere else, which is worse than saying no. (The *other*
+fall-back, a read-only or missing bundle, still saves to the user folder and
+says why: losing the artist's work to a permission is the worse failure.)
+
+**How the two are made unmistakable** — four things at once, no dialog:
+
+1. **They do not read the same input.** SAVE AS takes its name from the text
+   field. OVERWRITE takes nothing: it targets the preset that is *loaded*
+   (`saveOverTargetName`). They cannot be confused because they are not fed by
+   the same thing.
+2. **The destructive one names its victim in its own label**, `OVERWRITE "Warm
+   Tine"`, and is **hidden entirely** when there is nothing of that name on disk
+   to stand on — so its presence alone means "there is something here to replace".
+3. **A different visual register.** Its own full-width row (never a second button
+   beside SAVE AS, which could be mis-hit), warning red instead of gold. Resting
+   is an *outline*; the filled warn plate is already spoken for by the
+   modulation-boundary notice two rows below, and two filled red plates in one
+   column read as one thing.
+4. **Arm then confirm.** The first click only arms it — `CLICK AGAIN TO REPLACE
+   "Warm Tine"` — and while armed **the destination line is replaced by the
+   consequence**: *OVERWRITE replaces "Warm Tine" in AuthEP.jmi, keeping Warm
+   Tine.json.bak. SAVE AS makes a NEW preset and never replaces anything.* The
+   arm expires after 6 s and is dropped by typing in the name field, so it can
+   never sit waiting for a stray click. Not a modal: the existing save block's
+   whole design is that the alternative sits beside the thing it replaces.
+
+The wording lives in the processor (`saveOverTargetName`, `saveOverLine`) beside
+`saveDestinationLine` and `modBoundaryLine`, so the self-check asserts the exact
+sentence the artist reads. The destination line and the modulation boundary are
+unchanged and **both still apply to the new paths**: the self-check asserts that
+SAVE PERFORMANCE INSTEAD and OVERWRITE are offered *at the same time*, not one
+instead of the other.
+
+## 2c. Name and rename
+
+A preset's name is in **two places** — the `name` property and the file name —
+and more than two things point at it. `renameBundlePreset` /
+`renameInstrumentPreset` / `renameUserPresetFile` / `renamePerformancePreset`
+move all of them together:
+
+| reference | kept coherent by |
+|---|---|
+| the file name | the guarded write to the new name |
+| the `name` property inside it | re-serialised before the write, schema-checked |
+| the old file | kept as `<old>.json.bak` — a rename is destructive too, so the undo exists on disk (and `*.json.bak` is outside the `*.json` glob the validator and `loadInstrument` walk, so it is inert) |
+| the bundle's authoring ledger | the entry follows the file, so provenance is not orphaned |
+| the in-memory FACTORY list the browser draws from | patched in place (the same justification as a factory save: reloading the bundle would re-read a head for every sample) |
+| the slot's displayed patch name | updated when it was the renamed one |
+| `state.performPresetName` | ditto, for a performance |
+| the **favourite star** | `Library::renameFavorite` — a row's favourite key is `<kind>\|<name>`, so a rename that forgets it leaves a star pointing at a preset that no longer exists |
+
+Renaming onto a name that is already taken is **refused, not merged**, and both
+presets are still there afterwards. Renaming is offered on the row that carries
+the preset — the only place its old name is on screen — through the same
+`AlertWindow` + text-editor idiom the macro rename already uses, so it inherits
+the app's chrome. **An instrument (a `.jmi` folder) is not renamable from here**
+and says so: that is a folder rename plus `meta.name`, and it was not asked for.
+
+## 2d. The performance loop — what was broken
+
+The loop was reachable but **recall did not recall the instruments**, and that
+is the one route that captures modulation work.
+
+**The bug.** A performance snapshot stores each slot's `.jmi` path, and
+**neither `loadPerformancePreset()` nor `setStateInformation()` ever re-loaded
+it.** `state.slotFromVar` restored the world, the patch name, the engine params,
+the rack and the envelope; `syncAllToDsp()` pushed them into the DSP; and the
+engines kept playing whatever bundle happened to be loaded — or nothing at all.
+So a recalled performance restored every control over silence, and a restored
+DAW session did the same.
+
+**The evidence it was intended to work**: `Library::find()` and
+`Library::firstForWorld()` were written in client review round 8, documented as
+answering "is that path still one of the instruments this library offers?" and
+"what should stand in for it?", and were **never called from anywhere**. They
+are now what `restoreSlotBundles()` uses.
+
+**The fix.** `restoreSlotBundles()` re-attaches each slot whose stored
+`bundleDir` is not what its engine is already playing, substituting
+`firstForWorld (slot.world)` and logging it when the saved path has gone (a
+renamed folder, another machine, a moved library). It deliberately does **not**
+touch `engineParams` / `rack` / `ampEnv` / `presetName`: those belong to the
+state being restored, not to the bundle — which is exactly why it could not just
+call `loadBundleIntoSlot()`, whose job is to reset them.
+
+**Checked and found NOT broken**, so nothing was changed: the arpeggiator does
+reach the audio thread on recall — `loadPerformancePreset` calls
+`publishModulation()`, whose last line is `publishArp()`. The self-check proves
+it the only way that is worth anything: it renders **one real block** after the
+recall and reads `arp.activeSettings()`, the settings the arp itself is using,
+rather than the state it was restored into.
+
+Create / name / save-over / rename / recall are all now exercised end to end.
+
+---
+
+# 3. Coverage added (self-check sections 9–12, ~85 assertions)
+
+**(9) Move an instrument to another category.** The world change lands in
+`instrument.json`; the bundle is still valid; `meta.world` changed **and nothing
+else in the document did**; the previous `instrument.json` is kept as a `.bak`;
+the slot playing it moved world (bundle and engine together) and says its
+voicing was re-seeded; the app followed it to its new page; the library lists it
+under STRINGS and no longer under MKS; the browser offers it on the STRINGS page
+immediately and the MKS page no longer shows a row that is not there; and the
+three refusals (same category, a world that does not exist, not a bundle).
+
+**(10) SAVE AS vs SAVE OVER.** SAVE AS creates; SAVE AS onto a taken name refuses
+and points at OVERWRITE while leaving the existing preset **byte-for-byte**
+untouched (asserted at the UI *and* at the API, so no path gets round it); SAVE
+AS under a new name does not touch the original; OVERWRITE is offered, names its
+target, and its wording states both halves; the **first click only arms it and
+nothing on disk has changed**; the armed destination line is the consequence; a
+disarm leaves it alone; two clicks replace **the right preset** and the `.bak`
+holds the value it had (`tine 11.0`); no second file appears; the bundle stays
+valid; and the modulation boundary + SAVE PERFORMANCE INSTEAD survive beside it.
+
+**(11) Name and rename.** Both halves of the name moved; the old file is gone but
+kept as a `.bak`; the bundle is valid and every preset in it resolvable; the
+browser shows the new name and only the new name; the in-memory factory list, the
+slot's patch name, the favourite star and the ledger all followed; an empty name
+and a colliding name are refused and both presets survive.
+
+**(12) The performance loop.** Create + name; OVERWRITE absent until there is
+something to overwrite, then present and naming it; arming writes nothing;
+save-over keeps a `.bak` and leaves no second performance; **recall brings the
+instruments back, the right one in the right slot**; the matrix rows come back
+with the *save-over's* values; both LFOs, the arp and the macro come back; the
+arp is published to the audio thread (proved through a rendered block); a
+missing instrument is substituted by one from the same category; and a **renamed
+performance still recalls its modulation**.
+
+**Snapshots** (`build/snapshots/`): `authoring-save-over-resting.png`,
+`authoring-save-over-armed.png`, `authoring-save-over-full.png`, plus the
+existing `authoring-mode-{on,off}-save-block.png` with the crop extended for the
+taller block. Viewed and iterated on: the first draft gave resting OVERWRITE a
+filled warn plate, which read as a second copy of the modulation-boundary
+notice, and the destination name was the folder ("in presets") instead of the
+instrument ("in AuthEP.jmi"). Both were fixed from the snapshots.
+
+**Real-library probe** — `MirekuSnapshot --probe-world <bundle> <world>`, a new
+sibling of `--probe-bundle`, deliberately **not** a CTest for the same reason
+(its result depends on which bundles a machine has). Run against **byte copies**
+of three of the client's own bundles in a scratch folder:
+
+```
+M1_Organ.jmi   strings   -> mks       narrow: meta.world and nothing else   VALID
+MKS20_2.jmi    mks       -> strings   narrow: meta.world and nothing else   VALID
+NY_h_SE.jmi    rhodes-ep -> fm        narrow: meta.world and nothing else   VALID
+M1_Organ.jmi   + a factory preset save (2 -> 3 presets)                     VALID
+```
+
+`npx jmi validate` was run on all three **before and after**; the copies were
+then deleted. **The originals were never written to** — re-read afterwards, they
+still say `strings` / `mks` / `rhodes-ep` with their previous modification
+times. (The `instrument.json.bak` files already in that library are from the
+earlier pass that applied the Strings-is-the-catch-all rule, not from this one.)
+
+## Layout
+
+`Theme::L` gained `brOverY/brOverH` (558, 24) and the rows below it moved down
+by 24–26 px; the brand art gives up the height (`brArtH` 212 → 188), so the
+column still ends where it did. The compact (model-page overlay) browser
+collapses the OVERWRITE row along with the other lines it is not showing.
+
+`ux::PlateButton` gained a `setDanger` / `setArmed` register rather than a new
+widget class: same plate, same geometry, warning colour. `RemoveChipButton`
+already took `warnRed` on hover; this makes it the resting state, because a
+save-over is destructive before you touch it, not only once you are over it.
+
+## Verification
+
+- Release build (VST3 + Standalone + all four console targets): **exit 0**, no
+  `LNK1104`. **The standalone was NOT launched** (the client has MIREKU open).
+- `ctest -C Release`: **100 %, 7/7** — EngineTests 6.19 s, UiSelfCheck 32.68 s,
+  NullTest 2.34 s, RateBufferMatrix 5.58 s, AudioRegression 0.89 s,
+  NeutralDefaults 1.08 s, RenameMigration 0.21 s.
+- `pluginval --strictness-level 10 --skip-gui-tests` on
+  `Mireku_artefacts/Release/VST3/MIREKU.vst3`: **SUCCESS**, exit 0.
+- Built `moduleinfo.json`: `"Vendor": "Mireku"`, CID
+  `...4D72656B4D726B75` ("Mrek" + "Mrku").
+- `packages/jmi-format`: **not touched** (see above).
+
 ## Product rename to MIREKU, and neutral voicing defaults (2026-10-26)
 
 Two client instructions, done in one pass so the JUCE rebuild happened once:
@@ -40,7 +403,10 @@ carried `...4A6D53744A6D5367` ("JmSt"/"JmSg").
 `PLUGIN_MANUFACTURER_CODE JmSt` and the `com.jmstudios.` bundle-id prefix. The
 client renamed the *product*; he said nothing about the company, and the
 company name is what a DAW groups plugins under and what an installer and a
-code-signing certificate are issued against. **Open question for him:** does
+code-signing certificate are issued against. **ANSWERED the same day — see the
+vendor-rename entry above: "change everything to Mireku", so `COMPANY_NAME`,
+`PLUGIN_MANUFACTURER_CODE` and the bundle-id prefix all moved.** The original
+question was: does
 "no more JM Signature" extend to the vendor string, i.e. should this ship as
 *MIREKU* / *Amanorsac Studio* / something else? Guessing it would have been a
 second identity change on top of the one that is already costly (below), so it

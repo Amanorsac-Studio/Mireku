@@ -185,7 +185,7 @@ export class GuidedController {
    * MIDI note gate. A note that is not the note being sampled is never
    * recorded: the take would be filed under the WRONG file name and accepted
    * on velocity alone, and the error stays invisible until the instrument is
-   * played back in JM Signature.
+   * played back in MIREKU.
    */
   private handleWrongNote(played: number, expected: number): void {
     const now = this.now();

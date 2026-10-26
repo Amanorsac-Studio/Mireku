@@ -2,7 +2,7 @@
   "name": "jm-capture",
   "productName": "JM Capture",
   "version": "1.0.0",
-  "description": "JM Capture — guided sampling application for the JM Signature Sound Library",
+  "description": "JM Capture — guided sampling application for the MIREKU Sound Library",
   "private": true,
   "type": "module",
   "main": "dist-electron/main.mjs",
@@ -36,5 +36,5 @@
     "vite": "^6.0.7",
     "vitest": "^2.1.8"
   },
-  "author": "JM Studios"
+  "author": "Mireku"
 }

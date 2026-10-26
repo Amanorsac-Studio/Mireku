@@ -340,7 +340,7 @@ ipcMain.handle('import:convert', (e, req: ImportConvertRequest) => {
 
   for (const p of chosen) {
     const bundle = convertInstrument(bytes, lib, p, req.destDir, nodeFs, {
-      author: req.author || 'JM Studios',
+      author: req.author || 'Mireku',
       sourceFileName: basename(req.filePath),
       onProgress: ({ instrument, done, total }) => {
         // one event per 1% of the whole job keeps the renderer responsive
@@ -481,7 +481,7 @@ ipcMain.handle(
 
     const every = Math.max(1, Math.floor(plan.sampleCount / 100));
     const bundle = convertDrop(plan, req.destDir, nodeFs, {
-      author: req.author || 'JM Studios',
+      author: req.author || 'Mireku',
       sourceLabel: dropSourceLabel(plan.sampleCount, req.options?.folderName ?? null),
       onProgress: ({ done, total, file }) => {
         if (done === total || done % every === 0) e.sender.send('drop:progress', { done, total, file });

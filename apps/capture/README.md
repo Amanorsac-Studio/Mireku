@@ -1,6 +1,6 @@
 # JM Capture
 
-Guided sampling application for the JM Signature Sound Library.
+Guided sampling application for the MIREKU Sound Library.
 Electron + TypeScript + Vite + React; Web Audio / Web MIDI in the renderer;
 all disk I/O (24-bit WAV, session snapshots, bundle export) in the main process
 via `@jm/jmi-format`.

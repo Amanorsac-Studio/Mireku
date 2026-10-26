@@ -152,8 +152,85 @@ public:
         bool fellBack = false;     ///< authoring mode wanted the bundle and could not have it
     };
 
-    SaveOutcome saveInstrumentPreset (int slot, const juce::String& name);
-    SaveOutcome savePerformanceSnapshot (const juce::String& name);
+    //============================================ SAVE OVER vs SAVE AS (2026-10-26)
+    // The client: "he should be able to change effects and settings and save it
+    // over the sound or as a different preset". Those are two different acts and
+    // the one failure that loses an artist's trust is doing the first when he
+    // meant the second, so they are two different CALLS with two different
+    // guarantees, not one call with a flag that defaults to the dangerous side:
+    //
+    //   saveAs   — REFUSES to replace anything. If the name is taken the save
+    //              does not happen and the outcome says which name is in the way.
+    //   saveOver — replaces one named preset and ALWAYS leaves a .json.bak.
+    //
+    // The UI never derives the two from the same control (see PresetBrowserPanel):
+    // SAVE AS takes its name from the text field, OVERWRITE names the preset it
+    // is about to replace in its own label.
+    enum class SaveIntent
+    {
+        saveAs,     ///< must not stand on an existing preset
+        saveOver    ///< replace the named preset, keeping a .bak
+    };
+
+    SaveOutcome saveInstrumentPreset (int slot, const juce::String& name,
+                                      SaveIntent intent = SaveIntent::saveOver);
+    SaveOutcome savePerformanceSnapshot (const juce::String& name,
+                                         SaveIntent intent = SaveIntent::saveOver);
+
+    /// Where a patch save for `slot` would land, given the mode. Empty File()
+    /// when there is nowhere (no bundle in authoring mode).
+    juce::File instrumentPresetFileFor (int slot, const juce::String& name) const;
+    /// Is there already a patch of that name where a save would land?
+    bool instrumentPresetExists (int slot, const juce::String& name) const;
+    juce::File performancePresetFileFor (const juce::String& name) const;
+    bool performancePresetExists (const juce::String& name) const;
+
+    //-------------------------------------------------------------- name / rename
+    // Renaming has to keep every reference coherent, not just the file: the
+    // preset's own `name` property, the file name, the bundle's authoring
+    // ledger, the in-memory FACTORY list the browser draws from, the slot's
+    // displayed patch name and the FAVOURITE star (whose key is kind|name).
+    struct RenameOutcome
+    {
+        bool ok = false;
+        juce::File file;
+        juce::String message;
+        juce::String note;
+    };
+    /// Renames the patch called `oldName` wherever `slot`'s saves live.
+    RenameOutcome renameInstrumentPreset (int slot, const juce::String& oldName,
+                                          const juce::String& newName);
+    /// Renames a user patch that is a loose file (release mode / the user folder).
+    RenameOutcome renameUserPresetFile (const juce::File& f, const juce::String& newName);
+    RenameOutcome renamePerformancePreset (const juce::File& f, const juce::String& newName);
+
+    //------------------------------------------------------- re-categorise (world)
+    // "James should be able to move sounds to categories he wants." The four
+    // categories ARE the four worlds, and the move is a one-property edit of the
+    // bundle's instrument.json through the authoring write guard. Everything the
+    // UI shows about that instrument is re-pointed here, not in the UI, so the
+    // library list, the browser and any slot playing it cannot be left looking
+    // at the world it used to be in.
+    struct RecategoriseOutcome
+    {
+        bool ok = false;
+        int world = 0;
+        juce::String message;
+        juce::String note;
+    };
+    RecategoriseOutcome recategoriseBundle (const juce::File& bundleDir, int newWorld);
+
+    /// CLIENT-FACING GAP FOUND 2026-10-26: neither setStateInformation() nor
+    /// loadPerformancePreset() ever re-loaded the .jmi bundles their saved slots
+    /// name, so restoring a session or RECALLING a performance preset restored
+    /// every parameter and left the engines playing whatever instrument happened
+    /// to be loaded (or nothing at all). This re-attaches them, substituting
+    /// another instrument of the same world when the saved path has gone —
+    /// which is what Library::find / Library::firstForWorld were written for.
+    /// It deliberately does NOT touch engineParams / rack / ampEnv / presetName:
+    /// those belong to the state being restored, not to the bundle.
+    /// Returns the number of slots it re-attached.
+    int restoreSlotBundles();
 
     /// Pre-existing names, kept so every old call site and test still compiles.
     void saveUserPreset (int slot, const juce::String& name) { saveInstrumentPreset (slot, name); }
@@ -193,6 +270,12 @@ public:
     /// Empty when nothing would be lost; otherwise names what a patch cannot
     /// hold and what to save instead. Only ever non-empty on a model page.
     juce::String modBoundaryLine (int page) const;
+    /// The preset an OVERWRITE on `page` would replace — the one being worked
+    /// on — or an empty string when nothing of that name exists to replace yet
+    /// (in which case the UI offers SAVE AS only). The wording lives here with
+    /// the other two lines so the self-check asserts what the artist reads.
+    juce::String saveOverTargetName (int page) const;
+    juce::String saveOverLine (int page) const;
     /// Client review round 3 (G): the PERFORM page's browser was empty because
     /// no factory performance folder ever shipped. Written once on first run.
     void ensureFactoryPerformancePresets();

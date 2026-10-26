@@ -83,7 +83,7 @@ export function buildInstrument(s: SessionState): { instrument: Instrument; warn
     meta: {
       name: s.config.instrumentName,
       world: s.config.world,
-      author: 'JM Studios',
+      author: 'Mireku',
       createdAt: s.config.createdAt,
       captureMode: s.config.captureMode,
       channels: s.config.channels,

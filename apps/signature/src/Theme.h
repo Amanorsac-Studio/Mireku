@@ -180,11 +180,18 @@ public:
         // states its DESTINATION, and when the patch cannot hold the artist's
         // modulation it offers the save that can, right beside the one that
         // would lose it. The brand art below gives up the height.
-        static constexpr int brSaveY = 528, brSaveH = 28;   // name field + SAVE
-        static constexpr int brInfoY = 558, brInfoH = 30;   // where it goes / where it went
-        static constexpr int brWarnY = 590, brWarnH = 32;   // what a patch cannot hold
-        static constexpr int brAltY  = 624, brAltH  = 26;   // SAVE PERFORMANCE INSTEAD
-        static constexpr int brArtY = 656, brArtH = 212;
+        //
+        // AUTHORING WORKFLOW (2026-10-26): and SAVE AS now has a sibling on its
+        // own row — OVERWRITE "<the preset being worked on>", in the warning
+        // register, naming its victim. It is a row of its own and not a second
+        // button beside SAVE AS precisely so the two can never be mis-hit for
+        // each other. The brand art gives up another 24 px.
+        static constexpr int brSaveY = 528, brSaveH = 28;   // name field + SAVE AS
+        static constexpr int brOverY = 558, brOverH = 24;   // OVERWRITE "<name>"
+        static constexpr int brInfoY = 584, brInfoH = 30;   // where it goes / where it went
+        static constexpr int brWarnY = 616, brWarnH = 30;   // what a patch cannot hold
+        static constexpr int brAltY  = 650, brAltH  = 24;   // SAVE PERFORMANCE INSTEAD
+        static constexpr int brArtY = 680, brArtH = 188;
 
         // model page (local to centerX/centerY) -------------------------------
         static constexpr int mpTitleY = 26, mpPatchY = 60;

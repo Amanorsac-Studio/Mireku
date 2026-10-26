@@ -688,6 +688,18 @@ public:
     void setLicenseKey (const juce::String& k) { licenseKey_ = k.trim(); saveSettings(); }
 
     bool isFavorite (const juce::String& key) const { return favorites_.contains (key); }
+    /// AUTHORING WORKFLOW (2026-10-26): a browser row's favourite key is
+    /// "<kind>|<name>", so RENAMING a preset has to move its star with it —
+    /// otherwise the star stays behind pointing at a preset that no longer
+    /// exists and the renamed one comes back unstarred. A no-op when the preset
+    /// was not starred.
+    void renameFavorite (const juce::String& oldKey, const juce::String& newKey)
+    {
+        if (oldKey == newKey || ! favorites_.contains (oldKey)) return;
+        favorites_.removeString (oldKey);
+        favorites_.addIfNotAlreadyThere (newKey);
+        saveSettings();
+    }
     void toggleFavorite (const juce::String& key)
     {
         if (! favorites_.contains (key)) favorites_.add (key);

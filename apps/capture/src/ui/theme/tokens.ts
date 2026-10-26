@@ -3,7 +3,7 @@
  * dimensions may appear. UI components consume CSS variables generated from
  * this module (see applyTheme).
  *
- * FAMILY RESTYLE (matching JM Signature): the palette below is the canonical
+ * FAMILY RESTYLE (matching MIREKU): the palette below is the canonical
  * V2 palette from docs/svg-pack-v2/tokens/design-tokens.json, identical to the
  * block adopted in apps/signature/src/Theme.h — one palette, two apps.
  */

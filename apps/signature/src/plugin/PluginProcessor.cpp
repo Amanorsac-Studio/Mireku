@@ -1356,7 +1356,42 @@ juce::File JMSignatureProcessor::bundleDirForSlot (int slot) const
     return stored.isNotEmpty() ? juce::File (stored) : juce::File();
 }
 
-JMSignatureProcessor::SaveOutcome JMSignatureProcessor::saveInstrumentPreset (int slot, const juce::String& rawName)
+juce::File JMSignatureProcessor::instrumentPresetFileFor (int slot, const juce::String& rawName) const
+{
+    const auto name = rawName.trim();
+    if (slot < 0 || slot >= 4 || name.isEmpty()) return {};
+    if (state.library.isAuthoring())
+    {
+        auto bundle = bundleDirForSlot (slot);
+        if (! authoring::looksLikeBundle (bundle)) return {};     // the save would fall back
+        return authoring::bundlePresetFile (bundle, name);
+    }
+    return worldPresetDir (state.slots[(size_t) slot].world)
+               .getChildFile (juce::File::createLegalFileName (name) + ".json");
+}
+
+bool JMSignatureProcessor::instrumentPresetExists (int slot, const juce::String& name) const
+{
+    auto f = instrumentPresetFileFor (slot, name);
+    return f != juce::File() && f.existsAsFile();
+}
+
+juce::File JMSignatureProcessor::performancePresetFileFor (const juce::String& rawName) const
+{
+    const auto name = rawName.trim();
+    if (name.isEmpty()) return {};
+    auto dir = state.library.isAuthoring() ? factoryPerformanceDir() : performancePresetDir();
+    return dir.getChildFile (juce::File::createLegalFileName (name) + ".json");
+}
+
+bool JMSignatureProcessor::performancePresetExists (const juce::String& name) const
+{
+    auto f = performancePresetFileFor (name);
+    return f != juce::File() && f.existsAsFile();
+}
+
+JMSignatureProcessor::SaveOutcome JMSignatureProcessor::saveInstrumentPreset (int slot, const juce::String& rawName,
+                                                                             SaveIntent intent)
 {
     SaveOutcome out;
     const auto name = rawName.trim();
@@ -1365,12 +1400,27 @@ JMSignatureProcessor::SaveOutcome JMSignatureProcessor::saveInstrumentPreset (in
         out.message = "a preset needs a name";
         return out;
     }
+    const bool allowReplace = intent == SaveIntent::saveOver;
 
     auto toUserFolder = [&] (const juce::String& why)
     {
         auto dir = worldPresetDir (state.slots[(size_t) slot].world);
         dir.createDirectory();
         auto f = dir.getChildFile (juce::File::createLegalFileName (name) + ".json");
+        // SAVE AS never stands on an existing preset — in the user folder
+        // either, or "save as" would mean "save over" half the time.
+        if (f.existsAsFile() && ! allowReplace)
+        {
+            out.message = "\"" + name + "\" already exists - use OVERWRITE, or pick another name";
+            return;
+        }
+        juce::File bak;
+        if (f.existsAsFile())
+        {
+            bak = f.getSiblingFile (f.getFileName() + ".bak");
+            bak.deleteFile();
+            f.copyFileTo (bak);
+        }
         if (! f.replaceWithText (juce::JSON::toString (slotPresetToVar (slot, name), false)))
         {
             out.message = "could not write " + f.getFullPathName();
@@ -1380,7 +1430,13 @@ JMSignatureProcessor::SaveOutcome JMSignatureProcessor::saveInstrumentPreset (in
         out.dest = authoring::SaveDest::worldUserFolder;
         out.file = f;
         out.message = "saved to USER presets: " + f.getFileName();
-        if (why.isNotEmpty()) { out.note = why; out.fellBack = true; }
+        if (bak != juce::File())
+            out.note = "replaced the previous version (kept as " + bak.getFileName() + ")";
+        if (why.isNotEmpty())
+        {
+            out.note = out.note.isEmpty() ? why : why + " | " + out.note;
+            out.fellBack = true;
+        }
     };
 
     if (! state.library.isAuthoring())
@@ -1392,7 +1448,17 @@ JMSignatureProcessor::SaveOutcome JMSignatureProcessor::saveInstrumentPreset (in
         // Factory content being created: it belongs with the instrument that
         // ships, i.e. inside the bundle the slot is actually playing.
         auto bundle = bundleDirForSlot (slot);
-        auto wr = authoring::writeBundlePreset (bundle, name, slotPresetToVar (slot, name));
+        // A SAVE AS that collides is a refusal, NOT a fall-back to the user
+        // folder: falling back would answer "that name is taken" by quietly
+        // putting the patch somewhere else, which is worse than saying no.
+        if (! allowReplace && authoring::looksLikeBundle (bundle)
+            && authoring::bundlePresetFile (bundle, name).existsAsFile())
+        {
+            out.message = "\"" + name + "\" already exists in " + bundle.getFileName()
+                        + " - use OVERWRITE, or pick another name";
+            return out;
+        }
+        auto wr = authoring::writeBundlePreset (bundle, name, slotPresetToVar (slot, name), allowReplace);
         if (wr.ok)
         {
             out.ok = true;
@@ -1439,8 +1505,18 @@ JMSignatureProcessor::SaveOutcome JMSignatureProcessor::saveInstrumentPreset (in
     return out;
 }
 
-JMSignatureProcessor::SaveOutcome JMSignatureProcessor::savePerformanceSnapshot (const juce::String& name)
+JMSignatureProcessor::SaveOutcome JMSignatureProcessor::savePerformanceSnapshot (const juce::String& rawName,
+                                                                                 SaveIntent intent)
 {
+    SaveOutcome early;
+    const auto name = rawName.trim();
+    if (name.isEmpty()) { early.message = "a performance needs a name"; return early; }
+    if (intent == SaveIntent::saveAs && performancePresetExists (name))
+    {
+        early.message = "\"" + name + "\" already exists - use OVERWRITE, or pick another name";
+        return early;
+    }
+
     auto* o = new juce::DynamicObject();
     o->setProperty ("name", name);
     juce::Array<juce::var> slots;
@@ -1485,6 +1561,274 @@ JMSignatureProcessor::SaveOutcome JMSignatureProcessor::savePerformanceSnapshot 
     state.performPresetName = name;
     stateChanged.sendChangeMessage();
     return out;
+}
+
+//==============================================================================
+// NAME AND RENAME (authoring workflow, 2026-10-26).
+//
+// "name and rename" was the client's third ask. A preset's name is in more than
+// one place, so a rename that only moves the file produces a preset that is
+// called one thing and found under another; the references each of these keeps
+// coherent are named in the header.
+//==============================================================================
+JMSignatureProcessor::RenameOutcome
+JMSignatureProcessor::renameInstrumentPreset (int slot, const juce::String& oldName,
+                                              const juce::String& rawNewName)
+{
+    RenameOutcome out;
+    const auto newName = rawNewName.trim();
+    if (slot < 0 || slot >= 4) { out.message = "no slot"; return out; }
+    if (newName.isEmpty()) { out.message = "a preset needs a name"; return out; }
+    if (newName == oldName) { out.message = "that is already its name"; return out; }
+
+    auto bundle = bundleDirForSlot (slot);
+    const bool inBundle = state.library.isAuthoring() && authoring::looksLikeBundle (bundle)
+                       && authoring::bundlePresetFile (bundle, oldName).existsAsFile();
+
+    if (inBundle)
+    {
+        auto wr = authoring::renameBundlePreset (bundle, oldName, newName);
+        if (! wr.ok) { out.message = wr.message; return out; }
+        out.ok = true;
+        out.file = wr.file;
+        out.message = wr.message;
+        out.note = wr.note;
+
+        // the in-memory FACTORY list the browser draws from
+        if (auto lb = engines[(size_t) slot].bundle())
+            for (auto& p : lb->inst.presets)
+                if (juce::String (p.name) == oldName) { p.name = newName.toStdString(); break; }
+        // a FACTORY row's favourite key is "1|<name>"
+        state.library.renameFavorite ("1|" + oldName, "1|" + newName);
+    }
+    else
+    {
+        auto f = worldPresetDir (state.slots[(size_t) slot].world)
+                     .getChildFile (juce::File::createLegalFileName (oldName) + ".json");
+        if (! f.existsAsFile())
+        {
+            out.message = "there is no preset called \"" + oldName + "\" to rename";
+            return out;
+        }
+        auto r = renameUserPresetFile (f, newName);
+        if (! r.ok) return r;
+        out = r;
+    }
+
+    if (state.slots[(size_t) slot].presetName == oldName)
+        state.slots[(size_t) slot].presetName = newName;
+    stateChanged.sendChangeMessage();
+    return out;
+}
+
+JMSignatureProcessor::RenameOutcome
+JMSignatureProcessor::renameUserPresetFile (const juce::File& f, const juce::String& rawNewName)
+{
+    RenameOutcome out;
+    const auto newName = rawNewName.trim();
+    if (newName.isEmpty()) { out.message = "a preset needs a name"; return out; }
+    if (! f.existsAsFile()) { out.message = "that preset file is gone"; return out; }
+
+    const auto oldName = f.getFileNameWithoutExtension();
+    auto to = f.getSiblingFile (juce::File::createLegalFileName (newName) + ".json");
+    if (to != f && to.existsAsFile())
+    {
+        out.message = "\"" + newName + "\" already exists";
+        return out;
+    }
+
+    auto v = juce::JSON::parse (f.loadFileAsString());
+    if (auto* o = v.getDynamicObject()) o->setProperty ("name", newName);
+    else { out.message = "that preset is not a JSON object"; return out; }
+
+    // Validated the same way a save is: a rename must leave a preset that still
+    // loads, and a user preset is read back by applyUserPresetToSlot.
+    auto wr = authoring::guardedReplace (to, juce::JSON::toString (v, false), to == f,
+                                         [] (const juce::String& text, juce::String& why)
+                                         {
+                                             auto back = juce::JSON::parse (text);
+                                             if (! back.isObject()) { why = "not an object"; return false; }
+                                             if (back.getProperty ("name", "").toString().isEmpty())
+                                             { why = "no name"; return false; }
+                                             return true;
+                                         });
+    if (! wr.ok) { out.message = wr.message; return out; }
+    if (to != f)
+    {
+        auto bak = f.getSiblingFile (f.getFileName() + ".bak");
+        bak.deleteFile();
+        f.copyFileTo (bak);
+        f.deleteFile();
+        out.note = "the old file was kept as " + bak.getFileName();
+    }
+    state.library.renameFavorite ("2|" + oldName, "2|" + newName);
+    out.ok = true;
+    out.file = to;
+    out.message = "renamed to \"" + newName + "\"";
+    return out;
+}
+
+JMSignatureProcessor::RenameOutcome
+JMSignatureProcessor::renamePerformancePreset (const juce::File& f, const juce::String& rawNewName)
+{
+    RenameOutcome out;
+    const auto newName = rawNewName.trim();
+    if (newName.isEmpty()) { out.message = "a performance needs a name"; return out; }
+    if (! f.existsAsFile()) { out.message = "that performance file is gone"; return out; }
+
+    const auto oldName = f.getFileNameWithoutExtension();
+    auto to = f.getSiblingFile (juce::File::createLegalFileName (newName) + ".json");
+    if (to != f && to.existsAsFile()) { out.message = "\"" + newName + "\" already exists"; return out; }
+
+    auto v = juce::JSON::parse (f.loadFileAsString());
+    if (auto* o = v.getDynamicObject()) o->setProperty ("name", newName);
+    else { out.message = "that performance is not a JSON object"; return out; }
+
+    // A performance snapshot is the ONLY thing that carries the artist's
+    // modulation, so the read-back check is that it still loads as one: the
+    // slots array, the macros and the mod block have to survive the rename.
+    auto wr = authoring::guardedReplace (to, juce::JSON::toString (v, false), to == f,
+                                         [] (const juce::String& text, juce::String& why)
+                                         {
+                                             auto back = juce::JSON::parse (text);
+                                             if (! back.isObject()) { why = "not an object"; return false; }
+                                             if (back.getProperty ("slots", juce::var()).getArray() == nullptr)
+                                             { why = "the slots are gone"; return false; }
+                                             if (! back.hasProperty ("macros") || ! back.hasProperty ("mod"))
+                                             { why = "the macros or the modulation are gone"; return false; }
+                                             return true;
+                                         });
+    if (! wr.ok) { out.message = wr.message; return out; }
+    if (to != f)
+    {
+        auto bak = f.getSiblingFile (f.getFileName() + ".bak");
+        bak.deleteFile();
+        f.copyFileTo (bak);
+        f.deleteFile();
+        out.note = "the old file was kept as " + bak.getFileName();
+    }
+    state.library.renameFavorite ("3|" + oldName, "3|" + newName);
+    if (state.performPresetName == oldName) state.performPresetName = newName;
+    out.ok = true;
+    out.file = to;
+    out.message = "renamed to \"" + newName + "\"";
+    stateChanged.sendChangeMessage();
+    return out;
+}
+
+//==============================================================================
+// RE-CATEGORISING an instrument — the client's first ask.
+//
+// The write is authoring::writeInstrumentWorld (one property, guarded, read
+// back, restored on failure). Everything below it is the part that keeps the
+// APP coherent, which is the half a file write cannot do:
+//
+//   * the library is re-scanned, so the model pages' instrument lists (browser
+//     rows, each Perform slot's instrument chooser) are built from the new world;
+//   * any slot playing that bundle moves with it — the engine's world, the
+//     loaded bundle's own world, and the slot's voicing controls, which are
+//     per-world and therefore meaningless in the world it just left. Those are
+//     re-seeded from the new world's defaults and the outcome SAYS so;
+//   * the current page follows the instrument, so "where did it go?" is
+//     answered by the app being on its new page rather than by a message.
+//==============================================================================
+JMSignatureProcessor::RecategoriseOutcome
+JMSignatureProcessor::recategoriseBundle (const juce::File& bundleDir, int newWorld)
+{
+    RecategoriseOutcome out;
+    out.world = newWorld;
+    if (newWorld < 0 || newWorld > 3) { out.message = "that is not one of the four categories"; return out; }
+
+    auto wr = authoring::writeInstrumentWorld (bundleDir, juce::String (worldJsonId (newWorld)));
+    if (! wr.ok) { out.message = wr.message; return out; }
+
+    state.library.rescan();
+
+    bool reseeded = false;
+    for (int i = 0; i < 4; ++i)
+    {
+        auto& s = state.slots[(size_t) i];
+        if (s.bundleDir != bundleDir.getFullPathName()) continue;
+        if (s.world == newWorld) continue;
+        s.world = newWorld;
+        if (auto lb = engines[(size_t) i].bundle())
+        {
+            // message thread only; the audio thread reads zones and samples,
+            // never these two (the same justification as patching inst.presets
+            // after a factory save).
+            lb->world = newWorld;
+            lb->inst.meta.world = (jmi::World) newWorld;
+        }
+        engines[(size_t) i].setWorld (newWorld);
+        s.engineParams = defaultEngineParams (newWorld);
+        s.rack = buildDefaultRack (newWorld);
+        syncSlotToDsp (i);
+        reseeded = true;
+    }
+
+    out.ok = true;
+    out.message = juce::String (bundleDir.getFileNameWithoutExtension()) + " is now "
+                + juce::String (worldName (newWorld)).toUpperCase();
+    out.note = wr.note;
+    if (reseeded)
+        out.note = (out.note.isNotEmpty() ? out.note + " | " : juce::String())
+                 + "its voicing controls and FX rack were re-seeded for "
+                 + juce::String (worldName (newWorld)).toUpperCase();
+
+    // follow the instrument to its new page
+    state.currentPage = newWorld;
+    stateChanged.sendChangeMessage();
+    return out;
+}
+
+//==============================================================================
+int JMSignatureProcessor::restoreSlotBundles()
+{
+    int restored = 0;
+    juce::StringArray substituted;
+    for (int i = 0; i < 4; ++i)
+    {
+        auto& s = state.slots[(size_t) i];
+        if (s.bundleDir.isEmpty()) continue;
+        const juce::File want (s.bundleDir);
+        if (auto lb = engines[(size_t) i].bundle())
+            if (lb->dir == want) continue;                 // already the right instrument
+
+        const BundleInfo* bi = state.library.find (want);
+        if (bi == nullptr)
+        {
+            // The saved path has gone (a renamed folder, another machine, a
+            // library that moved). Stand another instrument of the same world
+            // in for it rather than leaving the slot silent, and say so.
+            bi = state.library.firstForWorld (s.world);
+            if (bi != nullptr) substituted.add (want.getFileNameWithoutExtension() + " -> " + bi->name);
+        }
+        if (bi == nullptr) continue;
+
+        juce::String err;
+        auto b = state.library.loadBundle (bi->dir, err);
+        if (b == nullptr)
+        {
+            juce::Logger::writeToLog ("MIREKU: could not re-attach " + bi->dir.getFullPathName()
+                                      + ": " + err);
+            continue;
+        }
+        s.bundleDir = bi->dir.getFullPathName();
+        s.bundleName = bi->name;
+        s.world = b->world;
+        engines[(size_t) i].setWorld (b->world);
+        engines[(size_t) i].setBundle (b);
+        ++restored;
+    }
+    if (! substituted.isEmpty())
+        juce::Logger::writeToLog ("MIREKU: instruments no longer in the library were substituted: "
+                                  + substituted.joinIntoString (", "));
+    if (restored > 0)
+    {
+        syncAllToDsp();
+        stateChanged.sendChangeMessage();
+    }
+    return restored;
 }
 
 //==============================================================================
@@ -1588,6 +1932,51 @@ juce::String JMSignatureProcessor::modBoundaryLine (int page) const
          + ". Save a PERFORMANCE preset to keep that work.";
 }
 
+//---------------------------------------------------------- SAVE OVER vs SAVE AS
+// The name OVERWRITE would replace is "the preset he is working on", i.e. the
+// one that is loaded — never whatever is typed in the name field, which belongs
+// to SAVE AS. That split is the whole safety property: the two controls cannot
+// be confused because they do not even read the same thing.
+//
+// Empty means there is nothing of that name to replace yet ("Init", or a patch
+// that has only ever been auditioned), and the UI then offers SAVE AS alone.
+juce::String JMSignatureProcessor::saveOverTargetName (int page) const
+{
+    if (page > 3)
+        return performancePresetExists (state.performPresetName) ? state.performPresetName
+                                                                 : juce::String();
+    const int slot = slotForModelPage (page);
+    const auto name = state.slots[(size_t) slot].presetName;
+    return instrumentPresetExists (slot, name) ? name : juce::String();
+}
+
+juce::String JMSignatureProcessor::saveOverLine (int page) const
+{
+    const auto target = saveOverTargetName (page);
+    if (target.isEmpty()) return {};
+    const bool authoring = state.library.isAuthoring();
+
+    // Name the PLACE the way the artist thinks of it — the instrument bundle,
+    // or "your presets" — not the folder the path happens to end in.
+    juce::String where;
+    juce::File file;
+    if (page > 3)
+    {
+        file = performancePresetFileFor (target);
+        where = authoring ? "the FACTORY performances" : "your performances";
+    }
+    else
+    {
+        const int slot = slotForModelPage (page);
+        file = instrumentPresetFileFor (slot, target);
+        auto bundle = bundleDirForSlot (slot);
+        where = authoring && authoring::looksLikeBundle (bundle) ? bundle.getFileName()
+                                                                 : "your presets";
+    }
+    return "OVERWRITE replaces \"" + target + "\" in " + where + ", keeping "
+         + file.getFileName() + ".bak. SAVE AS makes a NEW preset and never replaces anything.";
+}
+
 // CLIENT REVIEW ROUND 3 (G): the browser listed nothing on PERFORM because the
 // spec's "factory folder" of performance presets was never created. Four honest
 // factory snapshots are written on first run; they only carry the parameters
@@ -1646,6 +2035,12 @@ bool JMSignatureProcessor::loadPerformancePreset (const juce::File& f)
             if (auto* p = apvts.getParameter (prop.name.toString()))
                 p->setValueNotifyingHost ((float) (double) prop.value);
     state.performPresetName = v.getProperty ("name", f.getFileNameWithoutExtension()).toString();
+    // RECALL MUST BRING THE INSTRUMENTS BACK (gap found 2026-10-26). A
+    // performance snapshot stores each slot's .jmi path, and nothing ever
+    // re-loaded it: every parameter, macro and mod row came back and the
+    // engines kept playing whatever was loaded before — so the one route that
+    // captures the artist's modulation work could not actually recall it.
+    restoreSlotBundles();
     syncAllToDsp();
     publishModulation();
     stateChanged.sendChangeMessage();
@@ -1778,6 +2173,10 @@ void JMSignatureProcessor::setStateInformation (const void* data, int size)
         for (auto& prop : hp->getProperties())
             if (auto* p = apvts.getParameter (prop.name.toString()))
                 p->setValueNotifyingHost ((float) (double) prop.value);
+    // The saved slots name their .jmi bundles by absolute path; re-attach them
+    // or a restored session comes up with every control right and no instrument
+    // behind it. (Same gap as performance recall — see restoreSlotBundles.)
+    restoreSlotBundles();
     syncAllToDsp();
     publishModulation();
     stateChanged.sendChangeMessage();

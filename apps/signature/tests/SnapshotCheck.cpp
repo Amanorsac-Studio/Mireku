@@ -94,6 +94,44 @@ static void savePng (juce::Component& c, const juce::String& name)
 // `npx jmi validate <bundle>` proves the bundle is still valid. That is the
 // risky path, so it is proven against the client's own content rather than a
 // fixture.  --undo-probe removes the preset again and restores any .bak.
+/// The same idea for the OTHER risky write the authoring workflow added:
+/// moving an instrument to another category, i.e. editing meta.world inside a
+/// real instrument.json.
+///
+///   MirekuSnapshot --probe-world <path-to.jmi> <rhodes-ep|mks|fm|strings>
+///
+/// Run it against a COPY of a client bundle, then `npx jmi validate` the copy.
+/// It prints the before/after world and whether anything but meta.world moved.
+static int probeWorld (const juce::String& bundlePath, const juce::String& worldId)
+{
+    juce::File bundle (bundlePath);
+    if (! authoring::looksLikeBundle (bundle))
+    { std::printf ("not a .jmi bundle: %s\n", bundlePath.toRawUTF8()); return 2; }
+    auto ij = bundle.getChildFile ("instrument.json");
+    const auto before = ij.loadFileAsString();
+    std::printf ("bundle   : %s\n", bundle.getFullPathName().toRawUTF8());
+    std::printf ("world    : %s -> %s\n",
+                 juce::JSON::parse (before).getProperty ("meta", juce::var())
+                     .getProperty ("world", "?").toString().toRawUTF8(),
+                 worldId.toRawUTF8());
+
+    auto r = authoring::writeInstrumentWorld (bundle, worldId);
+    std::printf ("result   : %s\n", r.ok ? "OK" : "FAILED");
+    std::printf ("message  : %s\n", r.message.toRawUTF8());
+    if (r.note.isNotEmpty()) std::printf ("note     : %s\n", r.note.toRawUTF8());
+    if (! r.ok) return 1;
+
+    juce::String diff;
+    const bool narrow = authoring::varsDifferOnlyAt (juce::JSON::parse (before),
+                                                     juce::JSON::parse (ij.loadFileAsString()),
+                                                     "meta.world", diff);
+    std::printf ("narrow   : %s%s\n", narrow ? "yes - meta.world and nothing else" : "NO - ",
+                 narrow ? "" : diff.toRawUTF8());
+    std::printf ("backup   : %s\n", r.backup.getFullPathName().toRawUTF8());
+    std::printf ("now run  : npx jmi validate \"%s\"\n", bundle.getFullPathName().toRawUTF8());
+    return narrow ? 0 : 1;
+}
+
 static int probeBundle (const juce::String& bundlePath, const juce::String& presetName, bool undo)
 {
     juce::File bundle (bundlePath);
@@ -144,6 +182,8 @@ int main (int argc, char** argv)
         return probeBundle (juce::String::fromUTF8 (argv[2]),
                             argc >= 4 ? juce::String::fromUTF8 (argv[3]) : juce::String ("Authoring Probe"),
                             false);
+    if (argc >= 4 && juce::String (argv[1]) == "--probe-world")
+        return probeWorld (juce::String::fromUTF8 (argv[2]), juce::String::fromUTF8 (argv[3]));
     if (argc >= 3 && juce::String (argv[1]) == "--undo-probe")
         return probeBundle (juce::String::fromUTF8 (argv[2]),
                             argc >= 4 ? juce::String::fromUTF8 (argv[3]) : juce::String ("Authoring Probe"),
@@ -2960,7 +3000,7 @@ int main (int argc, char** argv)
             CHECK (res.ok && res.manifest.existsAsFile(), "COLLECT writes a manifest");
 
             auto man = juce::JSON::parse (res.manifest.loadFileAsString());
-            CHECK (man.getProperty ("kind", "").toString() == "jm-signature-authoring-collection"
+            CHECK (man.getProperty ("kind", "").toString() == authoring::kCollectionKind
                    && man.getProperty ("appVersion", "").toString() == juce::String (authoring::kAppVersion)
                    && man.getProperty ("exportedAt", "").toString().isNotEmpty()
                    && man.getProperty ("mode", "").toString() == "authoring",
@@ -3053,6 +3093,427 @@ int main (int argc, char** argv)
             }
         }
 
+        // =====================================================================
+        // THE AUTHORING WORKFLOW (2026-10-26). The mode above decides WHERE a
+        // save goes; these four sections are the editing James actually asked
+        // for on top of it: move a sound to another category, save over it or
+        // as a new one, name and rename, and get the whole performance loop
+        // (create -> name -> save over -> rename -> recall) to work.
+        // =====================================================================
+        std::printf ("\n== AUTHORING (9) MOVE AN INSTRUMENT TO ANOTHER CATEGORY ==\n");
+        {
+            proc.state.library.setModeTransient (authoring::Mode::authoring);
+            proc.state.library.setLibraryDirTransient (libRoot);
+            const auto mksBundle = libRoot.getChildFile ("AuthMks.jmi");
+            const auto ij = mksBundle.getChildFile ("instrument.json");
+            const auto beforeText = ij.loadFileAsString();
+
+            // the instrument is loaded and audible in a slot, which is the case
+            // that has to stay coherent when it changes pages under the player
+            for (auto& b : proc.state.library.bundles())
+                if (b.dir == mksBundle) proc.loadBundleIntoSlot (1, b);
+            CHECK (proc.engines[1].bundle() != nullptr && proc.state.slots[1].world == 1,
+                   "AuthMks starts in MKS and is loaded in a slot");
+            proc.state.currentPage = 1;
+
+            // the client's rule: STRINGS is the catch-all for anything that is
+            // not a piano/Rhodes/EP, an MKS or FM
+            auto moved = proc.recategoriseBundle (mksBundle, 3);
+            std::printf ("  -> %s  (%s)\n", moved.message.toRawUTF8(), moved.note.toRawUTF8());
+            CHECK (moved.ok, "the move reports success");
+
+            jmi::Instrument reread;
+            std::string rerr;
+            CHECK (jmi::parseInstrumentJson (ij.loadFileAsString().toStdString(), reread, rerr)
+                   && reread.meta.world == jmi::World::Strings,
+                   "THE WORLD CHANGE LANDED IN THE BUNDLE: instrument.json now says strings");
+            juce::String why2;
+            CHECK (bundleIsValid (mksBundle, why2),
+                   "and the bundle is STILL VALID after being written into");
+            if (why2.isNotEmpty()) std::printf ("  bundle invalid: %s\n", why2.toRawUTF8());
+
+            // the narrowness of the write is the whole safety property
+            juce::String diff;
+            CHECK (authoring::varsDifferOnlyAt (juce::JSON::parse (beforeText),
+                                                juce::JSON::parse (ij.loadFileAsString()),
+                                                "meta.world", diff),
+                   "meta.world changed and NOTHING ELSE in instrument.json did");
+            if (diff.isNotEmpty()) std::printf ("  unexpected difference: %s\n", diff.toRawUTF8());
+            CHECK (ij.getSiblingFile ("instrument.json.bak").existsAsFile(),
+                   "the previous instrument.json is kept as a .bak");
+
+            // ...and the app agrees with the file
+            CHECK (proc.state.slots[1].world == 3 && proc.engines[1].bundle() != nullptr
+                   && proc.engines[1].bundle()->world == 3,
+                   "the slot playing it moved world with it, bundle and engine together");
+            CHECK (moved.note.containsIgnoreCase ("re-seeded"),
+                   "and it SAYS that the slot's per-world voicing controls were re-seeded");
+            CHECK (proc.state.currentPage == 3,
+                   "the app follows the instrument to its new page instead of leaving it lost");
+            bool inStrings = false, inMks = false;
+            for (auto& b : proc.state.library.bundlesForWorld (3)) if (b.dir == mksBundle) inStrings = true;
+            for (auto& b : proc.state.library.bundlesForWorld (1)) if (b.dir == mksBundle) inMks = true;
+            CHECK (inStrings && ! inMks, "the library lists it under STRINGS and no longer under MKS");
+
+            {
+                PresetBrowserPanel br (proc);
+                proc.state.currentPage = 3;
+                br.rebuild();
+                bool listed = false;
+                for (int i = 0; i < br.rowCount(); ++i)
+                    if (br.rowName (i).contains ("AuthMks")) listed = true;
+                CHECK (listed, "the browser offers it on the STRINGS page immediately");
+                proc.state.currentPage = 1;
+                br.rebuild();
+                bool stale = false;
+                for (int i = 0; i < br.rowCount(); ++i)
+                    if (br.rowName (i).contains ("AuthMks")) stale = true;
+                CHECK (! stale, "and the MKS page no longer shows a row that is not there any more");
+            }
+
+            CHECK (! proc.recategoriseBundle (mksBundle, 3).ok,
+                   "moving it to the category it is already in is refused, not re-written");
+            CHECK (! proc.recategoriseBundle (mksBundle, 9).ok,
+                   "a world that does not exist is refused");
+            CHECK (! proc.recategoriseBundle (libRoot.getChildFile ("NotABundle"), 2).ok,
+                   "and so is something that is not a .jmi bundle");
+
+            // put it back where the rest of the suite expects it
+            CHECK (proc.recategoriseBundle (mksBundle, 1).ok, "and it can be moved back");
+            proc.state.currentPage = 0;
+            for (auto& b : proc.state.library.bundles())
+                if (b.dir == epBundle) proc.loadBundleIntoSlot (0, b);
+        }
+
+        // ---------------------------------------------------------------------
+        std::printf ("\n== AUTHORING (10) SAVE AS makes a new one; SAVE OVER replaces the right one ==\n");
+        {
+            proc.state.library.setModeTransient (authoring::Mode::authoring);
+            proc.state.currentPage = 0;
+            PresetBrowserPanel br (proc);
+            br.setSize (Theme::L::browserW, Theme::L::browserH);
+            br.rebuild();
+
+            proc.state.slots[0].engineParams["tine"] = 11.0f;
+            br.setSaveName ("Dial A");
+            br.pressSave();
+            auto dialA = authoring::bundlePresetFile (epBundle, "Dial A");
+            CHECK (dialA.existsAsFile(), "SAVE AS creates the preset it was given a name for");
+            const auto dialABytes = dialA.loadFileAsString();
+
+            // ---- SAVE AS can never stand on an existing preset
+            proc.state.slots[0].engineParams["tine"] = 99.0f;
+            br.setSaveName ("Dial A");
+            br.pressSave();
+            CHECK (br.destinationText().startsWith ("NOT SAVED")
+                   && br.destinationText().contains ("Dial A")
+                   && br.destinationText().containsIgnoreCase ("OVERWRITE"),
+                   "SAVE AS onto a name that is taken REFUSES and points at OVERWRITE");
+            CHECK (dialA.loadFileAsString() == dialABytes,
+                   "...and the existing preset is byte-for-byte untouched");
+            CHECK (! proc.saveInstrumentPreset (0, "Dial A",
+                        JMSignatureProcessor::SaveIntent::saveAs).ok,
+                   "the same refusal at the API, so no UI path can get round it");
+
+            // ---- SAVE AS with a different name leaves the original alone
+            br.setSaveName ("Dial B");
+            br.pressSave();
+            CHECK (authoring::bundlePresetFile (epBundle, "Dial B").existsAsFile()
+                   && dialA.loadFileAsString() == dialABytes,
+                   "SAVE AS under a new name creates it WITHOUT touching the original");
+
+            // ---- which one is about to happen must be unmistakable
+            proc.state.slots[0].presetName = "Dial A";
+            br.rebuild();
+            CHECK (br.overwriteOffered(), "with a loaded preset on disk, OVERWRITE is offered");
+            CHECK (br.overwriteButtonText().containsIgnoreCase ("OVERWRITE")
+                   && br.overwriteButtonText().contains ("Dial A"),
+                   "and the control NAMES the preset it would replace, in its own label");
+            CHECK (br.overwriteText().containsIgnoreCase ("replaces \"Dial A\"")
+                   && br.overwriteText().containsIgnoreCase (".bak")
+                   && br.overwriteText().containsIgnoreCase ("never replaces anything"),
+                   "the wording states both halves: what OVERWRITE does and what SAVE AS does not");
+            CHECK (! br.overwriteArmed(), "it starts unarmed");
+
+            // first click arms and explains; it does NOT write
+            proc.state.slots[0].engineParams["tine"] = 44.0f;
+            br.pressOverwrite();
+            CHECK (br.overwriteArmed() && dialA.loadFileAsString() == dialABytes,
+                   "the FIRST click only arms it — nothing on disk has changed yet");
+            CHECK (br.infoLineText() == br.overwriteText(),
+                   "and while it is armed the destination line says what the next click will replace");
+            br.disarmOverwrite();
+            CHECK (! br.overwriteArmed() && dialA.loadFileAsString() == dialABytes,
+                   "a disarm leaves the preset alone");
+
+            // two clicks: the write
+            const int presetsBefore = epBundle.getChildFile ("presets")
+                                              .findChildFiles (juce::File::findFiles, false, "*.json").size();
+            br.pressOverwrite();
+            br.pressOverwrite();
+            CHECK (dialA.existsAsFile()
+                   && std::abs ((double) juce::JSON::parse (dialA.loadFileAsString())
+                                              .getProperty ("engine", juce::var())
+                                              .getProperty ("tine", 0.0) - 44.0) < 1.0e-6,
+                   "SAVE OVER replaced THE RIGHT PRESET with what is on screen");
+            {
+                auto bakFile = dialA.getSiblingFile (dialA.getFileName() + ".bak");
+                const double bakTine = (double) juce::JSON::parse (bakFile.loadFileAsString())
+                                           .getProperty ("engine", juce::var())
+                                           .getProperty ("tine", -1.0);
+                std::printf ("  .bak holds tine %.1f (the value before the overwrite)\n", bakTine);
+                CHECK (bakFile.existsAsFile() && std::abs (bakTine - 11.0) < 1.0e-6,
+                       "and kept the previous version as a .bak holding the value it had");
+            }
+            CHECK (epBundle.getChildFile ("presets")
+                           .findChildFiles (juce::File::findFiles, false, "*.json").size() == presetsBefore,
+                   "a save-over adds no second file — it replaces one");
+            juce::String why3;
+            CHECK (bundleIsValid (epBundle, why3), "and the bundle is still valid");
+
+            // the mod boundary still applies to BOTH new paths
+            proc.state.mod.rowCount = 1;
+            proc.state.mod.rows[0] = MatrixRow {};
+            proc.state.mod.rows[0].source = ModSource::lfo1;
+            proc.state.mod.rows[0].destPath = "slot0.engine.tine";
+            proc.state.mod.rows[0].depth = 0.5f;
+            proc.state.mod.rows[0].enabled = true;
+            proc.publishModulation();
+            br.rebuild();
+            CHECK (br.boundaryText().containsIgnoreCase ("A patch cannot hold")
+                   && br.alternativeSaveOffered(),
+                   "the modulation boundary and SAVE PERFORMANCE INSTEAD survive beside the new controls");
+            CHECK (br.overwriteOffered(),
+                   "...and OVERWRITE is still offered at the same time, not swapped out for it");
+            proc.state.mod = ModState {};
+            proc.publishModulation();
+        }
+
+        // ---------------------------------------------------------------------
+        std::printf ("\n== AUTHORING (11) NAME AND RENAME, with every reference kept coherent ==\n");
+        {
+            proc.state.library.setModeTransient (authoring::Mode::authoring);
+            proc.state.currentPage = 0;
+            PresetBrowserPanel br (proc);
+            br.rebuild();
+
+            // star it first: a browser row's favourite key is "<kind>|<name>",
+            // so a rename that forgets it loses the star
+            proc.state.library.toggleFavorite ("1|Dial A");
+            proc.state.slots[0].presetName = "Dial A";
+
+            int rowIdx = -1;
+            for (int i = 0; i < br.rowCount(); ++i) if (br.rowName (i) == "Dial A") rowIdx = i;
+            CHECK (rowIdx >= 0, "the preset to rename is on screen");
+            CHECK (br.renameRow (rowIdx, "Tine Bloom"), "the rename reports success");
+
+            auto renamed = authoring::bundlePresetFile (epBundle, "Tine Bloom");
+            CHECK (renamed.existsAsFile()
+                   && juce::JSON::parse (renamed.loadFileAsString())
+                          .getProperty ("name", "").toString() == "Tine Bloom",
+                   "BOTH halves of the name moved: the file AND the name inside it");
+            CHECK (! authoring::bundlePresetFile (epBundle, "Dial A").existsAsFile(),
+                   "the old file is gone, so the preset is not listed twice");
+            CHECK (epBundle.getChildFile ("presets").getChildFile ("Dial A.json.bak").existsAsFile(),
+                   "...but kept as a .bak, because a rename is destructive too");
+            juce::String why4;
+            CHECK (bundleIsValid (epBundle, why4),
+                   "THE RENAME LEAVES THE BUNDLE VALID AND EVERY PRESET IN IT RESOLVABLE");
+            if (why4.isNotEmpty()) std::printf ("  bundle invalid: %s\n", why4.toRawUTF8());
+
+            bool listedNew = false, listedOld = false;
+            br.rebuild();
+            for (int i = 0; i < br.rowCount(); ++i)
+            {
+                if (br.rowName (i) == "Tine Bloom") listedNew = true;
+                if (br.rowName (i) == "Dial A") listedOld = true;
+            }
+            CHECK (listedNew && ! listedOld, "the browser shows the new name and only the new name");
+            bool inMemory = false;
+            if (auto lb = proc.engines[0].bundle())
+                for (auto& p : lb->inst.presets) if (juce::String (p.name) == "Tine Bloom") inMemory = true;
+            CHECK (inMemory, "the in-memory FACTORY list the browser draws from was renamed too");
+            CHECK (proc.state.slots[0].presetName == "Tine Bloom",
+                   "the slot's displayed patch name followed it");
+            CHECK (proc.state.library.isFavorite ("1|Tine Bloom")
+                   && ! proc.state.library.isFavorite ("1|Dial A"),
+                   "and the FAVOURITE star moved with it instead of pointing at nothing");
+            bool ledgerHasNew = false, ledgerHasOld = false;
+            for (auto& e : authoring::readLedger (epBundle))
+            {
+                if (e.file == "Tine Bloom.json") ledgerHasNew = true;
+                if (e.file == "Dial A.json") ledgerHasOld = true;
+            }
+            CHECK (ledgerHasNew && ! ledgerHasOld,
+                   "the authoring ledger follows the file, so provenance is not orphaned");
+
+            CHECK (! br.renameRow (rowIdx >= 0 ? 0 : 0, ""), "an empty name is refused");
+            int bloom = -1;
+            for (int i = 0; i < br.rowCount(); ++i) if (br.rowName (i) == "Tine Bloom") bloom = i;
+            CHECK (bloom >= 0 && ! br.renameRow (bloom, "Dial B"),
+                   "renaming onto a name that is already taken is refused, not merged");
+            CHECK (authoring::bundlePresetFile (epBundle, "Dial B").existsAsFile()
+                   && authoring::bundlePresetFile (epBundle, "Tine Bloom").existsAsFile(),
+                   "...and both presets are still there afterwards");
+            proc.state.library.toggleFavorite ("1|Tine Bloom");
+        }
+
+        // ---------------------------------------------------------------------
+        std::printf ("\n== AUTHORING (12) THE PERFORMANCE LOOP: create, name, save over, rename, RECALL ==\n");
+        {
+            proc.state.library.setModeTransient (authoring::Mode::authoring);
+            proc.state.library.setLibraryDirTransient (libRoot);
+            const auto mksBundle = libRoot.getChildFile ("AuthMks.jmi");
+            for (auto& b : proc.state.library.bundles())
+            {
+                if (b.dir == epBundle) proc.loadBundleIntoSlot (0, b);
+                if (b.dir == mksBundle) proc.loadBundleIntoSlot (1, b);
+            }
+            CHECK (proc.engines[0].bundle() != nullptr && proc.engines[1].bundle() != nullptr,
+                   "two instruments are arranged across two slots — the thing a performance is");
+
+            // the modulation work that ONLY a performance can carry
+            auto& md = proc.state.mod;
+            md = ModState {};
+            md.rowCount = 3;
+            md.lfos[0].shape = (int) LfoShape::triangle; md.lfos[0].rateHz = 1.75f;
+            md.lfos[1].sync = 1; md.lfos[1].division = 11;
+            md.rows[0].source = ModSource::lfo1; md.rows[0].destPath = "slot0.engine.tine";
+            md.rows[0].depth = 0.55f; md.rows[0].enabled = true;
+            md.rows[1].source = ModSource::lfo2; md.rows[1].destPath = "host.slotPan1";
+            md.rows[1].depth = -0.33f; md.rows[1].enabled = true;
+            md.rows[2].source = ModSource::modWheel; md.rows[2].destPath = "slot1.engine.warmth";
+            md.rows[2].depth = 0.21f; md.rows[2].enabled = true;
+            md.arp.enabled = 1; md.arp.slotMask = 0x02; md.arp.mode = 2; md.arp.division = 7;
+            md.arp.octaves = 2; md.arp.gate = 55.0f;
+            proc.state.macros[1].name = "JAMES WIDTH";
+            proc.state.macros[1].targets.clear();
+            {
+                MacroTarget mt;
+                mt.path = "host.slotPan0"; mt.min = 0.1f; mt.max = 0.9f; mt.depth = 0.75f;
+                proc.state.macros[1].targets.push_back (mt);
+            }
+            proc.publishModulation();
+
+            // ---- CREATE + NAME (save as)
+            proc.state.performPresetName = {};
+            proc.state.currentPage = 4;
+            PresetBrowserPanel br (proc);
+            br.rebuild();
+            CHECK (br.destinationText().containsIgnoreCase ("FACTORY performance")
+                   && br.destinationText().containsIgnoreCase ("modulation"),
+                   "on PERFORM the save control says it captures the modulation");
+            CHECK (! br.overwriteOffered(),
+                   "a performance that has never been saved offers SAVE AS only — "
+                   "there is nothing to overwrite");
+            br.setSaveName ("James Rig");
+            br.pressSave();
+            auto rig = JMSignatureProcessor::factoryPerformanceDir().getChildFile ("James Rig.json");
+            CHECK (rig.existsAsFile() && proc.state.performPresetName == "James Rig",
+                   "CREATE + NAME: the performance exists and the app knows which one is loaded");
+            br.rebuild();
+            CHECK (br.overwriteOffered() && br.overwriteButtonText().contains ("James Rig"),
+                   "and now OVERWRITE appears, naming it");
+
+            // ---- SAVE OVER
+            const auto firstBytes = rig.loadFileAsString();
+            proc.state.mod.rows[0].depth = 0.91f;
+            proc.publishModulation();
+            br.pressOverwrite();
+            CHECK (rig.loadFileAsString() == firstBytes, "arming a performance overwrite writes nothing");
+            br.pressOverwrite();
+            CHECK (rig.getSiblingFile ("James Rig.json.bak").existsAsFile(),
+                   "SAVE OVER on a performance keeps a .bak of what it replaced");
+            CHECK (JMSignatureProcessor::factoryPerformanceDir()
+                       .findChildFiles (juce::File::findFiles, false, "James Rig*.json").size() == 1,
+                   "and did not leave a second performance behind");
+
+            // ---- RECALL. This is the gap that was found: a snapshot stores
+            // each slot's .jmi path and NOTHING ever re-loaded it, so every
+            // parameter came back and the instruments did not.
+            for (auto& e : proc.engines) e.setBundle (nullptr);
+            proc.state.mod = ModState {};
+            proc.state.macros[1] = Macro { "MACRO 2", {} };
+            proc.publishModulation();
+            CHECK (proc.loadPerformancePreset (rig), "the performance recalls");
+            CHECK (proc.engines[0].bundle() != nullptr && proc.engines[1].bundle() != nullptr,
+                   "RECALL BRINGS THE INSTRUMENTS BACK (it used to restore controls over silence)");
+            CHECK (proc.engines[0].bundle()->dir == epBundle
+                   && proc.engines[1].bundle()->dir == mksBundle,
+                   "...and the RIGHT instrument in the right slot");
+            CHECK (std::abs (proc.state.mod.rows[0].depth - 0.91f) < 1.0e-5f
+                   && proc.state.mod.rows[1].source == ModSource::lfo2
+                   && proc.state.mod.rows[2].destPath == "slot1.engine.warmth",
+                   "the matrix rows came back with the save-over's values, not the first save's");
+            CHECK (proc.state.mod.lfos[1].sync == 1 && proc.state.mod.lfos[1].division == 11
+                   && std::abs (proc.state.mod.lfos[0].rateHz - 1.75f) < 1.0e-4f,
+                   "both LFOs came back");
+            CHECK (proc.state.mod.arp.enabled == 1 && proc.state.mod.arp.slotMask == 0x02
+                   && proc.state.mod.arp.division == 7 && proc.state.mod.arp.octaves == 2,
+                   "the arpeggiator came back");
+            CHECK (proc.state.macros[1].name == "JAMES WIDTH"
+                   && proc.state.macros[1].targets.size() == 1,
+                   "and the macro came back with its link");
+            {
+                // "restored into state" is not the same as "the audio thread is
+                // playing it", so this reads the settings the ARP ITSELF is
+                // using, after one real render block has picked up the publish.
+                proc.prepareToPlay (48000.0, 64);
+                juce::AudioBuffer<float> blk (2, 64);
+                blk.clear();
+                juce::MidiBuffer noMidi;
+                proc.processBlock (blk, noMidi);
+                CHECK (proc.arp.activeSettings().enabled == 1
+                       && proc.arp.activeSettings().division == 7,
+                       "...and the arp was PUBLISHED to the audio thread, not just restored into state");
+            }
+
+            // ---- a saved instrument that has left the library is substituted,
+            // not silently dropped
+            proc.state.slots[1].bundleDir = libRoot.getChildFile ("Gone.jmi").getFullPathName();
+            proc.engines[1].setBundle (nullptr);
+            CHECK (proc.restoreSlotBundles() >= 1, "a missing instrument is replaced, not left silent");
+            CHECK (proc.engines[1].bundle() != nullptr
+                   && proc.engines[1].bundle()->world == proc.state.slots[1].world,
+                   "...by one from the same category");
+
+            // ---- RENAME a performance
+            proc.state.currentPage = 4;
+            br.rebuild();
+            proc.state.library.toggleFavorite ("3|James Rig");
+            int rigRow = -1;
+            for (int i = 0; i < br.rowCount(); ++i) if (br.rowName (i) == "James Rig") rigRow = i;
+            CHECK (rigRow >= 0, "the performance is listed on the FACTORY tab where it was saved");
+            CHECK (br.renameRow (rigRow, "James Stage Rig"), "it renames");
+            auto stage = JMSignatureProcessor::factoryPerformanceDir()
+                             .getChildFile ("James Stage Rig.json");
+            CHECK (stage.existsAsFile() && ! rig.existsAsFile(),
+                   "the file moved and the old name is gone");
+            CHECK (juce::JSON::parse (stage.loadFileAsString()).getProperty ("name", "").toString()
+                       == "James Stage Rig",
+                   "the name inside the file moved with it");
+            CHECK (proc.state.performPresetName == "James Stage Rig",
+                   "and the app's idea of which performance is loaded moved too");
+            CHECK (proc.state.library.isFavorite ("3|James Stage Rig"), "so did its star");
+            CHECK (proc.loadPerformancePreset (stage)
+                   && proc.state.mod.arp.division == 7
+                   && std::abs (proc.state.mod.rows[0].depth - 0.91f) < 1.0e-5f,
+                   "A RENAMED PERFORMANCE STILL RECALLS ITS MODULATION — the rename is not lossy");
+            proc.state.library.toggleFavorite ("3|James Stage Rig");
+
+            // leave the machine as we found it
+            for (auto& f : JMSignatureProcessor::factoryPerformanceDir()
+                               .findChildFiles (juce::File::findFiles, false, "James *.json"))
+                f.deleteFile();
+            for (auto& f : JMSignatureProcessor::factoryPerformanceDir()
+                               .findChildFiles (juce::File::findFiles, false, "James *.json.bak"))
+                f.deleteFile();
+            proc.state.mod = ModState {};
+            proc.state.macros[1] = Macro { "MACRO 2", {} };
+            proc.publishModulation();
+            proc.state.currentPage = 0;
+        }
+
         // ---------------------------------------------------------------------
         std::printf ("\n== AUTHORING (8) the mode on screen ==\n");
         {
@@ -3071,9 +3532,10 @@ int main (int argc, char** argv)
                                juce::String ("authoring-") + tag + "-statusbar.png");
                 if (auto* br = findOne<PresetBrowserPanel> (*ed))
                 {
+                    // the block grew a row (OVERWRITE), so the crop follows it
                     auto region = ed->getLocalArea (br, br->getLocalBounds())
                                       .withTrimmedTop (Theme::L::brListY + Theme::L::brListH - 40)
-                                      .withHeight (160)
+                                      .withHeight (190)
                                       .getIntersection (ed->getLocalBounds());
                     saveImage (ed->createComponentSnapshot (region, false, 3.0f),
                                juce::String ("authoring-") + tag + "-save-block.png");
@@ -3083,6 +3545,44 @@ int main (int argc, char** argv)
             shoot (authoring::Mode::authoring, "mode-on");
             shoot (authoring::Mode::release, "mode-off");
             proc.state.library.setModeTransient (authoring::Mode::authoring);
+
+            //----------------------------------------- SAVE AS vs SAVE OVER on screen
+            // The claim being made is that the two cannot be confused, so the
+            // two states are photographed: OVERWRITE resting, and OVERWRITE
+            // armed with the consequence spelled out underneath it.
+            {
+                proc.state.currentPage = 0;
+                auto* ed = dynamic_cast<JMSignatureEditor*> (proc.createEditor());
+                ed->setSize (Theme::M::designW, Theme::M::designH);
+                ed->setVisible (true);
+                auto shootBlock = [&] (const char* tag)
+                {
+                    if (auto* br = findOne<PresetBrowserPanel> (*ed))
+                    {
+                        auto region = ed->getLocalArea (br, br->getLocalBounds())
+                                          .withTrimmedTop (Theme::L::brSaveY - 14)
+                                          .withHeight (170)
+                                          .getIntersection (ed->getLocalBounds());
+                        saveImage (ed->createComponentSnapshot (region, false, 3.0f),
+                                   juce::String ("authoring-save-over-") + tag + ".png");
+                    }
+                };
+                if (auto* br = findOne<PresetBrowserPanel> (*ed))
+                {
+                    proc.state.slots[0].presetName = "Tine Bloom";
+                    br->rebuild();
+                    br->setSaveName ("New Sound");
+                    CHECK (br->overwriteOffered() && br->overwriteButtonText().contains ("Tine Bloom"),
+                           "on screen, SAVE AS and OVERWRITE sit on separate rows and the "
+                           "destructive one names its target");
+                    shootBlock ("resting");
+                    br->pressOverwrite();                     // arm only
+                    shootBlock ("armed");
+                    br->disarmOverwrite();
+                }
+                savePng (*ed, "authoring-save-over-full.png");
+                delete ed;
+            }
 
             AuthoringPanel panel (proc);
             panel.setSize (AuthoringPanel::kWidth, AuthoringPanel::kHeight);

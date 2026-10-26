@@ -91,21 +91,32 @@ message(STATUS "MIREKU ASIO support    : ${JM_ASIO_ORIGIN}")
 # PRODUCT RENAME (2026-10-26): "JM Signature" -> MIREKU, at the client's
 # instruction ("NAME OF APP CHANGE TO MIREKU, no more JM Signature Library").
 #
-#  * COMPANY_NAME is DELIBERATELY UNCHANGED. The client renamed the product,
-#    not the company, and PLUGIN_MANUFACTURER_CODE/BUNDLE_ID prefix follow the
-#    company. See DECISIONS-signature.md — this is an open question for him.
-#  * PLUGIN_CODE changes JmSg -> Mrku. THIS CHANGES THE PLUGIN'S IDENTITY: a
-#    DAW project that already references the VST3/AU will no longer find it,
-#    because hosts key plugins on the manufacturer+plugin code and the VST3
-#    unique id derived from them, not on the file name. That is cheap now and
-#    expensive after shipping, which is why it is being done in the same pass
-#    as the rename rather than later.
+# VENDOR RENAME (2026-10-26, second pass): the first pass left COMPANY_NAME as
+# "JM Studios" and flagged it as a question. The client answered "change
+# everything to Mireku", so the vendor identity moves too:
+#
+#     COMPANY_NAME             "JM Studios"        -> "Mireku"
+#     PLUGIN_MANUFACTURER_CODE  JmSt               -> Mrek
+#     BUNDLE_ID                 com.jmstudios.*    -> com.mireku.mireku
+#
+#  The two four-character codes are deliberately NOT the same string:
+#  PLUGIN_MANUFACTURER_CODE Mrek is the VENDOR (Mireku, the company a DAW groups
+#  plugins under) and PLUGIN_CODE Mrku is the PRODUCT (MIREKU, this instrument),
+#  so a second Mireku product can ship under the same vendor without colliding.
+#
+#  * THIS CHANGES THE PLUGIN'S IDENTITY AGAIN. Hosts key an instrument on
+#    manufacturer code + plugin code (and, for VST3, the unique id derived from
+#    both), so a DAW project that references either the original JmSt/JmSg or
+#    the intermediate JmSt/Mrku build will report the plugin as missing and it
+#    has to be re-inserted. Nothing migrates this and nothing can. The client
+#    knows and accepts it pre-beta; it is free today and expensive the moment
+#    the beta is public, which is why both passes happened before the beta.
 juce_add_plugin(Mireku
-    COMPANY_NAME              "JM Studios"
-    PLUGIN_MANUFACTURER_CODE  JmSt
+    COMPANY_NAME              "Mireku"
+    PLUGIN_MANUFACTURER_CODE  Mrek
     PLUGIN_CODE               Mrku
     PRODUCT_NAME              "MIREKU"
-    BUNDLE_ID                 com.jmstudios.mireku
+    BUNDLE_ID                 com.mireku.mireku
     IS_SYNTH                  TRUE
     NEEDS_MIDI_INPUT          TRUE
     NEEDS_MIDI_OUTPUT         FALSE

@@ -2,7 +2,7 @@
   "name": "jm-signature",
   "private": true,
   "version": "1.0.0",
-  "description": "JM Signature Sound Library — Capture app, Signature instrument, shared .jmi format",
+  "description": "MIREKU Sound Library — Capture app, MIREKU instrument, shared .jmi format",
   "workspaces": [
     "packages/*",
     "apps/capture",

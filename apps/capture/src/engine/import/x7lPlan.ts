@@ -258,13 +258,29 @@ export function commonInstrumentName(names: string[]): string {
 }
 
 /** World inference from the instrument name; `mks` is the conservative default. */
+/**
+ * The client's four agreed categories, in the order they are tested:
+ *
+ *   JM Pianos (rhodes-ep)  uprights, full grands, warm Rhodes, bell-like EPs
+ *   MKS       (mks)        MKS sounds, rich stage keys, classic keyboards
+ *   FM Keys   (fm)         clear digital EPs, crystalline bells, percussive keys
+ *   Strings   (strings)    EVERYTHING ELSE -- organs, bells, pads, choirs, brass
+ *
+ * Strings is the deliberate catch-all, per the client: "anything that does not
+ * fall in the first 3 categories put them under strings, like organs bells
+ * pads." The old fallback was `mks`, which silently filed 18 of his 25 bundles
+ * -- grand pianos, an organ, two pads, a choir and brass -- under MKS.
+ *
+ * A bare "bell" is NOT treated as a piano: his JM Pianos category means an EP
+ * that happens to sound bell-like, which the ep/rhodes patterns already catch,
+ * while a standalone bell or pad belongs to the catch-all.
+ */
 export function inferWorld(name: string): World {
   const n = name.toLowerCase();
   if (/\bmks\b|mks\d/.test(n)) return 'mks';
-  if (/rhodes|wurli|\bep\b|ep\d|electric piano|dyno/.test(n)) return 'rhodes-ep';
+  if (/rhodes|wurli|\bep\b|ep\d|electric piano|dyno|piano|grand|upright|klavier/.test(n)) return 'rhodes-ep';
   if (/\bfm\b|\bdx\b|dx7/.test(n)) return 'fm';
-  if (/string|violin|viola|cello|orchestr|symphon/.test(n)) return 'strings';
-  return 'mks';
+  return 'strings';
 }
 
 /* ------------------------------------------------------------------ */

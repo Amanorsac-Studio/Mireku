@@ -2088,3 +2088,195 @@ importer are unchanged; `dropPlan.ts` keeps importing `inferWorld` from `x7lPlan
 signature is the same. `x7l.ts` keeps `pcm16MonoWavHeader` and the `pcmOffset`/`pcmBytes` fields
 (now the first channel's span) so nothing else had to move. The Import screen's markup is
 unchanged beyond the tab label and one line of copy, both of which said `.X7L` only.
+
+## DPFM — the library's own grouping (replacing the name heuristic)
+
+### 126. Why
+Grouping waveforms into instruments by **name** was guesswork, and it produced a visibly wrong
+answer: `Montage Triton Library.X7L` fell into **13 bundles** because its waveforms share key
+maps but carry unrelated names, and `String Low` + `Strung High` were never going to merge on a
+stem the library author typo'd. The truth is in the `DPFM` block: every performance states, per
+Part, exactly which waveforms play together, over which velocity and key ranges, with which
+crossfade, and which element is a key-off sample. That block is now decoded — `dpfm.ts` — and it
+outranks `waveformStem`.
+
+### 127. The container, and how it was found
+A `DPFM` record is a flat list of length-prefixed chunks, `[u32 BE payloadBytes][payload]`.
+For `0:Romance Piano TRFM` (record 0, 6746 bytes) the list is 512, 61, 63, 18, 63 — the
+performance name at +4 of the first chunk, a 16 x 9-byte controller-assign table ending exactly
+on the 512-chunk's last byte — and the fifth chunk ends on byte **737**, where a bare `u32 BE`
+gives the **part count**. Each part then contributes a 762-byte part-common chunk (763 in the
+YSFC 5.0.1 `.X8L`), its own name again at +4, and further on its element list.
+
+The record sizes confirm the arithmetic independently: in this library a one-part performance is
+6746 bytes, two parts 10463, three 14180, four 17897 — a constant **3717 per AWM2 part** — and
+the part counts read at +737 (1, 2, 3, 4) match the names of the parts found at the predicted
+offsets.
+
+### 128. Locating the element list, and the identity that proves it
+Each part's elements are a run of **exactly 8** chunks of **exactly 149 payload bytes**,
+immediately preceded by a `u16 BE` holding the count 8. A MONTAGE AWM2 part has 8 element slots
+whether or not they are switched on, which is why the run length is fixed.
+
+This is checked, not assumed. Across the ten parseable libraries (115 performance records,
+1,088 elements) every 149-byte run is exactly 8 long and is preceded by that `u16 BE` 8, and
+
+    (runs of 8 x 149-byte chunks) + (runs of 8 x 51-byte chunks) === sum of part counts
+
+holds in **all ten files with no slack**: Crystal Rhodes 28 + 129 = 161, JM Dyno Piano XL
+19 + 6 = 25, kt76 15 + 2 = 17, MK 80 14 + 1 = 15, MKS20 18 + 1 = 19, Montage Triton 26 + 1 = 27,
+D50 2 + 0 = 2, NRD 3 + 0 = 3, New York Grand 1 + 0 = 1, Nord Stage 3 + 0 = 3. The 51-byte runs
+are the other part type's eight slots (FM-X operators — they appear exactly in the libraries
+that carry an `AS1`/FM part and never hold a waveform reference) and are counted, never decoded.
+Their count prefix is **0**, not 8, which is a further confirmation that the `u16 BE` 8 belongs
+specifically to an AWM2 element list. A stray `149` elsewhere cannot form a run of eight with a
+matching count in front of it without breaking that identity, which is what makes the locator
+safe rather than lucky.
+
+### 129. The element record — 149 bytes, and the evidence for each field
+
+| Offset | Size | Field | How it was proven |
+|---|---|---|---|
+| +0 | u8 | element switch (1 = on) | 1 on elements 1-2 of Romance Piano, 0 on 3-8; and in `kt76` every part has element 1 on with slots 3-8 off, all six holding the identical factory default (waveform 1, note 0-127, velocity 1-127) |
+| +1 | u8 | waveform bank (1 = library, 0 = preset) | 1 on the two elements naming library waveforms, 0 on the six naming MONTAGE's preset CFX waveforms (152-157, absent from this 13-waveform library). Corpus-wide **all 246** bank-1 elements name a number that exists in that library's EWIM catalogue; **zero** misses |
+| +2 | u8 | element group, 0-based | 0 on all eight elements of Romance Piano, where the MODX reads Elem Group 1 for all eight; and 0, 1, 2, 3 on the four elements of `145:Analog Pad TRFM`. Range 0..3 corpus-wide |
+| +10 | u8 | XA control (0 Normal, 2 Key Off) | 0 on elements 1-7 (MODX "Normal"), 2 on element 8 (MODX "Key Off"). Only ever 0, 2, 5, 6, 7 corpus-wide, never above 7 |
+| +11 | u8 | note limit low | the eight elements' note limits C-2-G8 x2, C-2-G5 x3, G#5-G8 x2, C-2-G5 read back as 0-127, 0-91, 92-127, 0-91 exactly |
+| +12 | u8 | note limit high | as above |
+| +13 | u8 | velocity limit low | the sequence 1-90, 65-127, 60-92, 93-125, 126-127, 2-59, 60-127, 1-127 occurs in the record **once**, at +13 of the eight payloads in order |
+| +14 | u8 | velocity limit high | as above |
+| +15 | u8 | velocity crossfade | MODX Vel Cross Fade 0 on element 1, 15 on element 2; bytes 0 and 15 |
+| +147 | u16 LE | waveform number | elements 1/2 are waveform Number 1/2 and hold 1/2; elements 4 and 7 are both "CFX fff St" and both hold 155 — a check the velocity limits cannot give. +146 is zero in all 1,088 elements, so the half-word at +147 is unambiguous |
+
+Corroborated but **not used** by the importer, listed so the next reader does not redo the work:
++66..+69 coarse/fine/pitch-vel/fine-key (all 64 = +-0), +72 centre key (60 = C3), +74..+78 pitch
+EG hold/attack/decay1/decay2/release (0, 40, 64, 64, 64), +84 PEG depth (84 = +20), +86 PEG
+depth/vel (64 = +-0), +88 PEG curve (2), +92 filter cutoff (160 on element 1, 190 on element 2),
++93 cutoff/vel (84 and 94 = +20 and +30), +98 filter gain (245), +135 element LFO speed (38) —
+every one matching the MODX capture for elements 1 and 2.
+
+### 130. What could **not** be decoded, and is therefore not claimed
+* **+3, +4, +5** are 1, 1 and 0 in all 1,088 elements. Constant fields cannot be identified, so
+  they are not named.
+* **Element level / volume.** The MODX capture recorded *Part* Volume 90, not a per-element
+  level, so no byte could be tied to one. The planner keeps measuring layer level from the
+  audio, as before.
+* **Filter type.** Elements 1 and 2 are both LPF18 and both hold 2 at +91; with one observation
+  the enum cannot be mapped, so the byte is left alone.
+* **Bank values other than 0 and 1.** One Crystal Rhodes element has bank 2 and six Montage
+  Triton elements have bank 4 — all on *switched-off* slots except that one. A switched-on
+  element with an unknown bank makes the whole record a refusal rather than a guess, which is
+  why `16:JD 800 Crystal Rhode` is the single record in the corpus the reader declines.
+* **Part-to-element-list association by ordinal.** The runs are taken in file order, which is
+  part order, but nothing was found that *names* the part inside the element list, so the
+  importer only ever uses "these eight elements are one part", never "this is part 3".
+* **The other 100-odd bytes of the element payload.** Only the fields above were needed; the
+  rest of the amplitude EG, filter EG and LFO block is left undecoded rather than half-guessed.
+* **The part-level parameters** the MODX capture also recorded — Part Volume 90, Part Velocity
+  Limit 1-127, Velocity Offset 64, Velocity Depth 64, Mono/Poly, Key Assign, Element Pan, Dry
+  Level 127, VarSend 15, RevSend 30 — live in the 762-byte part-common chunk, not in the element
+  records. That chunk was located and its name field read, but nothing inside it was decoded:
+  none of those values changes which waveforms belong together, which is what this work is for,
+  and the capture gives one observation per field, which is not enough to place any of them.
+
+### 131. How the planner uses it
+1. **Grouping.** Waveforms some Part sounds together become one instrument. This replaces
+   `waveformStem` wherever the DPFM speaks; `waveformStem` is unchanged and still decides for
+   waveforms no performance mentions, and for any record or group the reader declined.
+2. **Velocity layers verbatim.** The count, the order and the waveform in each window are the
+   library's. Only the boundary velocity is placed by us — it has to be, because MONTAGE
+   elements may overlap (that is what Vel Cross Fade blends: Romance Piano's 1-90 and 65-127)
+   or step (`Init Normal (AWM2)` ends one element at 58 and starts the next at 60) while
+   `velocityMap` must tile 1..127. Each boundary goes to the midpoint of the disputed span, so
+   no window loses more than half of a shared region. Adjacent elements on the *same* waveform
+   are one layer, not two (JM Dyno's seven elements over five waveforms give five layers).
+3. **Per-layer key maps.** `RomancePiano Low` is sampled at 41 root notes and `Romance Piano
+   High` at 15. That is how the synth plays them — each element reads its own waveform's key map
+   — and `.jmi` says the same thing, because a zone carries its own key range *and* velocity
+   range. So each velocity window is built from the key map of the waveform that fills it, and
+   all 56 source keyzones survive (41 zones at velocity 1-77, 15 at 78-127). One shared grid
+   would have dropped 26 of them. Where the windows are *not* from the DPFM a window can draw on
+   several waveforms at once and one grid is unavoidable, so such a group is split by key-map
+   signature first.
+4. **Release samples.** A waveform played only on an XA Control "Key Off" element goes into
+   `releaseZones` (SFZ `trigger=release`), keyzone for keyzone from its own key map, with files
+   named `samples/rel_<Note>_v1_rr<n>.wav` — the prefix `instrument.schema.json` already
+   reserves. `rtDecayDb` is **0**: the format requires a value, the source states none, and 0 is
+   the neutral one. This is why `NY note off SE`, `Note off` (Nord) and `Note off` (NRD) stopped
+   being bundles of their own.
+5. **Velocity crossfade.** Written as `playback.velocityXfade`, clamped to the schema's 32
+   (Analog Pad's 45 is the only clamp in the corpus, noted in the bundle). It is **inert** unless
+   the player is in `velocityMode: "anchored"`, which this import does *not* set: anchored needs
+   a measured level and a played velocity per layer that the library does not state, and
+   inventing them would change how every imported bundle sounds. The number is preserved
+   faithfully; the mode is not claimed.
+6. **Stacked elements are not forced into layers.** Where a Part sounds two elements over the
+   same velocity *and* key span — MK 80's `p` and `f` are both 1-127/0-127, and Nord's
+   "Nord Grand Lady EDIT" adds a `Note on` transient across the whole range on top of the four
+   Grand Lady layers — no velocity map can express it. The reader takes the largest subset of
+   the group that *is* a clean split (the four Grand Lady layers, from the same library's
+   `red Grand Lady`) and resolves the rest separately, rather than alternating a hammer
+   transient with the piano as a round robin.
+
+### 132. Before / after, per library
+Bundle count from the name heuristic, then from the DPFM. Every bundle in both columns passes
+`validateBundle` with zero errors; the conversion stayed bit-perfect throughout.
+
+| Library | Before | After | What changed |
+|---|---|---|---|
+| Montage Triton Library.X7L | 13 | **8** | all five `*_Low`/`*_High` pairs merged as the two velocity layers the library declares, with its own crossfades (Romance 15, Stage EP 18, Brass 25, analogpad 45 clamped to 32, Strings 24). `String Low` + `Strung High` merged despite the typo. `VelvetPad`, `M1 Organ`, `Uni CHoir` single-layer, as their parts say |
+| New York Grand 88 SE.X7L | 3 | **2** | `NY p/mp/mf SE` keep the DPFM's own windows 1-32 / 33-83 / 84-127 instead of synthesised thirds; `NY note off SE` became 29 release zones of that bundle instead of a bundle |
+| Nord Stage V-1.0.X8L | 4 | **2** | `Grand Lady D2/D4/D5/D7` merged into one four-layer instrument (1-42 / 43-69 / 70-90 / 91-127) across two different key maps; `Note off` became 43 release zones. `Note on` stays separate — it is stacked, not layered |
+| NRD Grand Imperial.X7L | 3 | **2** | `Imperial P/MP/F` keep the DPFM windows 1-84 / 85-110 / 111-127 (six elements folded to three layers on the same-waveform rule); `Note off` became 86 release zones of `Note on` |
+| JM Dyno Piano XL.X7L | 1 (4 layers) | **1 (5 layers)** | the source's own seven windows over `DYNO 1..5` instead of four invented bands |
+| MKS20 PN1 PN2.X7L | 1 (2 layers) | **2** | `MKS20 pn1` and `MKS20 pn2` are never played in the same Part — they are two instruments, and the name stem `MKS20` was merging them |
+| MK 80 C Rhodes.X7L | 1 | 1 | unchanged. The DPFM confirms the pair is one instrument; both elements are 1-127/0-127, so the windows still come from measured level |
+| Crystal Rhodes.X7L | 1 | 1 | unchanged. The DPFM independently confirms the four key-split partners are one Part; its windows are refused because each waveform already carries eight velocity windows of its own |
+| D50 roland.X7L | 2 | 2 | unchanged, now on the DPFM's authority rather than on the names |
+| kt76 grandpiano ensoniq.X7L | 1 | 1 | unchanged |
+| Arizona Grand 88 SE, JM Symphoniq, DX7-Original-ROMs | 0 | 0 | still refused, same reasons (two truncated, one parameter-only) |
+
+**10 of 13 libraries; 30 bundles became 22; 1,476 samples became 1,397; every one valid.** The
+drop is release samples moving inside their instrument plus the five Triton merges, offset by
+MKS20 splitting into the two instruments its performances actually use.
+
+### 133. Testing
+`test/dpfm.test.ts`, 29 tests. Synthetic fixtures carry a real DPFM block — chunk list, the bare
+part count at +737, the `u16 BE` 8 in front of each eight-element run — so a change that breaks
+the real decode breaks these too. Covered: every element field; a waveform number above 255 read
+little-endian; switched-off slots and preset-bank elements excluded from grouping; key-off
+elements separated from the body; six refusals, one per failure class (part count mismatch,
+impossible velocity limit, impossible note limit, unknown bank on a switched-on element, a
+library reference absent from the catalogue, an XA value the synth does not define); the window
+placement rules (overlap gives midpoint, gap gives midpoint, same waveform merged, stacked
+refused, nested refused, key split refused); two waveforms with unrelated names *and* different
+key maps merged into one instrument with per-layer ladders; the same library without a DPFM
+falling back to the name heuristic and producing two bundles; waveforms kept apart when no Part
+plays them together; a release zone written with `rel_` naming and `rtDecayDb` 0 into a bundle
+that validates with `playback.velocityXfade` set; and the naming rules.
+
+One test is the ground truth itself: **all eight elements of Part 1 of `0:Romance Piano TRFM`**
+read back out of the client's real `Montage Triton Library.X7L` — waveform name and number,
+velocity limits, note limits, crossfade, XA control and element group, row for row against the
+MODX capture — plus the assertion that the library's 13 waveforms group into its 8 declared
+instruments. It skips rather than fails when the file is absent.
+
+`test/dpfmScan.test.ts` is a read-only corpus harness on the batch-import pattern, skipped
+unless `JM_DPFM_IN` is set.
+
+`npm run test -w jm-capture`: **320 passing**, up from 291, with only the two pre-existing
+failures from separate uncommitted work — `fxStability > svFilter` and `dropImport > detects the
+right pitch on real samples whose names are stripped` (0 files found on this machine). Both were
+failing identically before this work. `npx tsc -p tsconfig.json --noEmit` reports only the
+pre-existing `units.ts(894)` `svFilter` error.
+
+### 134. Not touched
+`packages/jmi-format` is **unchanged** — no schema, type, validator or C++ edit was needed.
+`releaseZones` with `rtDecayDb`, the `samples/rel_...` file-name pattern and
+`playback.velocityXfade` were all already in `instrument.schema.json` and in `jmi_format.h`;
+`velocityMap.maxItems` is already 16, so JM Dyno's five source layers need no fold. The client's
+library at `C:\Users\amano\Documents\JM Signature\Library` was not written to — the acceptance
+run converted into a scratch folder, and its 34 bundles are untouched. `waveformStem`,
+`findKeySplitGroups`, `velocityWindows`, `foldSourceWindows` and `MAX_VELOCITY_LAYERS` keep their
+behaviour and their tests; the recording paths, the sampler, the FX rack and the drop importer
+are unchanged.

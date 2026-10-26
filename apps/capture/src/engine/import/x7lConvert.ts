@@ -89,7 +89,7 @@ export function convertInstrument(
   let done = 0;
   const total = plan.sampleCount;
 
-  for (const zone of plan.zones) {
+  for (const zone of [...plan.zones, ...plan.releaseZones]) {
     for (const s of zone.samples) {
       const wf = lib.waveforms[s.waveformIndex];
       const kz = wf.keyzones[s.keyzoneIndex];
@@ -132,7 +132,7 @@ export function convertInstrument(
     instrumentName: plan.name,
     bundlePath,
     sampleCount: total,
-    zoneCount: plan.zones.length,
+    zoneCount: plan.zones.length + plan.releaseZones.length,
     bytesWritten,
     keyRangeLo: plan.keyRangeLo,
     keyRangeHi: plan.keyRangeHi,

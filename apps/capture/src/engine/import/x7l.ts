@@ -15,7 +15,11 @@
  *                              terminated by the first non-`[A-Z]{4}` tag
  *
  * `E***` blocks are catalogues; `D***` blocks hold the matching payloads.
- * Only four matter here: EWFM/DWFM (key maps) and EWIM/DWIM (audio).
+ * Four matter for the audio: EWFM/DWFM (key maps) and EWIM/DWIM (audio). A
+ * fifth, EPFM/DPFM, holds the performances — which waveforms the library
+ * itself groups into one instrument. That block is decoded in `dpfm.ts`, which
+ * documents its layout and the evidence for every field; it is advisory, so a
+ * library whose DPFM cannot be read still converts.
  *
  * ── Catalogue block (`E***`) ────────────────────────────────────────────────
  *   [tag:4][size:u32 BE][count:u32 BE] then `count` × ["Entr"][len:u32 BE][body]
@@ -84,6 +88,8 @@
  * (key range, velocity range) slot. That is the corroboration the reader
  * enforces — see `verifyLayout` and `readKeyMap` below.
  */
+
+import { decodeDpfm, type DpfmDecode } from './dpfm';
 
 /** Thrown for anything the reader does not fully understand. */
 export class X7lFormatError extends Error {
@@ -190,6 +196,14 @@ export interface X7lLibrary {
   performances: string[];
   waveforms: X7lWaveform[];
   totalPcmBytes: number;
+  /**
+   * The decoded DPFM performance block — which waveforms the library itself
+   * groups together, with their velocity and key ranges. `null` when the
+   * library has no DPFM block or nothing in it could be read; individual
+   * records the reader declined are listed in `dpfm.skipped`. Advisory: the
+   * planner falls back to its name heuristic wherever this is silent.
+   */
+  dpfm: DpfmDecode | null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -447,7 +461,27 @@ export function parseX7l(bytes: Uint8Array): X7lLibrary {
     });
   }
 
-  return { version, blocks, performances, waveforms, totalPcmBytes };
+  // ---- DPFM: the library's own grouping (advisory) ----
+  // Read last, because resolving an element's waveform reference needs the
+  // EWIM ids. Any failure here leaves `dpfm` null and the importer falls back
+  // to its name heuristic — a library still converts without it.
+  let dpfm: DpfmDecode | null = null;
+  if (has('DPFM')) {
+    try {
+      const records = readBlockRecords(bytes, at('DPFM'), 'DPFM', 'Data');
+      const decoded = decodeDpfm(
+        bytes,
+        records,
+        performances,
+        waveforms.map((w) => w.id),
+      );
+      dpfm = decoded.performances.length ? decoded : null;
+    } catch {
+      dpfm = null;
+    }
+  }
+
+  return { version, blocks, performances, waveforms, totalPcmBytes, dpfm };
 }
 
 /**

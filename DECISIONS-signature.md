@@ -3171,3 +3171,121 @@ and PRE-DELAY all read in full, and the phaser shows RATE · DEPTH · FEEDBACK �
   assertions, they changed between runs, and they pass in the 5/5 above.
 - `npm run build -w @jm/jmi-format` + `npm test -w @jm/jmi-format`: **43/43** (18 new).
   Capture's side is logged in DECISIONS-capture.md §94-99.
+
+## The agreed category names reach the UI (2026-10-26, third pass)
+
+Client: *"I don't see the name category changes."* He was right. The four
+names he agreed with the artist —
+
+| world id (unchanged) | display name |
+|---|---|
+| `rhodes-ep` | **JM Pianos** |
+| `mks` | **MKS** |
+| `fm` | **FM Keys** |
+| `strings` | **Strings** |
+
+— had been applied to `worldName()` in an earlier pass, but the nav strip in
+`src/ui/Perform.h` carried its **own copy** of the labels
+(`const char* names[] = { "RHODES / EP", ... }`) and never read `worldName()`.
+The one surface he looks at most was the one surface that still said the old
+thing. That is the whole failure, and patching the two strings would leave the
+next rename to fail the same way.
+
+**The world ids are untouched.** `rhodes-ep | mks | fm | strings` is in
+`instrument.schema.json`, the shared C++ reader, every saved preset and all 25
+of his bundles. `worldJsonId()` is the wire format; `worldName()` is the label.
+They are now visibly two different functions with two different jobs.
+
+### Where a display name lives
+
+One table per language, and nothing else spells a category out:
+
+| | where | used by |
+|---|---|---|
+| **TypeScript** (source of truth) | `packages/jmi-format/src/worlds.ts` — `WORLD_DISPLAY_NAMES`, `worldDisplayName()`, `worldOptions()`, `worldCatchAllHint()` | JM Capture |
+| **C++** (mirror) | `jm::worldName()` / `jm::worldCatchAllHint()` in `src/engine/FxParams.h` | MIREKU |
+
+This follows the pattern `FxParams.h` already uses for the FX registry: a TS
+source of truth in `packages/jmi-format`, a C++ mirror with a comment saying
+so. The alternative — making `FxParams.h` `#include "jmi_format.h"` so there is
+literally one definition — was rejected: it would pull the shared JSON parser
+into a header included by every UI translation unit to share four strings. A
+rename is one edit in each file, and the UI self-check now fails if the two
+disagree with the agreed list.
+
+`worlds.ts` is a **new file**; the only edits to existing files in
+`packages/jmi-format` are one `export * from './worlds.js'` line in `index.ts`
+and one in `web.ts`. Nothing already in that package was changed, because it
+carries another product's work.
+
+### Every place a world is shown, and what it now reads
+
+- **nav strip** (`Perform.h` HeaderBar) — was the hardcoded array, now
+  `worldName(i)`; `worldName` already returns `"PERFORM"` for the fifth,
+  out-of-range page, so all five cells come from one call.
+- **slot strip world combo** and the **slot "World" submenu** (`Perform.h`) —
+  already `worldName()`.
+- **slot header / plaque titles** (`Perform.h`, `Panels.h`) — already
+  `worldName().toUpperCase()`.
+- **preset-browser empty states**, both the "no user presets for X" and the "no
+  X instruments in your library" message (`Panels.h`) — already `worldName()`.
+- **re-categorise menu** (`Panels.h`) — `worldName()`, and the "(everything
+  else)" hint on Strings now comes from `worldCatchAllHint()` instead of a
+  `w == 3` literal inside the popup, so the catch-all note travels with the
+  name. **Strings remains the catch-all**: organs, bells, pads, choirs, brass.
+- **FX rack slot label** `A  (JM Pianos)` (`Panels.h`) — already `worldName()`.
+- **host parameter names** `A · JM PIANOS · Bark` (`PluginProcessor.cpp`) —
+  already `worldName()`.
+
+### Casing
+
+`worldName()` returns the name as it is written in prose — "JM Pianos". The
+all-caps surfaces upper-case at the point of drawing, which they already did:
+`drawTabCell` in `Hardware.h` calls `.toUpperCase()` on every tab cell, and the
+titles call it themselves. So the plaque reads **JM PIANOS** and a menu reads
+**JM Pianos**, from one string.
+
+### Layout: the wider labels needed no work
+
+"JM PIANOS" and "FM KEYS" are longer in characters than "RHODES / EP" and "FM",
+and the nav strip has fixed geometry (`L::navX/navY/navW/navH` = 400,24,616,50)
+with five equal cells from round 3's even-distribution fix. Measured in the
+self-check at the real 15 pt display font:
+
+| cell | drawn | width | cell | clear |
+|---|---|---|---|---|
+| 0 | JM PIANOS | 81 px | 121 px | 40 px |
+| 1 | MKS | 32 px | 122 px | 90 px |
+| 2 | FM KEYS | 64 px | 121 px | 57 px |
+| 3 | STRINGS | 65 px | 122 px | 57 px |
+| 4 | PERFORM | 72 px | 122 px | 50 px |
+
+"JM PIANOS" is in fact *narrower* than the "RHODES / EP" it replaces — the
+slash and its two spaces cost more than the extra letters. The widest label has
+40 px of clearance, the strip still reads evenly, and nothing moved. Snapshot:
+`build/snapshots/mireku-nav-strip-category-names.png`, checked against
+`docs/jm-design-reference/ui-reference/01-approved-ui-look-and-feel-rhodes-page.png`.
+
+### What stops this recurring
+
+`UiSelfCheck` now asserts, for all five cells: the button text **is**
+`worldName(i)` (so a second hardcoded array fails the suite), the text **is**
+the agreed name (so a rename that reaches only one app fails it), and the drawn
+string fits its cell with at least 12 px clear (so a future longer name is
+caught as a layout problem rather than silently clipped).
+
+### Verification
+
+- Release build: **exit 0**. The first link failed `LNK1104` on
+  `MIREKU.exe` — the client had MIREKU open, as expected; the running
+  standalone (**PID 53616**) was terminated and the build then linked. **The
+  standalone was not launched afterwards.**
+- `ctest -C Release`: **7/7 passed**, 49.2 s — EngineTests 9.33, UiSelfCheck
+  33.34, NullTest 1.72, RateBufferMatrix 2.88, AudioRegression 0.59,
+  NeutralDefaults 0.73, RenameMigration 0.12.
+- `pluginval --strictness-level 10 --skip-gui-tests` on
+  `Mireku_artefacts/Release/VST3/MIREKU.vst3`: **SUCCESS**, exit 0.
+- `MirekuSnapshot` under the CTest environment: **SELF-CHECK PASSED (0
+  failures)**. (Run WITHOUT `JM_LIBRARY_DIR=testdata` it fails `Omni: one note
+  reaches all four slots` — the pre-existing, documented reason the suite is
+  pinned to `testdata` in CMakeLists.)

@@ -4,5 +4,6 @@
  * import from here; the full index (validator, WAV I/O) is main-process only.
  */
 export * from './types.js';
+export * from './worlds.js';
 export * from './velocity.js';
 export * from './fx-params.js';

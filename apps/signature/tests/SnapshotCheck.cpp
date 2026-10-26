@@ -666,6 +666,47 @@ int main (int argc, char** argv)
         std::printf ("  nav cell widths %d..%d\n", minW, maxW);
         CHECK (maxW - minW <= 1, "nav cells evenly spaced (reference distribution)");
 
+        // ---------------------------------------- CATEGORY DISPLAY NAMES
+        // The client agreed four names with the artist and reported "I don't
+        // see the name category changes": the strip hardcoded its own copy of
+        // the labels, so it kept saying RHODES / EP and FM after worldName()
+        // was meant to be the single source. These two checks are what stops
+        // that recurring — the labels must BE worldName()'s, and they must fit.
+        {
+            const char* expect[5] = { "JM Pianos", "MKS", "FM Keys", "Strings", "PERFORM" };
+            for (int i = 0; i < (int) tabs.size(); ++i)
+            {
+                std::printf ("  nav cell %d: \"%s\"\n", i, tabs[(size_t) i]->getButtonText().toRawUTF8());
+                CHECK (tabs[(size_t) i]->getButtonText() == juce::String (worldName (i)),
+                       "nav cell label comes from worldName()");
+                CHECK (tabs[(size_t) i]->getButtonText() == juce::String (expect[i]),
+                       "nav cell carries the name the client agreed");
+            }
+
+            // "JM PIANOS" and "FM KEYS" are wider than "RHODES / EP" and "FM".
+            // drawTabCell upper-cases and draws centred at 15 pt display with
+            // no eliding, so a label wider than its cell would simply be
+            // clipped. Measure the drawn string against the cell it has.
+            const juce::Font nav = Theme::display (15.0f);
+            for (auto* t : tabs)
+            {
+                const auto drawn = t->getButtonText().toUpperCase();
+                const int w = juce::GlyphArrangement::getStringWidthInt (nav, drawn);
+                std::printf ("  label \"%s\" %d px in a %d px cell (%d px clear)\n",
+                             drawn.toRawUTF8(), w, t->getWidth(), t->getWidth() - w);
+                CHECK (w <= t->getWidth() - 12,
+                       "nav label fits its cell with breathing room");
+            }
+
+            // The cells are siblings of the SegmentStrip (both are children of
+            // the HeaderBar), so snapshotting the strip alone captures an empty
+            // plaque. Take the header's nav rectangle, which has both.
+            saveImage (hdr->createComponentSnapshot (juce::Rectangle<int> (L::navX - 6, L::navY - 6,
+                                                                           L::navW + 12, L::navH + 12),
+                                                     true, 2.0f),
+                       "mireku-nav-strip-category-names.png");
+        }
+
         savePng (*ed, "round3-full-rhodes.png");
 
         // the gear menu drawn over the live window, exactly as the LookAndFeel

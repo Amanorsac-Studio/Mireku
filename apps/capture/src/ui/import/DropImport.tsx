@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { midiToNoteName } from '@jm/jmi-format/web';
+import { midiToNoteName, worldCatchAllHint, worldOptions } from '@jm/jmi-format/web';
 import type { DropConvertResult, DropProgress, DropScanResult } from '../../../electron/preload';
 import {
   planDrop,
@@ -33,12 +33,18 @@ const OFFSET_OPTIONS: ListOption[] = [
   { value: '24', label: 'Two octaves up (+24)' },
 ];
 
-const WORLD_OPTIONS: ListOption[] = [
-  { value: 'rhodes-ep', label: 'Rhodes / Electric Piano' },
-  { value: 'mks', label: 'MKS' },
-  { value: 'fm', label: 'FM' },
-  { value: 'strings', label: 'Strings' },
-];
+/**
+ * The agreed category names, from the ONE place they live:
+ * WORLD_DISPLAY_NAMES in packages/jmi-format/src/worlds.ts. This list used to
+ * say "Rhodes / Electric Piano" — a third spelling, different again from the
+ * wizard's and from MIREKU's. Strings carries its catch-all hint, because
+ * picking a category for a drop of organs or brass is exactly where the player
+ * needs to be told.
+ */
+const WORLD_OPTIONS: ListOption[] = worldOptions().map(({ id, label }) => {
+  const hint = worldCatchAllHint(id);
+  return { value: id, label: hint ? `${label} ${hint}` : label };
+});
 
 const SOUND_TYPE_OPTIONS: ListOption[] = [
   { value: 'auto', label: 'Decide from the audio' },

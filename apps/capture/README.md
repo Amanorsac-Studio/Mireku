@@ -26,6 +26,25 @@ npm run build -w jm-capture        # vite build + electron main/preload bundle
 npm run dist -w jm-capture
 ```
 
+## Batch-converting Yamaha libraries
+
+```sh
+npm run import:x7l -w jm-capture -- --in <folder of .X7L/.X8L> --out <empty folder>
+```
+
+Bit-perfect (PCM copied byte for byte, never resampled), one bundle per
+instrument via the DPFM grouping, every bundle validated, a per-file
+imported/refused report with the reason, and a summary table. **An existing
+bundle is never overwritten** — a taken name gets a numeric suffix.
+
+`--out` is required and has no default: do not convert straight into the live
+MIREKU library. `--help` prints the full usage. See the repo README for the
+longer note on why.
+
+Code: `src/cli/x7lBatch.ts` (the batch itself, also used by
+`test/batchImport.test.ts`), `src/cli/importX7lMain.ts` (the command line),
+`scripts/import-x7l.mjs` (esbuild launcher, no separate build step).
+
 ## Architecture map
 
 ```

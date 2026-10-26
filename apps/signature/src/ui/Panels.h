@@ -514,7 +514,9 @@ private:
                 juce::PopupMenu cats;
                 for (int w = 0; w < 4; ++w)
                     cats.addItem (10 + w, juce::String (worldName (w)).toUpperCase()
-                                          + (w == 3 ? "   (everything else)" : juce::String()),
+                                          + (juce::String (worldCatchAllHint (w)).isEmpty()
+                                                 ? juce::String()
+                                                 : "   " + juce::String (worldCatchAllHint (w))),
                                   w != currentWorld, w == currentWorld);
                 m.addSeparator();
                 m.addSubMenu ("Move to category", cats);

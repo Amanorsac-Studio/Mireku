@@ -10,6 +10,7 @@
     "dev": "vite",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.electron.json --noEmit",
     "test": "vitest run",
+    "import:x7l": "node scripts/import-x7l.mjs",
     "build:renderer": "vite build",
     "build:electron": "node scripts/build-electron.mjs",
     "build": "npm run build:renderer && npm run build:electron",

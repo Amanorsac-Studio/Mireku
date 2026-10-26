@@ -2280,3 +2280,151 @@ run converted into a scratch folder, and its 34 bundles are untouched. `waveform
 `findKeySplitGroups`, `velocityWindows`, `foldSourceWindows` and `MAX_VELOCITY_LAYERS` keep their
 behaviour and their tests; the recording paths, the sampler, the FX rack and the drop importer
 are unchanged.
+
+## The X7L batch import becomes a real command (2026-10-26)
+
+Converting the artist's libraries meant running a vitest file with two
+environment variables:
+
+```
+JM_BATCH_IN=... JM_BATCH_OUT=... npx vitest run test/batchImport.test.ts
+```
+
+That was honest about where the code could run, not about what it was. The
+client does this every time a batch arrives, so it is now:
+
+```
+npm run import:x7l -w jm-capture -- --in <folder> --out <folder>
+```
+
+### Where it lives, and why not `npx jmi import`
+
+`jmi` is the bin of `packages/jmi-format`, and **that package cannot depend on
+an app** — the X7L reader, the DPFM grouping and the converter are all in
+`apps/capture/src/engine/import/`. Moving them down into `jmi-format` would
+mean moving the Yamaha-specific parsing into the shared format package, and
+that package currently carries another product's work and should not be
+destabilised. So the command lives where the importer lives:
+
+| file | what |
+|---|---|
+| `src/cli/x7lBatch.ts` | the batch itself: `runBatchImport`, `freeBundleName`, `refusalReason`, `summaryLines` |
+| `src/cli/importX7lMain.ts` | argument parsing, help text, exit code |
+| `scripts/import-x7l.mjs` | esbuild launcher — bundles the TS entry and imports it in the same process |
+
+`src/cli` rather than `src/engine/import` because the batch needs `node:fs`
+directly, and `convertInstrument` deliberately takes an **injected** `ImportFs`
+so the importer stays usable from the renderer. The launcher means there is no
+separate build step to remember and no stale `dist-cli` to run by accident;
+esbuild is already a devDependency here and already builds `dist-electron`.
+
+`test/batchImport.test.ts` now **imports** `freeBundleName` and
+`runBatchImport` instead of defining them, so the never-overwrite guard keeps
+the test that proves it and there is exactly one conversion path. The
+`JM_BATCH_IN` / `JM_BATCH_OUT` entry point still works (it is referenced
+further up this file) and is now a two-line call into the same function.
+
+### Behaviour
+
+Unchanged from the harness, because the harness was correct:
+`parseX7l` -> `planImport` (DPFM-based grouping) -> `convertInstrument`,
+**bit-perfect** — each keyzone's PCM is copied byte for byte into a WAV with a
+matching header; nothing is resampled, re-dithered or normalised. One bundle
+per instrument. Every bundle is validated against `instrument.schema.json`
+before it is counted as imported.
+
+**Never overwrites an existing bundle.** `freeBundleName` checks both the disk
+and the names handed out earlier in the same run, and appends a numeric suffix
+*before* the `.jmi` (`MKS20_2.jmi`, never `MKS20.jmi.jmi`). This is
+non-negotiable: an earlier run of the harness destroyed one of the client's own
+bundles by overwriting it. In the real run below it fired twice.
+
+**Refusal reasons are read off the throw, not guessed from the message.**
+`x7l.ts` already distinguishes `X7lTruncatedError`, `X7lNoAudioError` and
+`X7lFormatError`; `refusalReason()` turns each into the client's terms —
+a truncated file says how many bytes are missing and to re-download, a
+parameter-only library explains that it has to be sampled off the hardware, an
+unsupported version says so. Four new tests cover the mapping.
+
+A partial or refused library is **not** a failure exit: thirteen libraries of
+which two are bad downloads is a successful run that found two bad files. Exit
+1 only if nothing at all came through.
+
+### `--out` has no default. Why.
+
+The client's library is `Documents/JM Signature/Library` via an explicit
+`libraryPath` in his settings, and it holds the 25 bundles he is performing
+from. That is the only destination that would not need moving afterwards — and
+it is the one place a batch of freshly converted, un-auditioned instruments
+must not land by default, on a command whose whole point is that he runs it
+himself, often, from a shell. The never-overwrite guard protects what is
+already there; it cannot un-mix the new ones in among them.
+
+The other candidate default, something like `Documents/MIREKU/Imported
+Libraries`, is safe but silently puts gigabytes somewhere he then has to find.
+Between a dangerous default and an unhelpful one, the command **asks**:
+omitting `--out` prints why, and names a folder worth using, so one read is
+enough to type the real line. Nothing is read or written until both folders are
+given.
+
+### The real run
+
+`npm run import:x7l -w jm-capture -- --in "C:/Users/amano/Downloads/JM Sounds"
+--out <scratch folder>` — exit 0, **10 of 13 libraries imported, 22 bundles**.
+The live library at `Documents/JM Signature/Library` was not written to and
+still holds its 25 bundles.
+
+```
+==== RESULT: 10/13 libraries imported ====
+refused   Arizona Grand 88 SE.X7L      0 bundle(s)     0 samples     0 MB  truncated file - declares 411,745,528 bytes, only 92,274,688 present (319,470,840 missing). Re-download it; nothing was written.
+imported  Crystal Rhodes.X7L           1 bundle(s)   231 samples   629 MB
+imported  D50 roland.X7L               2 bundle(s)    21 samples    26 MB
+refused   DX7-Original-ROMs.x7l        0 bundle(s)     0 samples     0 MB  parameter-only library - EPFM/DPFM blocks only, no EWIM/DWIM audio; has to be sampled off the hardware
+imported  JM Dyno Piano XL.X7L         1 bundle(s)   115 samples   238 MB
+refused   JM Symphoniq.X7L             0 bundle(s)     0 samples     0 MB  truncated file - declares 454,276,455 bytes, only 163,577,856 present (290,698,599 missing). Re-download it; nothing was written.
+imported  kt76 grandpiano ensoniq.X7L  1 bundle(s)    22 samples    27 MB
+imported  MK 80 C Rhodes.X7L           1 bundle(s)    56 samples    49 MB
+imported  MKS20 PN1 PN2.X7L            2 bundle(s)    58 samples    41 MB
+imported  Montage Triton Library.X7L   8 bundle(s)   204 samples   346 MB
+imported  New York Grand 88 SE.X7L     2 bundle(s)   159 samples   297 MB
+imported  Nord Stage V-1.0.X8L         2 bundle(s)   232 samples   124 MB
+imported  NRD Grand Imperial.X7L       2 bundle(s)   378 samples   191 MB
+```
+
+The never-overwrite guard fired twice within the run: `MKS20_2.jmi` and
+`Note_on_2.jmi`.
+
+## The agreed category names in JM Capture (2026-10-26)
+
+MIREKU's side is logged in DECISIONS-signature.md. Capture has to agree with
+it, so both apps read **one** table: `WORLD_DISPLAY_NAMES` in the new
+`packages/jmi-format/src/worlds.ts` (JM Pianos / MKS / FM Keys / Strings).
+`worlds.ts` is a new file and the only edits to the rest of `jmi-format` are
+one `export *` line each in `index.ts` and `web.ts` — that package carries
+another product's work and nothing already in it was touched.
+
+World **ids** are unchanged: `rhodes-ep | mks | fm | strings`.
+
+Updated in Capture:
+
+- `src/ui/wizard/SetupWizard.tsx` — the New Session **World** step; its local
+  `WORLDS` list said "Rhodes / EP" and "FM". Now `worldOptions()`.
+- `src/ui/import/DropImport.tsx` — the drop-import world picker, which had a
+  *third* spelling, "Rhodes / Electric Piano". Now `worldOptions()`, with
+  Strings carrying `worldCatchAllHint()` — "Strings (everything else)" —
+  because choosing a category for a drop of organs or brass is exactly where
+  the player needs telling that Strings is the catch-all.
+- `src/ui/App.tsx` status bar, `src/ui/home/HomeScreen.tsx` saved-session list
+  and `SetupWizard.tsx`'s Review step each printed the **raw world id** at the
+  player ("rhodes-ep - auto"). All three now use `worldDisplayName()`.
+
+### Verification
+
+- `npm run test -w jm-capture`: **326 passed**, 7 skipped, same **2
+  pre-existing failures** as before this work (`dropImport` pitch detection,
+  `fxStability` svFilter). 326 vs 320 before: the 6 new tests are the batch
+  command's.
+- `npm run typecheck -w jm-capture`: the single pre-existing
+  `src/engine/fx/units.ts(894)` svFilter error, no new ones.
+- `npm run build -w jm-capture`: **clean** (vite + electron main/preload).
+

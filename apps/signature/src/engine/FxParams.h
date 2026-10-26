@@ -292,10 +292,49 @@ inline ParamValues defaultEngineParams (int world)
     return out;
 }
 
+// ------------------------------------------------- category display names
+//
+// THE ONE PLACE a category name is written in C++. The client agreed four
+// names with the artist, and they used to be retyped in the nav strip
+// (Perform.h) as well as here, so the rename reached one and not the other and
+// he reported "I don't see the name category changes".
+//
+//   world id (NEVER changes)   display name
+//   rhodes-ep                  JM Pianos
+//   mks                        MKS
+//   fm                         FM Keys
+//   strings                    Strings      (the catch-all)
+//
+// The ids stay `rhodes-ep | mks | fm | strings`: they are in
+// instrument.schema.json, the shared C++ reader, every saved preset and all of
+// the artist's bundles. See worldJsonId() below — that is the wire format and
+// it is not a display string.
+//
+// MIRRORS packages/jmi-format/src/worlds.ts (WORLD_DISPLAY_NAMES), which is
+// the source of truth and is what JM Capture reads, so the two apps agree. A
+// rename is one edit there and one edit here; nothing else in this app spells
+// a category out. Every caller — the nav plaque, the slot header and plaque
+// titles, the preset-browser empty states, the slot and re-categorise menus,
+// the FX rack's slot label and the host parameter names — goes through here.
+//
+// Returned mixed-case, as the name is written in prose and in menus. Surfaces
+// whose typography is all-caps upper-case it at the point of drawing (the nav
+// cells do it inside drawTabCell; titles call .toUpperCase()).
 inline const char* worldName (int w)
 {
-    switch (w) { case 0: return "RHODES / EP"; case 1: return "MKS"; case 2: return "FM"; case 3: return "STRINGS"; }
+    switch (w) { case 0: return "JM Pianos"; case 1: return "MKS"; case 2: return "FM Keys"; case 3: return "Strings"; }
     return "PERFORM";
+}
+
+/// "(everything else)" for the catch-all category, empty for the others.
+///
+/// Strings is the deliberate catch-all, per the client: anything that is not a
+/// piano/Rhodes/EP, an MKS or FM — organs, bells, pads, choirs, brass — is
+/// Strings. The re-categorise menu says so out loud, and the hint lives beside
+/// the name instead of being a `w == 3` special case inside a popup menu.
+inline const char* worldCatchAllHint (int w)
+{
+    return w == 3 ? "(everything else)" : "";
 }
 inline const char* worldJsonId (int w)
 {

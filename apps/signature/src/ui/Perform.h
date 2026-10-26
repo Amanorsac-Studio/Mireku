@@ -753,11 +753,16 @@ public:
     {
         using L = Theme::L;
         addAndMakeVisible (navStrip_);
-        const char* names[] = { "RHODES / EP", "MKS", "FM", "STRINGS", "PERFORM" };
+        // The tab labels are NOT written here. They come from worldName()
+        // (FxParams.h), the single C++ home for the agreed category names, so
+        // the strip can never drift from the slot headers, the empty states and
+        // the menus again — which is exactly what had happened: this array
+        // still said "RHODES / EP" / "FM" after the rename. worldName() returns
+        // "PERFORM" for the fifth, out-of-range page, which is what cell 4 is.
         for (int i = 0; i < 5; ++i)
         {
             auto& b = navs_[(size_t) i];
-            b.setButtonText (names[i]);
+            b.setButtonText (worldName (i));
             b.setClickingTogglesState (true);
             b.setRadioGroupId (999);
             b.setFirstCell (i == 0);

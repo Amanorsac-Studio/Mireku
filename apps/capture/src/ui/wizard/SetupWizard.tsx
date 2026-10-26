@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { Channels, World } from '@jm/jmi-format/web';
-import { midiToNoteName, noteNameToMidi } from '@jm/jmi-format/web';
+import { midiToNoteName, noteNameToMidi, worldDisplayName, worldOptions } from '@jm/jmi-format/web';
 import { createSession, planFromRange, serializeSession, type SessionConfig } from '../../engine/session';
 import { createPatchQueue } from '../../engine/patchQueue';
 import { useApp } from '../../state/appStore';
@@ -11,12 +11,14 @@ import { GoldDivider, Segmented } from '../hardware';
 import { worldAccent } from '../theme/tokens';
 import { IconLeft, IconRight } from '../assets/icons';
 
-const WORLDS: { id: World; label: string }[] = [
-  { id: 'rhodes-ep', label: 'Rhodes / EP' },
-  { id: 'mks', label: 'MKS' },
-  { id: 'fm', label: 'FM' },
-  { id: 'strings', label: 'Strings' },
-];
+/**
+ * The category names the client agreed with the artist, from the ONE place
+ * they live: WORLD_DISPLAY_NAMES in packages/jmi-format/src/worlds.ts. MIREKU
+ * reads the same table (via jm::worldName in its FxParams.h), so the wizard
+ * and the instrument cannot show different names for the same world id. Do not
+ * retype a name here.
+ */
+const WORLDS: { id: World; label: string }[] = worldOptions();
 
 const STEPS = ['Name', 'World', 'Sound Type', 'Channels', 'Mode', 'Devices', 'Sampling Plan', 'Review'];
 
@@ -280,7 +282,7 @@ export function SetupWizard() {
                 <div className="jm-title">{name || 'Untitled Instrument'}</div>
               </div>
               <Label>
-                {world} · {soundType} · {channels} · {mode} mode
+                {worldDisplayName(world)} · {soundType} · {channels} · {mode} mode
               </Label>
               <Label>
                 {plan.notes.length} notes ({midiToNoteName(plan.notes[0])}–{midiToNoteName(plan.notes[plan.notes.length - 1])}), every{' '}

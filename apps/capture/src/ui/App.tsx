@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { worldDisplayName } from '@jm/jmi-format/web';
 import { useApp } from '../state/appStore';
 import { bridge, services } from '../state/services';
 import { HomeScreen } from './home/HomeScreen';
@@ -133,7 +134,7 @@ function StatusBar() {
       {session && (
         <>
           <span className="gold">
-            {session.config.world} · {session.config.captureMode}
+            {worldDisplayName(session.config.world)} · {session.config.captureMode}
           </span>
           <span>
             {stats!.done} / {stats!.total} takes · {stats!.percent}%

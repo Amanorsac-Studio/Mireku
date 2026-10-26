@@ -6,6 +6,215 @@ import { fileURLToPath } from "node:url";
 import { encodeWav, decodeWav, validateBundle } from "@jm/jmi-format";
 import AdmZip from "adm-zip";
 
+// src/engine/import/dpfm.ts
+var ELEMENT_PAYLOAD = 149;
+var CHUNK_HEADER = 4;
+var ELEMENT_STRIDE = CHUNK_HEADER + ELEMENT_PAYLOAD;
+var ELEMENTS_PER_PART = 8;
+var OPERATOR_PAYLOAD = 51;
+var PART_COUNT_OFFSET = 737;
+var E = {
+  switch: 0,
+  bank: 1,
+  group: 2,
+  xa: 10,
+  noteLo: 11,
+  noteHi: 12,
+  velLo: 13,
+  velHi: 14,
+  velXfade: 15,
+  waveformNumberHigh: 146,
+  waveformNumber: 147
+};
+var XA_KEY_OFF = 2;
+var XA_MAX = 7;
+var BANK_PRESET = 0;
+var BANK_LIBRARY = 1;
+function u32be(b, at) {
+  return (b[at] << 24 >>> 0) + (b[at + 1] << 16) + (b[at + 2] << 8) + b[at + 3];
+}
+function u16be(b, at) {
+  return (b[at] << 8) + b[at + 1];
+}
+function u16le(b, at) {
+  return b[at] + (b[at + 1] << 8);
+}
+function elementRuns(body, payload, count, countPrefix) {
+  const stride = CHUNK_HEADER + payload;
+  const isChunk = (at) => at >= 0 && at + CHUNK_HEADER + payload <= body.length && u32be(body, at) === payload;
+  const out = [];
+  for (let q = 2; q + count * stride <= body.length; q++) {
+    if (countPrefix && u16be(body, q - 2) !== count) continue;
+    let ok = true;
+    for (let k = 0; k < count; k++) {
+      if (!isChunk(q + k * stride)) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) continue;
+    if (isChunk(q + count * stride)) continue;
+    out.push(q);
+    q += count * stride - 1;
+  }
+  return out;
+}
+function decodeRecord(body, index, name, idToIndex) {
+  if (body.length < PART_COUNT_OFFSET + 4) {
+    return { reason: `record is only ${body.length} bytes, too short to hold a part count` };
+  }
+  const declaredParts = u32be(body, PART_COUNT_OFFSET);
+  if (declaredParts < 1 || declaredParts > 16) {
+    return { reason: `declares ${declaredParts} parts, which is outside the 1..16 a performance can hold` };
+  }
+  const runs = elementRuns(body, ELEMENT_PAYLOAD, ELEMENTS_PER_PART, true);
+  const operatorParts = elementRuns(body, OPERATOR_PAYLOAD, ELEMENTS_PER_PART, false).length;
+  if (runs.length + operatorParts !== declaredParts) {
+    return {
+      reason: `declares ${declaredParts} parts but the record holds ${runs.length} element list(s) and ${operatorParts} operator list(s) (${runs.length + operatorParts} together), so the reader has either missed a part or found something that is not one`
+    };
+  }
+  const parts = [];
+  for (let p = 0; p < runs.length; p++) {
+    const elements = [];
+    for (let k = 0; k < ELEMENTS_PER_PART; k++) {
+      const at = runs[p] + k * ELEMENT_STRIDE + CHUNK_HEADER;
+      const noteLo = body[at + E.noteLo];
+      const noteHi = body[at + E.noteHi];
+      const velLo = body[at + E.velLo];
+      const velHi = body[at + E.velHi];
+      const bank = body[at + E.bank];
+      const xa = body[at + E.xa];
+      const on = body[at + E.switch] === 1;
+      const where = `part ${p + 1} element ${k + 1}`;
+      if (noteLo > noteHi || noteHi > 127) {
+        return { reason: `${where} has note limit ${noteLo}..${noteHi}, which is not a MIDI key range` };
+      }
+      if (velLo < 1 || velHi > 127 || velLo > velHi) {
+        return { reason: `${where} has velocity limit ${velLo}..${velHi}, which is not a MIDI velocity range` };
+      }
+      if (xa > XA_MAX) {
+        return { reason: `${where} has XA control ${xa}, outside the 0..${XA_MAX} the synth defines` };
+      }
+      if (body[at + E.waveformNumberHigh] !== 0) {
+        return {
+          reason: `${where} has a non-zero byte at +${E.waveformNumberHigh}, so the waveform number is not the 16-bit value at +${E.waveformNumber} this reader expects`
+        };
+      }
+      if (on && bank !== BANK_PRESET && bank !== BANK_LIBRARY) {
+        return {
+          reason: `${where} is switched on but its waveform bank byte is ${bank}, not 0 (preset) or 1 (library), so which waveform it plays cannot be established`
+        };
+      }
+      const waveformNumber = u16le(body, at + E.waveformNumber);
+      const libraryWaveform = bank === BANK_LIBRARY;
+      const waveformIndex = libraryWaveform ? idToIndex.get(waveformNumber) ?? null : null;
+      if (libraryWaveform && waveformIndex === null) {
+        return {
+          reason: `${where} claims library waveform ${waveformNumber}, which is not in this library's EWIM catalogue`
+        };
+      }
+      elements.push({
+        slot: k,
+        on,
+        libraryWaveform,
+        waveformNumber,
+        waveformIndex,
+        group: body[at + E.group],
+        xa,
+        release: xa === XA_KEY_OFF,
+        noteLo,
+        noteHi,
+        velLo,
+        velHi,
+        velXfade: body[at + E.velXfade]
+      });
+    }
+    parts.push({ index: p, elements });
+  }
+  return { performance: { index, name, declaredParts, parts }, operatorParts };
+}
+function decodeDpfm(bytes, records, names, waveformIds) {
+  const idToIndex = /* @__PURE__ */ new Map();
+  waveformIds.forEach((id, i) => {
+    if (!idToIndex.has(id)) idToIndex.set(id, i);
+  });
+  const performances = [];
+  const skipped = [];
+  let parts = 0;
+  let operators = 0;
+  let elements = 0;
+  for (let i = 0; i < records.length; i++) {
+    const rec = records[i];
+    const name = names[i] ?? `Performance ${i + 1}`;
+    if (rec.offset + rec.length > bytes.length) {
+      skipped.push({ index: i, name, reason: "record runs past the end of the file" });
+      continue;
+    }
+    const body = bytes.subarray(rec.offset, rec.offset + rec.length);
+    const got = decodeRecord(body, i, name, idToIndex);
+    if ("reason" in got) {
+      skipped.push({ index: i, name, reason: got.reason });
+      continue;
+    }
+    performances.push(got.performance);
+    parts += got.performance.parts.length;
+    operators += got.operatorParts;
+    elements += got.performance.parts.length * ELEMENTS_PER_PART;
+  }
+  const corroboration = [];
+  if (performances.length) {
+    corroboration.push(
+      `DPFM: ${performances.length} of ${records.length} performance record(s) decoded, ${parts} AWM2 part(s) and ${elements} element slot(s); every record's part count matched the ${parts} element list(s) plus ${operators} operator list(s) found in it.`
+    );
+  }
+  if (skipped.length) {
+    corroboration.push(
+      `DPFM: ${skipped.length} record(s) were not understood and contribute nothing to grouping (${skipped.map((s) => `"${s.name}": ${s.reason}`).join("; ")}).`
+    );
+  }
+  return { performances, skipped, corroboration };
+}
+function dpfmUsage(decode) {
+  const out = [];
+  for (const perf of decode.performances) {
+    for (const part of perf.parts) {
+      const body = [];
+      const release = [];
+      let preset = false;
+      for (const el of part.elements) {
+        if (!el.on) continue;
+        if (!el.libraryWaveform || el.waveformIndex === null) {
+          preset = true;
+          continue;
+        }
+        const layer = {
+          waveformIndex: el.waveformIndex,
+          velLo: el.velLo,
+          velHi: el.velHi,
+          noteLo: el.noteLo,
+          noteHi: el.noteHi,
+          velXfade: el.velXfade,
+          release: el.release,
+          group: el.group,
+          slot: el.slot
+        };
+        (el.release ? release : body).push(layer);
+      }
+      if (body.length === 0 && release.length === 0) continue;
+      out.push({
+        performanceIndex: perf.index,
+        performanceName: perf.name,
+        partIndex: part.index,
+        body,
+        release,
+        usesPresetWaveforms: preset
+      });
+    }
+  }
+  return out;
+}
+
 // src/engine/import/x7l.ts
 var X7lFormatError = class extends Error {
   constructor(message) {
@@ -13,16 +222,35 @@ var X7lFormatError = class extends Error {
     this.name = "X7lFormatError";
   }
 };
+var X7lTruncatedError = class extends X7lFormatError {
+  constructor(message, declaredBytes, actualBytes) {
+    super(message);
+    this.declaredBytes = declaredBytes;
+    this.actualBytes = actualBytes;
+    this.name = "X7lTruncatedError";
+  }
+};
+var X7lNoAudioError = class extends X7lFormatError {
+  constructor(message) {
+    super(message);
+    this.name = "X7lNoAudioError";
+  }
+};
 var X7L_MAGIC = "YAMAHA-YSFC";
-var SUPPORTED_EXTENSIONS = ["x7l"];
-var UNVERIFIED_EXTENSIONS = ["x8l", "x7u", "x8u", "x7a", "x8a"];
-function u32be(b, at) {
+var SUPPORTED_EXTENSIONS = ["x7l", "x8l"];
+var UNVERIFIED_EXTENSIONS = ["x7u", "x8u", "x7a", "x8a"];
+var SUPPORTED_VERSION_MAJORS = ["4", "5"];
+function u32be2(b, at) {
   need(b, at, 4, "uint32");
   return (b[at] << 24 >>> 0) + (b[at + 1] << 16) + (b[at + 2] << 8) + b[at + 3];
 }
 function u32le(b, at) {
   need(b, at, 4, "uint32");
   return b[at] + (b[at + 1] << 8) + (b[at + 2] << 16) + b[at + 3] * 16777216 >>> 0;
+}
+function u16le2(b, at) {
+  need(b, at, 2, "uint16");
+  return b[at] + (b[at + 1] << 8);
 }
 function need(b, at, len, what) {
   if (at < 0 || at + len > b.length) {
@@ -37,34 +265,33 @@ function ascii(b, at, len) {
   for (let i = 0; i < len; i++) s += String.fromCharCode(b[at + i]);
   return s;
 }
-function strings(body, from) {
-  const out = [];
-  let cur = "";
+function cstring(body, from) {
+  let s = "";
   for (let i = from; i < body.length; i++) {
     const c = body[i];
-    if (c === 0) {
-      if (cur.length) out.push(cur);
-      cur = "";
-    } else if (c >= 32 && c <= 126) {
-      cur += String.fromCharCode(c);
-    } else {
-      cur = "";
-    }
+    if (c === 0) break;
+    if (c >= 32 && c <= 126) s += String.fromCharCode(c);
   }
-  if (cur.length) out.push(cur);
-  return out;
+  return s.trim();
+}
+function mib(n) {
+  return `${(n / 1048576).toFixed(1)} MiB`;
 }
 function readBlockRecords(b, blockOffset, tag, wantTag) {
   const got = ascii(b, blockOffset, 4);
   if (got !== tag) {
     throw new X7lFormatError(`Block ${tag} at 0x${blockOffset.toString(16)} starts with "${got}"`);
   }
-  const size = u32be(b, blockOffset + 4);
-  const count = u32be(b, blockOffset + 8);
+  const size = u32be2(b, blockOffset + 4);
+  const count = u32be2(b, blockOffset + 8);
   if (count > 65535) throw new X7lFormatError(`Block ${tag} declares an implausible ${count} records`);
   const blockEnd = blockOffset + 8 + size;
   if (blockEnd > b.length) {
-    throw new X7lFormatError(`Block ${tag} runs past the end of the file (ends at ${blockEnd})`);
+    throw new X7lTruncatedError(
+      `This library file is incomplete. Its ${tag} block declares data ending at byte ${blockEnd}, but the file is only ${b.length} bytes (${mib(b.length)}) \u2014 ${mib(blockEnd - b.length)} is missing. Everything the reader can check inside the file agrees with itself, so the format is understood; the bytes simply are not there. Re-download or re-export the library and try again.`,
+      blockEnd,
+      b.length
+    );
   }
   const out = [];
   let p = blockOffset + 12;
@@ -73,7 +300,7 @@ function readBlockRecords(b, blockOffset, tag, wantTag) {
     if (rt !== wantTag) {
       throw new X7lFormatError(`Block ${tag} record ${i} has tag "${rt}", expected "${wantTag}"`);
     }
-    const len = u32be(b, p + 4);
+    const len = u32be2(b, p + 4);
     need(b, p + 8, len, `${tag} record ${i}`);
     out.push({ offset: p + 8, length: len });
     p += 8 + len;
@@ -85,15 +312,18 @@ function readBlockRecords(b, blockOffset, tag, wantTag) {
   }
   return out;
 }
+var CATALOGUE_NAME_OFFSET = 22;
 function readCatalogue(b, blockOffset, tag) {
-  return readBlockRecords(b, blockOffset, tag, "Entr").map((r) => {
+  return readBlockRecords(b, blockOffset, tag, "Entr").map((r, i) => {
     const body = b.subarray(r.offset, r.offset + r.length);
-    if (body.length < 12) throw new X7lFormatError(`${tag} entry is only ${body.length} bytes`);
+    if (body.length < CATALOGUE_NAME_OFFSET + 1) {
+      throw new X7lFormatError(`${tag} entry ${i} is only ${body.length} bytes`);
+    }
     return {
-      dataLength: u32be(body, 0),
-      dataOffset: u32be(body, 4),
+      dataLength: u32be2(body, 0),
+      dataOffset: u32be2(body, 4),
       id: (body[10] << 8) + body[11],
-      names: strings(body, 12)
+      name: cstring(body, CATALOGUE_NAME_OFFSET)
     };
   });
 }
@@ -109,21 +339,24 @@ function parseX7l(bytes) {
   if (!/^\d+\.\d+\.\d+$/.test(version)) {
     throw new X7lFormatError(`Unrecognised YSFC version string "${version}"`);
   }
-  if (!version.startsWith("4.")) {
+  const major = version.split(".")[0];
+  if (!SUPPORTED_VERSION_MAJORS.includes(major)) {
     throw new X7lFormatError(
-      `YSFC version ${version} is not supported \u2014 this reader is verified against version 4.x (MONTAGE) libraries only`
+      `YSFC version ${version} is not supported \u2014 this reader is verified against version ${SUPPORTED_VERSION_MAJORS.join(".x and ")}.x libraries only`
     );
   }
   const blocks = [];
   for (let p = 64; p + 8 <= bytes.length; p += 8) {
     const tag = ascii(bytes, p, 4);
     if (!/^[A-Z]{4}$/.test(tag)) break;
-    const offset = u32be(bytes, p + 4);
+    const offset = u32be2(bytes, p + 4);
     if (offset >= bytes.length) {
       throw new X7lFormatError(`Block ${tag} points at offset ${offset}, past the end of the file`);
     }
+    if (ascii(bytes, offset, 4) !== tag) break;
     blocks.push({ tag, offset });
   }
+  const has = (tag) => blocks.some((x) => x.tag === tag);
   const at = (tag) => {
     const hit = blocks.find((x) => x.tag === tag);
     if (!hit) {
@@ -133,6 +366,11 @@ function parseX7l(bytes) {
     }
     return hit.offset;
   };
+  if (!has("EWIM") || !has("DWIM") || !has("DWFM")) {
+    throw new X7lNoAudioError(
+      `This library holds no sampled audio, so there is nothing to import. A YSFC library stores its waveforms in the EWIM/DWIM (audio) and EWFM/DWFM (key map) blocks; this file has only ${blocks.map((x) => x.tag).join(", ") || "no"} blocks, which carry patch parameters alone. Libraries like this are programs for the synth's own tone generator \u2014 the FM patches in a DX7 ROM collection, for example \u2014 and they reference sounds the synth already has rather than shipping any audio of their own. To get these sounds into a .jmi bundle they have to be sampled off the hardware: load the library on the instrument and record it with JM Capture's guided or auto sampling mode.`
+    );
+  }
   const ewim = readCatalogue(bytes, at("EWIM"), "EWIM");
   const dwimBase = at("DWIM");
   const dwim = readBlockRecords(bytes, dwimBase, "DWIM", "Data");
@@ -142,10 +380,10 @@ function parseX7l(bytes) {
       `Catalogue mismatch: EWIM has ${ewim.length} entries, DWIM ${dwim.length} records, DWFM ${dwfm.length} records`
     );
   }
-  if (ewim.length === 0) throw new X7lFormatError("Library contains no waveforms");
+  if (ewim.length === 0) throw new X7lNoAudioError("Library contains no waveforms");
   let performances = [];
   try {
-    performances = readCatalogue(bytes, at("EPFM"), "EPFM").map((e) => e.names[e.names.length - 1] ?? "");
+    performances = readCatalogue(bytes, at("EPFM"), "EPFM").map((e) => e.name);
   } catch {
     performances = [];
   }
@@ -161,31 +399,49 @@ function parseX7l(bytes) {
         `EWIM entry ${i} points at +${entry.dataOffset}/${entry.dataLength} bytes but DWIM record ${i} is at +${expectedOffset}/${audio.length}`
       );
     }
-    const rawName = entry.names[entry.names.length - 1] ?? `Waveform ${i + 1}`;
-    const keyzones = readKeyMap(bytes, map, i);
-    verifyLayout(bytes, audio, keyzones, i);
+    const rawName = entry.name || `Waveform ${i + 1}`;
+    const { keyzones, records } = readKeyMap(bytes, map, i);
+    verifyLayout(bytes, audio, keyzones, records, i);
     let bytesHere = 0;
     let oneShot = true;
     for (const z of keyzones) {
-      bytesHere += z.pcmBytes;
-      if (z.loopEndSample !== z.lengthSamples - 1 || z.startSample !== 0) oneShot = false;
+      bytesHere += z.totalPcmBytes;
+      if (z.loopEndSample !== z.lengthSamples - 1 || z.loopStartSample !== 0 || z.startSample !== 0) {
+        oneShot = false;
+      }
     }
     totalPcmBytes += bytesHere;
     waveforms.push({
       index: i,
       id: entry.id,
       rawName,
-      name: rawName.replace(/^\d+\s*:\s*/, "").trim() || rawName,
+      name: rawName.replace(/^\d+\s*:\s*/, "").replace(/\s+/g, " ").trim() || rawName,
+      channels: keyzones[0].channels,
       keyzones,
       totalPcmBytes: bytesHere,
       oneShot
     });
   }
-  return { version, blocks, performances, waveforms, totalPcmBytes };
+  let dpfm = null;
+  if (has("DPFM")) {
+    try {
+      const records = readBlockRecords(bytes, at("DPFM"), "DPFM", "Data");
+      const decoded = decodeDpfm(
+        bytes,
+        records,
+        performances,
+        waveforms.map((w) => w.id)
+      );
+      dpfm = decoded.performances.length ? decoded : null;
+    } catch {
+      dpfm = null;
+    }
+  }
+  return { version, blocks, performances, waveforms, totalPcmBytes, dpfm };
 }
 function readKeyMap(bytes, rec, wfIndex) {
   const body = bytes.subarray(rec.offset, rec.offset + rec.length);
-  if (body.length < 4 || (body.length - 4) % KEYZONE_RECORD_BYTES !== 0) {
+  if (body.length < 4 + KEYZONE_RECORD_BYTES || (body.length - 4) % KEYZONE_RECORD_BYTES !== 0) {
     throw new X7lFormatError(
       `DWFM record ${wfIndex} is ${body.length} bytes \u2014 not 4 + a whole number of ${KEYZONE_RECORD_BYTES}-byte keyzones`
     );
@@ -197,98 +453,166 @@ function readKeyMap(bytes, rec, wfIndex) {
       `DWFM record ${wfIndex} declares ${declared} keyzones but its size holds ${actual}`
     );
   }
-  const zones = [];
-  for (let z = 0; z < actual; z++) {
-    const o = 4 + z * KEYZONE_RECORD_BYTES;
-    const zone = {
-      index: z,
+  const readRecord = (r) => {
+    const o = 4 + r * KEYZONE_RECORD_BYTES;
+    const where = `DWFM record ${wfIndex} keyzone ${r}`;
+    const channels2 = body[o + 11];
+    if (channels2 !== 1 && channels2 !== 2) {
+      throw new X7lFormatError(
+        `${where}: channel count ${channels2} is neither 1 (mono) nor 2 (stereo) \u2014 this reader is verified against those two only`
+      );
+    }
+    const z = {
       keyRangeLo: body[o],
       keyRangeHi: body[o + 1],
       velRangeLo: body[o + 2],
       velRangeHi: body[o + 3],
       rootNote: body[o + 8],
+      channels: channels2,
       sampleRate: u32le(body, o + 36),
+      loopStartSample: u32le(body, o + 44),
       loopEndSample: u32le(body, o + 48),
       startSample: u32le(body, o + 52),
-      loopStartSample: u32le(body, o + 56),
-      lengthSamples: u32le(body, o + 60),
-      pcmOffset: 0,
-      pcmBytes: 0
+      sampleId: u16le2(body, o + 56),
+      lengthSamples: u32le(body, o + 60)
     };
-    const where = `DWFM record ${wfIndex} keyzone ${z}`;
-    if (zone.keyRangeLo > zone.keyRangeHi || zone.keyRangeHi > 127) {
-      throw new X7lFormatError(`${where}: impossible key range ${zone.keyRangeLo}..${zone.keyRangeHi}`);
-    }
-    if (zone.rootNote > 127) throw new X7lFormatError(`${where}: root note ${zone.rootNote} is out of range`);
-    if (zone.velRangeLo < 1 || zone.velRangeHi > 127 || zone.velRangeLo > zone.velRangeHi) {
-      throw new X7lFormatError(`${where}: impossible velocity range ${zone.velRangeLo}..${zone.velRangeHi}`);
-    }
-    if (!LEGAL_SAMPLE_RATES.has(zone.sampleRate)) {
-      throw new X7lFormatError(`${where}: unsupported sample rate ${zone.sampleRate}`);
-    }
-    if (zone.lengthSamples === 0) throw new X7lFormatError(`${where}: zero-length sample`);
-    if (zone.loopEndSample >= zone.lengthSamples || zone.loopStartSample >= zone.lengthSamples) {
+    const upper = u16le2(body, o + 58);
+    if (upper !== 0) {
       throw new X7lFormatError(
-        `${where}: loop ${zone.loopStartSample}..${zone.loopEndSample} falls outside the ${zone.lengthSamples}-sample audio`
+        `${where}: the half-word at +58 is ${upper}, not 0 \u2014 field +56 is not the 16-bit sample handle this reader expects, so the keyzone layout cannot be trusted`
       );
     }
-    if (zone.startSample >= zone.lengthSamples) {
-      throw new X7lFormatError(`${where}: start offset ${zone.startSample} is past the end of the audio`);
+    if (z.keyRangeLo > z.keyRangeHi || z.keyRangeHi > 127) {
+      throw new X7lFormatError(`${where}: impossible key range ${z.keyRangeLo}..${z.keyRangeHi}`);
     }
-    zones.push(zone);
-  }
-  return zones;
-}
-function verifyLayout(bytes, rec, zones, wfIndex) {
-  const declared = u32be(bytes, rec.offset);
-  if (declared !== zones.length) {
+    if (z.rootNote > 127) throw new X7lFormatError(`${where}: root note ${z.rootNote} is out of range`);
+    if (z.velRangeLo < 1 || z.velRangeHi > 127 || z.velRangeLo > z.velRangeHi) {
+      throw new X7lFormatError(`${where}: impossible velocity range ${z.velRangeLo}..${z.velRangeHi}`);
+    }
+    if (!LEGAL_SAMPLE_RATES.has(z.sampleRate)) {
+      throw new X7lFormatError(`${where}: unsupported sample rate ${z.sampleRate}`);
+    }
+    if (z.lengthSamples === 0) throw new X7lFormatError(`${where}: zero-length sample`);
+    if (z.loopEndSample >= z.lengthSamples) {
+      throw new X7lFormatError(
+        `${where}: loop end ${z.loopEndSample} falls outside the ${z.lengthSamples}-sample audio`
+      );
+    }
+    if (z.loopStartSample > z.loopEndSample) {
+      throw new X7lFormatError(
+        `${where}: loop ${z.loopStartSample}..${z.loopEndSample} runs backwards`
+      );
+    }
+    if (z.startSample >= z.lengthSamples) {
+      throw new X7lFormatError(`${where}: start offset ${z.startSample} is past the end of the audio`);
+    }
+    return z;
+  };
+  const channels = readRecord(0).channels;
+  if (channels === 2 && actual % 2 !== 0) {
     throw new X7lFormatError(
-      `DWIM record ${wfIndex} holds ${declared} samples but its key map has ${zones.length} keyzones`
+      `DWFM record ${wfIndex} is stereo but holds an odd number of keyzone records (${actual}), so its left/right pairs do not line up`
+    );
+  }
+  const zones = [];
+  const slots = /* @__PURE__ */ new Map();
+  for (let r = 0; r < actual; r += channels) {
+    const left = readRecord(r);
+    if (left.channels !== channels) {
+      throw new X7lFormatError(
+        `DWFM record ${wfIndex} keyzone ${r}: channel count ${left.channels} differs from the waveform's ${channels} \u2014 a mixed-channel waveform is not understood`
+      );
+    }
+    if (channels === 2) {
+      const right = readRecord(r + 1);
+      const same = right.keyRangeLo === left.keyRangeLo && right.keyRangeHi === left.keyRangeHi && right.velRangeLo === left.velRangeLo && right.velRangeHi === left.velRangeHi && right.rootNote === left.rootNote && right.channels === 2 && right.sampleRate === left.sampleRate && right.lengthSamples === left.lengthSamples && right.loopStartSample === left.loopStartSample && right.loopEndSample === left.loopEndSample && right.startSample === left.startSample;
+      if (!same) {
+        throw new X7lFormatError(
+          `DWFM record ${wfIndex} keyzones ${r}/${r + 1} are marked stereo but do not describe the same sample (key, velocity, root, rate, length or loop differ), so they cannot be the left and right channels of one recording`
+        );
+      }
+    }
+    const index = zones.length;
+    const slot = `${left.keyRangeLo}-${left.keyRangeHi}/${left.velRangeLo}-${left.velRangeHi}`;
+    const prev = slots.get(slot);
+    if (prev !== void 0) {
+      throw new X7lFormatError(
+        `DWFM record ${wfIndex} keyzones ${prev} and ${index} both claim key ${left.keyRangeLo}..${left.keyRangeHi} at velocity ${left.velRangeLo}..${left.velRangeHi}. Two different samples in one slot cannot be mapped unambiguously, and guessing which one plays would be silent and wrong.`
+      );
+    }
+    slots.set(slot, index);
+    zones.push({
+      index,
+      ...left,
+      pcm: [],
+      pcmOffset: 0,
+      pcmBytes: 0,
+      totalPcmBytes: 0,
+      recordIndex: r
+    });
+  }
+  return { keyzones: zones, records: actual };
+}
+function verifyLayout(bytes, rec, zones, records, wfIndex) {
+  const declared = u32be2(bytes, rec.offset);
+  if (declared !== records) {
+    throw new X7lFormatError(
+      `DWIM record ${wfIndex} holds ${declared} samples but its key map has ${records} keyzone records`
     );
   }
   let p = rec.offset + 4;
   const end = rec.offset + rec.length;
   for (const zone of zones) {
-    if (p + 4 > end) {
-      throw new X7lFormatError(`DWIM record ${wfIndex} ended before keyzone ${zone.index}'s audio`);
+    zone.pcm = [];
+    zone.totalPcmBytes = 0;
+    for (let c = 0; c < zone.channels; c++) {
+      if (p + 4 > end) {
+        throw new X7lFormatError(`DWIM record ${wfIndex} ended before keyzone ${zone.index}'s audio`);
+      }
+      const byteLength = u32be2(bytes, p);
+      const expected = zone.lengthSamples * 2;
+      if (byteLength !== expected) {
+        throw new X7lFormatError(
+          `DWIM record ${wfIndex} sub-record ${zone.recordIndex + c} is ${byteLength} bytes; the key map says ${zone.lengthSamples} 16-bit samples (${expected} bytes)`
+        );
+      }
+      need(bytes, p + 4, byteLength, `DWIM record ${wfIndex} sub-record ${zone.recordIndex + c}`);
+      zone.pcm.push({ offset: p + 4, bytes: byteLength });
+      zone.totalPcmBytes += byteLength;
+      p += 4 + byteLength;
     }
-    const byteLength = u32be(bytes, p);
-    const expected = zone.lengthSamples * 2;
-    if (byteLength !== expected) {
-      throw new X7lFormatError(
-        `DWIM record ${wfIndex} sub-record ${zone.index} is ${byteLength} bytes; the key map says ${zone.lengthSamples} mono 16-bit samples (${expected} bytes)`
-      );
-    }
-    need(bytes, p + 4, byteLength, `DWIM record ${wfIndex} sub-record ${zone.index}`);
-    zone.pcmOffset = p + 4;
-    zone.pcmBytes = byteLength;
-    p += 4 + byteLength;
+    zone.pcmOffset = zone.pcm[0].offset;
+    zone.pcmBytes = zone.pcm[0].bytes;
   }
   if (p !== end) {
     throw new X7lFormatError(
-      `DWIM record ${wfIndex} has ${end - p} bytes left over after its ${zones.length} samples`
+      `DWIM record ${wfIndex} has ${end - p} bytes left over after its ${records} samples`
     );
   }
 }
 function representativeKeyzone(wf) {
-  return wf.keyzones.reduce(
+  const topVel = Math.max(...wf.keyzones.map((z) => z.velRangeHi));
+  const candidates = wf.keyzones.filter((z) => z.velRangeHi === topVel);
+  return (candidates.length ? candidates : wf.keyzones).reduce(
     (best, z) => Math.abs(z.rootNote - 60) < Math.abs(best.rootNote - 60) ? z : best
   );
 }
 function measureKeyzone(bytes, zone) {
   const n = zone.lengthSamples;
-  const view = new DataView(bytes.buffer, bytes.byteOffset + zone.pcmOffset, zone.pcmBytes);
   const tailFrom = Math.floor(n * 0.95);
   let peak = 0;
   let tailSq = 0;
   let tailN = 0;
-  for (let i = 0; i < n; i++) {
-    const v = view.getInt16(i * 2, true);
-    const a = v < 0 ? -v : v;
-    if (a > peak) peak = a;
-    if (i >= tailFrom) {
-      tailSq += v * v;
-      tailN++;
+  for (const span of zone.pcm) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset + span.offset, span.bytes);
+    for (let i = 0; i < n; i++) {
+      const v = view.getInt16(i * 2, true);
+      const a = v < 0 ? -v : v;
+      if (a > peak) peak = a;
+      if (i >= tailFrom) {
+        tailSq += v * v;
+        tailN++;
+      }
     }
   }
   const db = (x) => x <= 0 ? -144 : Math.max(-144, 20 * Math.log10(x / 32768));
@@ -297,7 +621,7 @@ function measureKeyzone(bytes, zone) {
     tailRmsDb: round2(db(tailN ? Math.sqrt(tailSq / tailN) : 0))
   };
 }
-function pcm16MonoWavHeader(dataBytes, sampleRate) {
+function pcm16WavHeader(dataBytes, sampleRate, channels) {
   const h = new Uint8Array(44);
   const dv = new DataView(h.buffer);
   const tag = (at, s) => {
@@ -309,14 +633,35 @@ function pcm16MonoWavHeader(dataBytes, sampleRate) {
   tag(12, "fmt ");
   dv.setUint32(16, 16, true);
   dv.setUint16(20, 1, true);
-  dv.setUint16(22, 1, true);
+  dv.setUint16(22, channels, true);
   dv.setUint32(24, sampleRate, true);
-  dv.setUint32(28, sampleRate * 2, true);
-  dv.setUint16(32, 2, true);
+  dv.setUint32(28, sampleRate * 2 * channels, true);
+  dv.setUint16(32, 2 * channels, true);
   dv.setUint16(34, 16, true);
   tag(36, "data");
   dv.setUint32(40, dataBytes, true);
   return h;
+}
+function keyzoneWav(bytes, zone) {
+  const header = pcm16WavHeader(zone.totalPcmBytes, zone.sampleRate, zone.channels);
+  const wav = new Uint8Array(header.length + zone.totalPcmBytes);
+  wav.set(header, 0);
+  if (zone.channels === 1) {
+    wav.set(bytes.subarray(zone.pcm[0].offset, zone.pcm[0].offset + zone.pcm[0].bytes), header.length);
+    return wav;
+  }
+  const left = zone.pcm[0].offset;
+  const right = zone.pcm[1].offset;
+  let o = header.length;
+  for (let i = 0; i < zone.lengthSamples; i++) {
+    const l = left + i * 2;
+    const r = right + i * 2;
+    wav[o++] = bytes[l];
+    wav[o++] = bytes[l + 1];
+    wav[o++] = bytes[r];
+    wav[o++] = bytes[r + 1];
+  }
+  return wav;
 }
 function round2(n) {
   return Math.round(n * 100) / 100;
@@ -347,8 +692,60 @@ function keyRanges(notes) {
 
 // src/engine/import/x7lPlan.ts
 var MAX_VELOCITY_LAYERS = 4;
-function keyMapSignature(wf) {
-  return wf.keyzones.map((z) => `${z.keyRangeLo}-${z.keyRangeHi}@${z.rootNote}`).join(",");
+var MAX_SCHEMA_VELOCITY_LAYERS = 16;
+var MAX_VELOCITY_XFADE = 32;
+var IMPORT_RT_DECAY_DB = 0;
+var DYNAMIC_TOKENS = /* @__PURE__ */ new Set([
+  "ppp",
+  "pp",
+  "p",
+  "mp",
+  "m",
+  "mf",
+  "f",
+  "ff",
+  "fff",
+  "soft",
+  "med",
+  "medium",
+  "hard",
+  "light",
+  "norm"
+]);
+function isDynamicToken(tok) {
+  return DYNAMIC_TOKENS.has(tok.toLowerCase());
+}
+function isNumberedVariant(tok) {
+  return /^[a-z]{0,3}\d{1,2}$/i.test(tok);
+}
+function waveformStem(name) {
+  let toks = name.split(/\s+/).filter((t) => t.length > 0);
+  if (toks.length > 1 && isNumberedVariant(toks[toks.length - 1])) toks = toks.slice(0, -1);
+  const kept = toks.filter((t) => !isDynamicToken(t));
+  return kept.join(" ").trim();
+}
+var POSITION_TOKENS = /* @__PURE__ */ new Set(["low", "high", "lo", "hi", "up", "upper", "lower", "top", "bottom"]);
+function groupedInstrumentName(names) {
+  if (names.length === 0) return "Instrument";
+  const trim = (name) => {
+    let toks = name.split(/\s+/).filter((t) => t.length > 0);
+    if (toks.length > 1 && isNumberedVariant(toks[toks.length - 1])) toks = toks.slice(0, -1);
+    const kept = toks.filter((t) => !isDynamicToken(t) && !POSITION_TOKENS.has(t.toLowerCase()));
+    const out = (kept.length ? kept : toks).join(" ").trim();
+    return out || name;
+  };
+  const stems = [...new Set(names.map(trim))];
+  if (stems.length === 1) return stems[0];
+  let n = 0;
+  const first = stems[0];
+  outer: for (; n < first.length; n++) {
+    for (const other of stems) {
+      if ((other[n] ?? "").toLowerCase() !== first[n].toLowerCase()) break outer;
+    }
+  }
+  const prefix = first.slice(0, n).replace(/[\s\-_:]+$/, "").trim();
+  const shortest = Math.min(...stems.map((s) => s.length));
+  return prefix.length >= 3 && prefix.length >= 0.6 * shortest ? prefix : first;
 }
 function commonInstrumentName(names) {
   if (names.length === 0) return "Instrument";
@@ -366,10 +763,312 @@ function commonInstrumentName(names) {
 function inferWorld(name) {
   const n = name.toLowerCase();
   if (/\bmks\b|mks\d/.test(n)) return "mks";
-  if (/rhodes|wurli|\bep\b|ep\d|electric piano/.test(n)) return "rhodes-ep";
+  if (/rhodes|wurli|\bep\b|ep\d|electric piano|dyno|piano|grand|upright|klavier/.test(n)) return "rhodes-ep";
   if (/\bfm\b|\bdx\b|dx7/.test(n)) return "fm";
-  if (/string|violin|viola|cello|orchestr/.test(n)) return "strings";
-  return "mks";
+  return "strings";
+}
+function keyMapSignature(wf) {
+  return [...new Set(wf.keyzones.map((z) => `${z.keyRangeLo}-${z.keyRangeHi}@${z.rootNote}`))].sort().join(",");
+}
+function velocitySplits(wf) {
+  const seen = /* @__PURE__ */ new Map();
+  for (const z of wf.keyzones) seen.set(`${z.velRangeLo}-${z.velRangeHi}`, { lo: z.velRangeLo, hi: z.velRangeHi });
+  return [...seen.values()].sort((a, b) => a.lo - b.lo);
+}
+function velocitySplitKey(wf) {
+  return velocitySplits(wf).map((w) => `${w.lo}-${w.hi}`).join(",");
+}
+function rootsOf(wf) {
+  return [...new Set(wf.keyzones.map((z) => z.rootNote))].sort((a, b) => a - b);
+}
+function arithmeticStep(xs) {
+  if (xs.length < 2) return null;
+  const d = xs[1] - xs[0];
+  if (d <= 0) return null;
+  for (let i = 2; i < xs.length; i++) if (xs[i] - xs[i - 1] !== d) return null;
+  return d;
+}
+function findKeySplitGroups(waveforms) {
+  const pools = /* @__PURE__ */ new Map();
+  for (const wf of waveforms) {
+    const key = `${velocitySplitKey(wf)}|${wf.channels}|${wf.keyzones[0].sampleRate}`;
+    const list = pools.get(key);
+    if (list) list.push(wf);
+    else pools.set(key, [wf]);
+  }
+  const groups = [];
+  for (const pool of pools.values()) {
+    if (pool.length < 2) continue;
+    const byStep = /* @__PURE__ */ new Map();
+    for (const wf of pool) {
+      const step = arithmeticStep(rootsOf(wf));
+      if (step === null) continue;
+      const list = byStep.get(step);
+      if (list) list.push(wf);
+      else byStep.set(step, [wf]);
+    }
+    for (const [D, members] of byStep) {
+      const k = members.length;
+      if (k < 2 || D % k !== 0) continue;
+      const step = D / k;
+      const sorted = [...members].sort((a, b) => rootsOf(a)[0] - rootsOf(b)[0]);
+      const base = rootsOf(sorted[0])[0];
+      let ok = true;
+      const union = /* @__PURE__ */ new Set();
+      for (let j = 0; j < k && ok; j++) {
+        const roots = rootsOf(sorted[j]);
+        if (roots[0] !== base + j * step) ok = false;
+        for (const r of roots) {
+          if ((r - roots[0]) % D !== 0) ok = false;
+          if (union.has(r)) ok = false;
+          union.add(r);
+        }
+      }
+      if (!ok) continue;
+      const unionRoots = [...union].sort((a, b) => a - b);
+      if (arithmeticStep(unionRoots) !== step) continue;
+      const lo = Math.min(...sorted.flatMap((w) => w.keyzones.map((z) => z.keyRangeLo)));
+      const hi = Math.max(...sorted.flatMap((w) => w.keyzones.map((z) => z.keyRangeHi)));
+      const covered = new Uint8Array(128);
+      for (const w of sorted) {
+        for (const z of w.keyzones) for (let m = z.keyRangeLo; m <= z.keyRangeHi; m++) covered[m] = 1;
+      }
+      let gap = false;
+      for (let m = lo; m <= hi; m++) if (!covered[m]) gap = true;
+      if (gap) continue;
+      groups.push(sorted);
+    }
+  }
+  return groups;
+}
+function layersIn(usage, members) {
+  return usage.body.filter((l) => members.has(l.waveformIndex));
+}
+function dpfmVelocityWindows(layers) {
+  if (layers.length === 0) return null;
+  const noteLo = layers[0].noteLo;
+  const noteHi = layers[0].noteHi;
+  if (layers.some((l) => l.noteLo !== noteLo || l.noteHi !== noteHi)) return null;
+  const sorted = [...layers].sort((a, b) => a.velLo - b.velLo || a.velHi - b.velHi);
+  const merged = [];
+  for (const l of sorted) {
+    const prev = merged[merged.length - 1];
+    if (prev && prev.waveformIndex === l.waveformIndex) {
+      prev.lo = Math.min(prev.lo, l.velLo);
+      prev.hi = Math.max(prev.hi, l.velHi);
+      continue;
+    }
+    merged.push({ lo: l.velLo, hi: l.velHi, waveformIndex: l.waveformIndex });
+  }
+  const seen = /* @__PURE__ */ new Set();
+  for (const w of merged) {
+    if (seen.has(w.waveformIndex)) return null;
+    seen.add(w.waveformIndex);
+  }
+  for (let i = 1; i < merged.length; i++) {
+    if (merged[i].lo <= merged[i - 1].lo) return null;
+    if (merged[i].hi <= merged[i - 1].hi) return null;
+  }
+  const out = merged.map((w) => ({ ...w }));
+  out[0].lo = 1;
+  out[out.length - 1].hi = 127;
+  for (let i = 1; i < out.length; i++) {
+    const a = out[i - 1].hi;
+    const b = out[i].lo - 1;
+    const boundary = Math.floor((Math.min(a, b) + Math.max(a, b)) / 2);
+    out[i - 1].hi = boundary;
+    out[i].lo = boundary + 1;
+  }
+  for (const w of out) if (w.lo > w.hi) return null;
+  for (let i = 1; i < out.length; i++) if (out[i].lo !== out[i - 1].hi + 1) return null;
+  if (out[0].lo !== 1 || out[out.length - 1].hi !== 127) return null;
+  return out;
+}
+function dpfmPlan(lib) {
+  if (!lib.dpfm) return null;
+  const usages = dpfmUsage(lib.dpfm);
+  if (usages.length === 0) return null;
+  const signature = lib.waveforms.map((w) => keyMapSignature(w));
+  const splits = lib.waveforms.map((w) => velocitySplits(w).length);
+  const parent = lib.waveforms.map((_, i) => i);
+  const find = (i) => {
+    while (parent[i] !== i) {
+      parent[i] = parent[parent[i]];
+      i = parent[i];
+    }
+    return i;
+  };
+  const union = (a, b) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent[Math.max(ra, rb)] = Math.min(ra, rb);
+  };
+  const bodyWaveforms = /* @__PURE__ */ new Set();
+  const releaseWaveforms = /* @__PURE__ */ new Set();
+  for (const u of usages) {
+    for (const l of u.body) bodyWaveforms.add(l.waveformIndex);
+    for (const l of u.release) releaseWaveforms.add(l.waveformIndex);
+    for (let i = 1; i < u.body.length; i++) {
+      union(u.body[0].waveformIndex, u.body[i].waveformIndex);
+    }
+  }
+  for (const r of [...releaseWaveforms]) if (bodyWaveforms.has(r)) releaseWaveforms.delete(r);
+  for (const g of findKeySplitGroups(lib.waveforms)) {
+    for (let i = 1; i < g.length; i++) union(g[0].index, g[i].index);
+  }
+  const rootBody = /* @__PURE__ */ new Map();
+  for (const i of [...bodyWaveforms].sort((a, b) => a - b)) {
+    const root = find(i);
+    const list = rootBody.get(root);
+    if (list) list.push(i);
+    else rootBody.set(root, [i]);
+  }
+  if (rootBody.size === 0) return null;
+  const unitLeader = /* @__PURE__ */ new Map();
+  const unitSig = /* @__PURE__ */ new Map();
+  for (const g of findKeySplitGroups(lib.waveforms)) {
+    for (const w of g) {
+      unitLeader.set(w.index, g[0].index);
+      unitSig.set(w.index, unitSignature(g));
+    }
+  }
+  const leaderOf = (i) => unitLeader.get(i) ?? i;
+  const sigOf = (i) => unitSig.get(i) ?? signature[i];
+  const plannable = (body) => {
+    if (!body.every((i) => splits[i] === 1)) return false;
+    const ch = lib.waveforms[body[0]].channels;
+    const sr = lib.waveforms[body[0]].keyzones[0].sampleRate;
+    return !body.some(
+      (i) => lib.waveforms[i].channels !== ch || lib.waveforms[i].keyzones.some((z) => z.sampleRate !== sr)
+    );
+  };
+  const bestWindows = (body) => {
+    let best = null;
+    const inBody = new Set(body);
+    for (const u of usages) {
+      const mine = layersIn(u, inBody);
+      const subset = [...new Set(mine.map((l) => l.waveformIndex))].sort((a, b) => a - b);
+      if (subset.length === 0) continue;
+      if (best && subset.length <= best.subset.length) continue;
+      if (!plannable(subset)) continue;
+      const closed = subset.every(
+        (i) => body.every((j) => leaderOf(j) !== leaderOf(i) || subset.includes(j))
+      );
+      if (!closed) continue;
+      const w = dpfmVelocityWindows(mine);
+      if (!w || w.length > MAX_SCHEMA_VELOCITY_LAYERS) continue;
+      if (new Set(w.map((x) => leaderOf(x.waveformIndex))).size !== w.length) continue;
+      best = {
+        subset,
+        windows: w,
+        windowSource: `${u.performanceName} part ${u.partIndex + 1}`,
+        velXfade: Math.max(...mine.map((l) => l.velXfade))
+      };
+    }
+    return best;
+  };
+  const resolved = [];
+  let serial = 0;
+  const resolve = (body) => {
+    if (body.length === 0) return;
+    const got = bestWindows(body);
+    if (got) {
+      resolved.push({
+        key: `dpfm:${serial++}`,
+        body: got.subset,
+        windows: got.windows,
+        windowSource: got.windowSource,
+        velXfade: got.velXfade
+      });
+      resolve(body.filter((i) => !got.subset.includes(i)));
+      return;
+    }
+    const bySig = /* @__PURE__ */ new Map();
+    for (const i of body) {
+      const k = sigOf(i);
+      const list = bySig.get(k);
+      if (list) list.push(i);
+      else bySig.set(k, [i]);
+    }
+    if (bySig.size <= 1) {
+      resolved.push({ key: `dpfm:${serial++}`, body, windows: null, windowSource: null, velXfade: 0 });
+      return;
+    }
+    for (const sub of bySig.values()) resolve(sub);
+  };
+  for (const body of rootBody.values()) resolve(body);
+  const keyOf = /* @__PURE__ */ new Map();
+  const bodyOf = /* @__PURE__ */ new Map();
+  const windowsOf = /* @__PURE__ */ new Map();
+  for (const r of resolved) {
+    for (const i of r.body) keyOf.set(i, r.key);
+    bodyOf.set(r.key, r.body);
+    windowsOf.set(r.key, r);
+  }
+  const releaseOf = /* @__PURE__ */ new Map();
+  for (const r of [...releaseWaveforms].sort((a, b) => a - b)) {
+    const score = /* @__PURE__ */ new Map();
+    for (const u of usages) {
+      if (!u.release.some((l) => l.waveformIndex === r)) continue;
+      for (const l of u.body) {
+        const key = keyOf.get(l.waveformIndex);
+        if (key) score.set(key, (score.get(key) ?? 0) + 1);
+      }
+    }
+    let best = null;
+    let bestScore = 0;
+    for (const [key, n] of [...score].sort((a, b) => a[0].localeCompare(b[0]))) {
+      if (n > bestScore) {
+        best = key;
+        bestScore = n;
+      }
+    }
+    if (!best) continue;
+    const list = releaseOf.get(best);
+    if (list) list.push(r);
+    else releaseOf.set(best, [r]);
+  }
+  const groups = /* @__PURE__ */ new Map();
+  const notes = [];
+  for (const [key, body] of bodyOf) {
+    const r = windowsOf.get(key);
+    const windows = r.windows;
+    const windowSource = r.windowSource;
+    const velXfade = r.velXfade;
+    const groupNotes = [];
+    if (windows) {
+      groupNotes.push(
+        `Velocity layers were taken from the library's own performance "${windowSource}": ${windows.map((w) => `${w.lo}-${w.hi} = "${lib.waveforms[w.waveformIndex].name}"`).join(", ")}. The number of layers, their order and the waveform in each are the library's; only the exact boundary velocities were placed, at the midpoint of each pair of elements that overlapped or stepped, because .jmi velocity layers must tile 1..127 without a gap.`
+      );
+      if (velXfade > 0) {
+        const used = Math.min(velXfade, MAX_VELOCITY_XFADE);
+        groupNotes.push(
+          `The source declares a velocity crossfade of ${velXfade} at the loudest of these boundaries` + (used === velXfade ? "" : `, which exceeds the ${MAX_VELOCITY_XFADE} .jmi allows and was written as ${used}`) + `. It is recorded as playback.velocityXfade; the engine applies it only under velocityMode "anchored", which this import does not set because it would need a measured level and played velocity per layer that the library does not state.`
+        );
+      }
+    }
+    const rel = releaseOf.get(key) ?? [];
+    if (rel.length) {
+      groupNotes.push(
+        `${rel.map((i) => `"${lib.waveforms[i].name}"`).join(", ")} ${rel.length === 1 ? "is a key-off sample" : "are key-off samples"} \u2014 the library's performances play ${rel.length === 1 ? "it" : "them"} on an element whose XA Control is "Key Off" \u2014 so ${rel.length === 1 ? "it goes" : "they go"} into releaseZones (SFZ trigger=release) rather than becoming a bundle of ${rel.length === 1 ? "its" : "their"} own. rtDecayDb is 0: the format needs a value, the source states none, and 0 is the neutral one.`
+      );
+    }
+    groups.set(key, {
+      key,
+      body,
+      release: rel,
+      windows,
+      windowSource,
+      velXfade: Math.min(velXfade, MAX_VELOCITY_XFADE),
+      notes: groupNotes
+    });
+  }
+  const grouped = [...keyOf.keys()].length;
+  notes.push(
+    `Grouping for ${grouped} of ${lib.waveforms.length} waveform(s) came from the library's own DPFM performance block rather than from their names: ${groups.size} instrument(s), ${[...groups.values()].filter((g) => g.windows).length} of them with the velocity split the library itself declares.`
+  );
+  for (const line of lib.dpfm.corroboration) notes.push(line);
+  return { keyOf, groups, notes };
 }
 function velocityWindows(count, mergeAt) {
   const edges = [];
@@ -385,124 +1084,384 @@ function velocityWindows(count, mergeAt) {
   };
   return [...raw.slice(0, mergeAt), merged, ...raw.slice(mergeAt + 2)];
 }
+function foldSourceWindows(source, max = MAX_VELOCITY_LAYERS) {
+  const n = source.length;
+  if (n <= max) return source.map((w, i) => ({ lo: w.lo, hi: w.hi, sources: [i] }));
+  const groups = max;
+  const out = [];
+  let taken = 0;
+  for (let g = 0; g < groups; g++) {
+    const size = Math.floor((n - taken) / (groups - g)) + ((n - taken) % (groups - g) > 0 ? 1 : 0);
+    const sources = [];
+    for (let i = 0; i < size; i++) sources.push(taken + i);
+    out.push({ lo: source[taken].lo, hi: source[taken + size - 1].hi, sources });
+    taken += size;
+  }
+  return out;
+}
 var WINDOW_NAMES = ["Soft", "Medium", "Hard", "Very Hard"];
 function planImport(lib, levelsDb, opts = {}) {
   if (levelsDb.length !== lib.waveforms.length) {
     throw new Error(`Expected ${lib.waveforms.length} level measurements, got ${levelsDb.length}`);
   }
-  const groups = /* @__PURE__ */ new Map();
-  for (const wf of lib.waveforms) {
-    const sig = keyMapSignature(wf);
-    const list = groups.get(sig);
-    if (list) list.push(wf);
-    else groups.set(sig, [wf]);
-  }
   const notes = [];
+  const dpfm = dpfmPlan(lib);
+  if (dpfm) notes.push(...dpfm.notes);
+  const asRelease = /* @__PURE__ */ new Set();
+  for (const g of dpfm?.groups.values() ?? []) for (const i of g.release) asRelease.add(i);
+  const splitGroups = findKeySplitGroups(lib.waveforms).filter((g) => !g.some((w) => asRelease.has(w.index)));
+  const claimed = new Set(asRelease);
+  const units = [];
+  for (const g of splitGroups) {
+    if (g.some((w) => claimed.has(w.index))) continue;
+    g.forEach((w) => claimed.add(w.index));
+    units.push({
+      members: g,
+      signature: unitSignature(g),
+      stem: waveformStem(commonInstrumentName(g.map((w) => w.name))) || g[0].name,
+      keySplit: true
+    });
+  }
+  for (const wf of lib.waveforms) {
+    if (claimed.has(wf.index)) continue;
+    units.push({ members: [wf], signature: keyMapSignature(wf), stem: waveformStem(wf.name) || wf.name, keySplit: false });
+  }
+  if (splitGroups.length) {
+    notes.push(
+      `${splitGroups.length} set(s) of waveforms were merged as key-split partners of one instrument: their root notes interleave into a single even ladder covering the whole key range.`
+    );
+  }
+  const dpfmKeyFor = (u) => {
+    if (!dpfm) return null;
+    const keys = /* @__PURE__ */ new Set();
+    for (const m of u.members) {
+      const k = dpfm.keyOf.get(m.index);
+      if (k) keys.add(k);
+    }
+    return keys.size === 1 ? [...keys][0] : null;
+  };
+  const groups = /* @__PURE__ */ new Map();
+  const groupDpfm = /* @__PURE__ */ new Map();
+  for (const u of units) {
+    const dk = dpfmKeyFor(u);
+    const key = dk ?? `${u.signature}||${u.stem.toLowerCase()}`;
+    if (dk) {
+      const g = dpfm?.groups.get(dk);
+      if (g) groupDpfm.set(key, g);
+    }
+    const list = groups.get(key);
+    if (list) list.push(u);
+    else groups.set(key, [u]);
+  }
   const instruments = [];
   let index = 0;
   const usedNames = /* @__PURE__ */ new Set();
-  for (const members of groups.values()) {
-    const byLevel = [...members].sort((a, b) => levelsDb[a.index] - levelsDb[b.index]);
-    const perInstrumentNotes = [];
-    if (byLevel.some((wf, i) => wf.index !== members[i].index)) {
-      perInstrumentNotes.push(
-        "Velocity layer order was taken from the measured level of the audio, not the library catalogue order."
-      );
-    }
-    let name = commonInstrumentName(byLevel.map((w) => w.name));
-    let suffix = 2;
-    while (usedNames.has(name.toLowerCase())) name = `${commonInstrumentName(byLevel.map((w) => w.name))} ${suffix++}`;
-    usedNames.add(name.toLowerCase());
-    const layerCount = byLevel.length;
-    const mergeOptions = [];
-    for (let i = 0; i + 1 < layerCount; i++) {
-      mergeOptions.push({
-        index: i,
-        label: `${byLevel[i].name} + ${byLevel[i + 1].name}`,
-        levelGapDb: round22(Math.abs(levelsDb[byLevel[i + 1].index] - levelsDb[byLevel[i].index]))
-      });
-    }
-    let mergeAt = null;
-    if (layerCount > MAX_VELOCITY_LAYERS) {
-      if (layerCount > MAX_VELOCITY_LAYERS + 1) {
-        throw new Error(
-          `"${name}" has ${layerCount} velocity layers; the .jmi format allows ${MAX_VELOCITY_LAYERS} and this importer can fold at most one pair.`
-        );
-      }
-      const override = opts.merges?.[index];
-      mergeAt = override !== void 0 && override !== null ? override : mergeOptions.reduce((best, o) => o.levelGapDb < best.levelGapDb ? o : best).index;
-      const chosen = mergeOptions[mergeAt];
-      perInstrumentNotes.push(
-        `Source has ${layerCount} velocity layers but .jmi allows ${MAX_VELOCITY_LAYERS}. Layers "${chosen.label}" (${chosen.levelGapDb} dB apart) share one velocity window as round robins \u2014 no audio is dropped.`
-      );
-    }
-    const windows = velocityWindows(layerCount, mergeAt).map((w, i) => ({
-      layer: i + 1,
-      name: WINDOW_NAMES[i] ?? `Layer ${i + 1}`,
-      lo: w.lo,
-      hi: w.hi,
-      waveformIndices: w.sources.map((s) => byLevel[s].index)
-    }));
-    const template = byLevel[0].keyzones;
-    const zones = [];
-    const seenFiles = /* @__PURE__ */ new Set();
-    for (const win of windows) {
-      template.forEach((kz, kzIndex) => {
-        const samples = win.waveformIndices.map((wfIndex, rrIndex) => {
-          const file = `samples/${sampleFileName3(kz.rootNote, win.layer, rrIndex + 1)}`;
-          if (seenFiles.has(file)) {
-            throw new Error(`Sample name collision building "${name}": ${file}`);
-          }
-          seenFiles.add(file);
-          return { file, waveformIndex: wfIndex, keyzoneIndex: kzIndex, layer: win.layer, rr: rrIndex + 1 };
-        });
-        zones.push({
-          rootNote: kz.rootNote,
-          keyRangeLo: kz.keyRangeLo,
-          keyRangeHi: kz.keyRangeHi,
-          velRangeLo: win.lo,
-          velRangeHi: win.hi,
-          samples
-        });
-      });
-    }
-    const sustaining = byLevel.some((wf) => !wf.oneShot);
-    if (!sustaining) {
-      perInstrumentNotes.push(
-        'Every keyzone declares its loop end at the final sample and the tails decay to digital silence, so the samples are imported as one-shots (soundType "decaying", loop null).'
-      );
-    }
-    let totalPcmBytes = 0;
-    let totalSamples = 0;
-    for (const wf of byLevel) {
-      totalPcmBytes += wf.totalPcmBytes;
-      for (const z of wf.keyzones) totalSamples += z.lengthSamples;
-    }
-    instruments.push({
-      index,
-      name,
-      bundleName: bundleFolderName(name),
-      world: inferWorld(name),
-      soundType: sustaining ? "sustaining" : "decaying",
-      waveformIndices: byLevel.map((w) => w.index),
-      layerNames: byLevel.map((w) => w.name),
-      layerPeakDb: byLevel.map((w) => round22(levelsDb[w.index])),
-      keyzoneCount: template.length,
-      keyRangeLo: Math.min(...template.map((z) => z.keyRangeLo)),
-      keyRangeHi: Math.max(...template.map((z) => z.keyRangeHi)),
-      sampleRate: template[0].sampleRate,
-      windows,
-      zones,
-      mergeAt,
-      mergeOptions,
-      sampleCount: zones.reduce((n, z) => n + z.samples.length, 0),
-      totalPcmBytes,
-      totalDurationSec: round22(totalSamples / (template[0]?.sampleRate || 44100)),
-      notes: perInstrumentNotes
-    });
+  for (const [key, unitGroup] of groups) {
+    const plan = planInstrument(unitGroup, levelsDb, index, usedNames, opts, lib, groupDpfm.get(key) ?? null);
+    instruments.push(plan);
     index++;
   }
   return { version: lib.version, instruments, totalPcmBytes: lib.totalPcmBytes, notes };
+}
+function unitSignature(members) {
+  return [
+    ...new Set(members.flatMap((w) => w.keyzones.map((z) => `${z.keyRangeLo}-${z.keyRangeHi}@${z.rootNote}`)))
+  ].sort().join(",");
+}
+function planInstrument(unitGroup, levelsDb, index, usedNames, opts, lib, dpfm) {
+  const perInstrumentNotes = [];
+  if (dpfm) {
+    perInstrumentNotes.push(
+      `The library's own performance block groups these waveforms into one instrument: ${dpfm.body.map((i) => `"${lib.waveforms[i].name}"`).join(", ")}${dpfm.release.length ? `, with ${dpfm.release.map((i) => `"${lib.waveforms[i].name}"`).join(", ")} as key-off sample(s)` : ""}. That is the library author's own grouping, not an inference from the waveform names.`
+    );
+    perInstrumentNotes.push(...dpfm.notes);
+  }
+  const unitLevel = (u) => u.members.reduce((best, w) => Math.max(best, levelsDb[w.index]), -Infinity);
+  const unitFor = (waveformIndex) => unitGroup.find((u) => u.members.some((m) => m.index === waveformIndex)) ?? null;
+  const dpfmUnits = dpfm?.windows ? dpfm.windows.map((w) => unitFor(w.waveformIndex)) : null;
+  const dpfmOrdered = dpfmUnits && dpfmUnits.every((u) => u !== null) && new Set(dpfmUnits).size === dpfmUnits.length ? dpfmUnits : null;
+  const byLevel = dpfmOrdered ?? [...unitGroup].sort((a, b) => unitLevel(a) - unitLevel(b));
+  if (!dpfmOrdered && byLevel.some((u, i) => u !== unitGroup[i])) {
+    perInstrumentNotes.push(
+      "Velocity layer order was taken from the measured level of the audio, not the library catalogue order."
+    );
+  }
+  if (dpfmOrdered) {
+    const measured = [...new Set(dpfmOrdered)].sort((a, b) => unitLevel(a) - unitLevel(b));
+    const declared = [...new Set(dpfmOrdered)];
+    if (measured.some((u, i) => u !== declared[i])) {
+      perInstrumentNotes.push(
+        "The measured peak levels of these waveforms do not rise in the order the library's performance puts them in. The declared order was kept: it is what the instrument plays on the synth, and an element can be quieter than the one below it and still sit higher in the velocity range."
+      );
+    }
+  }
+  const allWaveforms = [...new Set(byLevel.flatMap((u) => u.members))];
+  const template = byLevel[0];
+  const sourceSplits = velocitySplits(template.members[0]);
+  let splitsUsable = !dpfmOrdered && sourceSplits.length > 1;
+  if (splitsUsable) {
+    if (sourceSplits[0].lo !== 1 || sourceSplits[sourceSplits.length - 1].hi !== 127) splitsUsable = false;
+    for (let i = 1; i < sourceSplits.length; i++) {
+      if (sourceSplits[i].lo !== sourceSplits[i - 1].hi + 1) splitsUsable = false;
+    }
+    if (!splitsUsable) {
+      throw new Error(
+        `"${template.members[0].name}" declares ${sourceSplits.length} velocity windows in its key map (${sourceSplits.map((w) => `${w.lo}-${w.hi}`).join(", ")}) but they do not tile 1..127 without a gap or overlap, so the velocity mapping cannot be reproduced faithfully.`
+      );
+    }
+  }
+  if (splitsUsable && byLevel.length > 1) {
+    throw new Error(
+      `This instrument has ${byLevel.length} waveform layers *and* ${sourceSplits.length} velocity windows inside each key map. No library in the verified corpus combines the two, so the importer will not guess how they stack.`
+    );
+  }
+  const unitLabel = (u) => u.members.length > 1 ? commonInstrumentName(u.members.map((w) => w.name)) : u.members[0].name;
+  const layers = splitsUsable ? sourceSplits.map((v) => ({
+    unit: template,
+    vel: v,
+    label: `${unitLabel(template)} vel ${v.lo}-${v.hi}`
+  })) : dpfmOrdered && dpfm?.windows ? dpfmOrdered.map((u, i) => ({
+    unit: u,
+    vel: null,
+    label: `${lib.waveforms[dpfm.windows[i].waveformIndex].name} vel ${dpfm.windows[i].lo}-${dpfm.windows[i].hi}`
+  })) : byLevel.map((u) => ({ unit: u, vel: null, label: unitLabel(u) }));
+  const stemName = dpfm ? groupedInstrumentName([...new Set(layers.map((l) => unitLabel(l.unit)))]) : template.stem || commonInstrumentName(allWaveforms.map((w) => w.name));
+  let name = stemName;
+  let suffix = 2;
+  while (usedNames.has(name.toLowerCase())) name = `${stemName} ${suffix++}`;
+  usedNames.add(name.toLowerCase());
+  const layerCount = layers.length;
+  const mergeOptions = [];
+  if (!splitsUsable && !dpfmOrdered) {
+    for (let i = 0; i + 1 < layerCount; i++) {
+      mergeOptions.push({
+        index: i,
+        label: `${layers[i].label} + ${layers[i + 1].label}`,
+        levelGapDb: round22(Math.abs(unitLevel(byLevel[i + 1]) - unitLevel(byLevel[i])))
+      });
+    }
+  }
+  let mergeAt = null;
+  let rawWindows;
+  if (dpfmOrdered && dpfm?.windows) {
+    rawWindows = dpfm.windows.map((w, i) => ({ lo: w.lo, hi: w.hi, sources: [i] }));
+  } else if (splitsUsable) {
+    rawWindows = foldSourceWindows(sourceSplits);
+    if (sourceSplits.length > MAX_VELOCITY_LAYERS) {
+      perInstrumentNotes.push(
+        `The source key map declares ${sourceSplits.length} velocity windows but .jmi allows ${MAX_VELOCITY_LAYERS}. Adjacent windows were grouped into ${rawWindows.length} (${rawWindows.map((w) => `${w.lo}-${w.hi}: ${w.sources.length} layer${w.sources.length === 1 ? "" : "s"}`).join(", ")}) and the windows sharing a group play as round robins \u2014 no audio is dropped, and each window keeps the velocity span the library gave it.`
+      );
+    } else {
+      perInstrumentNotes.push(
+        `Velocity windows were taken from the source key map verbatim (${sourceSplits.map((w) => `${w.lo}-${w.hi}`).join(", ")}).`
+      );
+    }
+  } else if (layerCount > MAX_VELOCITY_LAYERS) {
+    if (layerCount > MAX_VELOCITY_LAYERS + 1) {
+      throw new Error(
+        `"${name}" has ${layerCount} velocity layers; the .jmi format allows ${MAX_VELOCITY_LAYERS} and this importer can fold at most one pair.`
+      );
+    }
+    const override = opts.merges?.[index];
+    mergeAt = override !== void 0 && override !== null ? override : mergeOptions.reduce((best, o) => o.levelGapDb < best.levelGapDb ? o : best).index;
+    const chosen = mergeOptions[mergeAt];
+    perInstrumentNotes.push(
+      `Source has ${layerCount} velocity layers but .jmi allows ${MAX_VELOCITY_LAYERS}. Layers "${chosen.label}" (${chosen.levelGapDb} dB apart) share one velocity window as round robins \u2014 no audio is dropped.`
+    );
+    rawWindows = velocityWindows(layerCount, mergeAt);
+  } else {
+    rawWindows = velocityWindows(layerCount, null);
+  }
+  const windows = rawWindows.map((w, i) => ({
+    layer: i + 1,
+    name: WINDOW_NAMES[i] ?? `Layer ${i + 1}`,
+    lo: w.lo,
+    hi: w.hi,
+    sources: w.sources,
+    waveformIndices: [...new Set(w.sources.flatMap((s) => layers[s].unit.members.map((m) => m.index)))]
+  }));
+  const slotCache = /* @__PURE__ */ new Map();
+  const slotsFor = (u) => {
+    const hit = slotCache.get(u);
+    if (hit) return hit;
+    const made = mergedSlots(u, perInstrumentNotes);
+    slotCache.set(u, made);
+    return made;
+  };
+  const slots = slotsFor(template);
+  if (dpfmOrdered) {
+    const ladders = new Set(dpfmOrdered.map((u) => slotsFor(u).length));
+    if (ladders.size > 1) {
+      perInstrumentNotes.push(
+        `These velocity layers are sampled at different root notes (${dpfmOrdered.map((u, i) => `${layers[i].label.replace(/ vel .*/, "")}: ${slotsFor(u).length} note(s)`).join(", ")}), which is how the library has them. Each layer keeps its own key map rather than being forced onto one shared grid, so no sample is dropped and none is stretched further than the source stretches it.`
+      );
+    }
+  }
+  const allSlots = dpfmOrdered ? [...new Set(dpfmOrdered)].flatMap((u) => slotsFor(u)) : slots;
+  const rrCounter = /* @__PURE__ */ new Map();
+  const nextRr = (root, layer) => {
+    const key = `${root}/${layer}`;
+    const n = (rrCounter.get(key) ?? 0) + 1;
+    rrCounter.set(key, n);
+    return n;
+  };
+  const zones = [];
+  const seenFiles = /* @__PURE__ */ new Set();
+  for (const win of windows) {
+    const winSlots = dpfmOrdered ? slotsFor(layers[win.sources[0]].unit) : slots;
+    for (const slot of winSlots) {
+      const samples = [];
+      for (const src of win.sources) {
+        const layer = layers[src];
+        const wf = sourceWaveformFor(layer.unit, slot);
+        const kzIndex = keyzoneIndexFor(wf, slot, layer.vel);
+        if (kzIndex === null) continue;
+        const rr = nextRr(slot.rootNote, win.layer);
+        const file = `samples/${sampleFileName3(slot.rootNote, win.layer, rr)}`;
+        if (seenFiles.has(file)) {
+          throw new Error(`Sample name collision building "${name}": ${file}`);
+        }
+        seenFiles.add(file);
+        samples.push({ file, waveformIndex: wf.index, keyzoneIndex: kzIndex, layer: win.layer, rr });
+      }
+      if (samples.length === 0) continue;
+      zones.push({
+        rootNote: slot.rootNote,
+        keyRangeLo: slot.keyRangeLo,
+        keyRangeHi: slot.keyRangeHi,
+        velRangeLo: win.lo,
+        velRangeHi: win.hi,
+        samples
+      });
+    }
+  }
+  const releaseZones = [];
+  const releaseWaveforms = (dpfm?.release ?? []).map((i) => lib.waveforms[i]);
+  const relRr = /* @__PURE__ */ new Map();
+  for (const wf of releaseWaveforms) {
+    for (const kz of wf.keyzones) {
+      const n = (relRr.get(kz.rootNote) ?? 0) + 1;
+      relRr.set(kz.rootNote, n);
+      releaseZones.push({
+        rootNote: kz.rootNote,
+        keyRangeLo: kz.keyRangeLo,
+        keyRangeHi: kz.keyRangeHi,
+        velRangeLo: kz.velRangeLo,
+        velRangeHi: kz.velRangeHi,
+        samples: [
+          {
+            file: `samples/rel_${sampleFileName3(kz.rootNote, 1, n)}`,
+            waveformIndex: wf.index,
+            keyzoneIndex: kz.index,
+            layer: 1,
+            rr: n
+          }
+        ]
+      });
+    }
+  }
+  const sustaining = allWaveforms.some((wf) => !wf.oneShot);
+  if (!sustaining) {
+    perInstrumentNotes.push(
+      'Every keyzone declares a loop spanning the whole sample, so there is nothing to loop: the samples are imported as one-shots (soundType "decaying", loop null).'
+    );
+  }
+  const channels = template.members[0].channels;
+  if (channels === 2) {
+    perInstrumentNotes.push(
+      "The source waveforms are stereo: each keyzone stores its left and right channels as two consecutive mono blocks, which are interleaved into one stereo WAV here. Every 16-bit sample word is the source word, unchanged."
+    );
+  }
+  let totalPcmBytes = 0;
+  let totalFrames = 0;
+  for (const wf of [...allWaveforms, ...releaseWaveforms]) {
+    totalPcmBytes += wf.totalPcmBytes;
+    for (const z of wf.keyzones) totalFrames += z.lengthSamples;
+  }
+  for (const wf of releaseWaveforms) {
+    if (wf.channels !== channels) {
+      throw new Error(
+        `Key-off waveform "${wf.name}" is ${wf.channels === 2 ? "stereo" : "mono"} but "${name}" is ${channels === 2 ? "stereo" : "mono"}; a .jmi bundle has one channel count for every sample in it.`
+      );
+    }
+    for (const z of wf.keyzones) {
+      if (z.sampleRate !== template.members[0].keyzones[0].sampleRate) {
+        throw new Error(
+          `Key-off waveform "${wf.name}" is ${z.sampleRate} Hz but "${name}" is ${template.members[0].keyzones[0].sampleRate} Hz; nothing is resampled on this path.`
+        );
+      }
+    }
+  }
+  const sampleRate = template.members[0].keyzones[0].sampleRate;
+  return {
+    index,
+    name,
+    bundleName: bundleFolderName(name),
+    world: inferWorld(name),
+    soundType: sustaining ? "sustaining" : "decaying",
+    waveformIndices: allWaveforms.map((w) => w.index),
+    layerNames: layers.map((l) => l.label),
+    layerPeakDb: layers.map((l) => round22(unitLevel(l.unit))),
+    keyzoneCount: new Set(allSlots.map((s) => s.rootNote)).size,
+    keyRangeLo: Math.min(...allSlots.map((s) => s.keyRangeLo)),
+    keyRangeHi: Math.max(...allSlots.map((s) => s.keyRangeHi)),
+    sampleRate,
+    channels,
+    windows,
+    zones,
+    mergeAt,
+    mergeOptions,
+    sampleCount: zones.reduce((n, z) => n + z.samples.length, 0) + releaseZones.reduce((n, z) => n + z.samples.length, 0),
+    totalPcmBytes,
+    totalDurationSec: round22(totalFrames / (sampleRate || 44100)),
+    notes: perInstrumentNotes,
+    releaseZones,
+    velXfade: dpfmOrdered ? dpfm?.velXfade ?? 0 : 0,
+    fromDpfm: dpfmOrdered !== null
+  };
+}
+function mergedSlots(unit, notes) {
+  const perRoot = /* @__PURE__ */ new Map();
+  for (const wf of unit.members) {
+    for (const z of wf.keyzones) {
+      if (perRoot.has(z.rootNote)) continue;
+      perRoot.set(z.rootNote, {
+        rootNote: z.rootNote,
+        keyRangeLo: z.keyRangeLo,
+        keyRangeHi: z.keyRangeHi,
+        waveformIndex: wf.index,
+        keyzoneIndex: z.index
+      });
+    }
+  }
+  const slots = [...perRoot.values()].sort((a, b) => a.rootNote - b.rootNote);
+  if (unit.members.length === 1) return slots;
+  const lo = Math.min(...unit.members.flatMap((w) => w.keyzones.map((z) => z.keyRangeLo)));
+  const hi = Math.max(...unit.members.flatMap((w) => w.keyzones.map((z) => z.keyRangeHi)));
+  for (let i = 0; i < slots.length; i++) {
+    const prev = slots[i - 1];
+    const next = slots[i + 1];
+    slots[i].keyRangeLo = prev ? Math.floor((prev.rootNote + slots[i].rootNote) / 2) + 1 : lo;
+    slots[i].keyRangeHi = next ? Math.floor((slots[i].rootNote + next.rootNote) / 2) : hi;
+  }
+  notes.push(
+    `Key-split partners were merged into one ${slots.length}-note key map spanning ${lo}..${hi}. The source ranges overlap where each partner's top sample is stretched to the end of the keyboard, so zone boundaries were placed at the midpoints between adjacent root notes.`
+  );
+  return slots;
+}
+function sourceWaveformFor(unit, slot) {
+  for (const wf of unit.members) {
+    if (wf.keyzones.some((z) => z.rootNote === slot.rootNote)) return wf;
+  }
+  return unit.members[0];
+}
+function keyzoneIndexFor(wf, slot, vel) {
+  for (const z of wf.keyzones) {
+    if (z.rootNote !== slot.rootNote) continue;
+    if (vel && (z.velRangeLo !== vel.lo || z.velRangeHi !== vel.hi)) continue;
+    return z.index;
+  }
+  return null;
 }
 var IMPORT_CAPTURE_MODE = "auto";
 function buildImportInstrument(plan, facts, opts) {
@@ -518,9 +1477,25 @@ function buildImportInstrument(plan, facts, opts) {
       return { file: s.file, peakDb: f.peakDb, lengthMs: f.lengthMs, loop: f.loop };
     })
   }));
+  const releaseZones = plan.releaseZones.map((z) => ({
+    rootNote: z.rootNote,
+    keyRangeLo: z.keyRangeLo,
+    keyRangeHi: z.keyRangeHi,
+    velRangeLo: z.velRangeLo,
+    velRangeHi: z.velRangeHi,
+    // The source states no attenuation-by-hold-time, and 0 is the format's
+    // neutral value, so nothing is invented here.
+    rtDecayDb: IMPORT_RT_DECAY_DB,
+    roundRobins: z.samples.map((s) => {
+      const f = facts[s.file];
+      if (!f) throw new Error(`No measurement for ${s.file}`);
+      return { file: s.file, peakDb: f.peakDb, lengthMs: f.lengthMs, loop: f.loop };
+    })
+  }));
+  const playback = plan.velXfade > 0 ? { velocityXfade: plan.velXfade } : void 0;
   const provenance = [
-    `Imported from the Yamaha MONTAGE library "${opts.sourceFileName}".`,
-    `The source PCM was copied through unchanged \u2014 ${plan.sampleRate} Hz, 16-bit, mono, bit-perfect; nothing was resampled or requantised.`,
+    `Imported from the Yamaha YSFC library "${opts.sourceFileName}".`,
+    `The source PCM was copied through unchanged \u2014 ${plan.sampleRate} Hz, 16-bit, ${plan.channels === 2 ? "stereo" : "mono"}, bit-perfect; nothing was resampled or requantised.`,
     'captureMode is recorded as "auto" because the .jmi format has no value for an import; this bundle was not recorded.',
     ...plan.notes
   ].join(" ");
@@ -532,7 +1507,7 @@ function buildImportInstrument(plan, facts, opts) {
       author: opts.author,
       createdAt: opts.createdAt ?? (/* @__PURE__ */ new Date()).toISOString(),
       captureMode: IMPORT_CAPTURE_MODE,
-      channels: "mono",
+      channels: plan.channels === 2 ? "stereo" : "mono",
       sampleRate: plan.sampleRate,
       bitDepth: 16,
       notes: provenance
@@ -540,6 +1515,8 @@ function buildImportInstrument(plan, facts, opts) {
     soundType: plan.soundType,
     zones,
     velocityMap: plan.windows.map((w) => ({ layer: w.layer, name: w.name, lo: w.lo, hi: w.hi })),
+    ...releaseZones.length ? { releaseZones } : {},
+    ...playback ? { playback } : {},
     reserved: { releaseSamples: [], pedalDownZones: [] }
   };
 }
@@ -573,21 +1550,21 @@ function convertInstrument(bytes, lib, plan, destDir, fs, opts) {
   let bytesWritten = 0;
   let done = 0;
   const total = plan.sampleCount;
-  for (const zone of plan.zones) {
+  for (const zone of [...plan.zones, ...plan.releaseZones]) {
     for (const s of zone.samples) {
       const wf = lib.waveforms[s.waveformIndex];
       const kz = wf.keyzones[s.keyzoneIndex];
-      const header = pcm16MonoWavHeader(kz.pcmBytes, kz.sampleRate);
-      const wav = new Uint8Array(header.length + kz.pcmBytes);
-      wav.set(header, 0);
-      wav.set(bytes.subarray(kz.pcmOffset, kz.pcmOffset + kz.pcmBytes), header.length);
+      const wav = keyzoneWav(bytes, kz);
       fs.writeFile(fs.join(bundlePath, ...s.file.split("/")), wav);
       bytesWritten += wav.length;
       const m = measureKeyzone(bytes, kz);
       facts[s.file] = {
         peakDb: m.peakDb,
         lengthMs: round3(kz.lengthSamples / kz.sampleRate * 1e3),
-        loop: wf.oneShot ? null : {
+        // A loop that spans the whole sample is not a loop — there is nothing
+        // to repeat — so it is written as `null`. Anything narrower is the
+        // library's real loop region and is carried straight over.
+        loop: kz.loopStartSample === 0 && kz.loopEndSample === kz.lengthSamples - 1 ? null : kz.loopStartSample >= kz.loopEndSample ? null : {
           startSample: kz.loopStartSample,
           endSample: kz.loopEndSample,
           crossfadeSamples: 0
@@ -608,7 +1585,7 @@ function convertInstrument(bytes, lib, plan, destDir, fs, opts) {
     instrumentName: plan.name,
     bundlePath,
     sampleCount: total,
-    zoneCount: plan.zones.length,
+    zoneCount: plan.zones.length + plan.releaseZones.length,
     bytesWritten,
     keyRangeLo: plan.keyRangeLo,
     keyRangeHi: plan.keyRangeHi,
@@ -2157,7 +3134,9 @@ function loadLibrary(filePath) {
   const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
   if (!SUPPORTED_EXTENSIONS.includes(ext)) {
     const hint = UNVERIFIED_EXTENSIONS.includes(ext) ? ` ".${ext}" libraries look like the same YAMAHA-YSFC container but have not been verified against a real file, so they are not accepted yet.` : "";
-    throw new Error(`Unsupported library type ".${ext}" \u2014 expected .X7L.${hint}`);
+    throw new Error(
+      `Unsupported library type ".${ext}" \u2014 expected ${SUPPORTED_EXTENSIONS.map((e) => `.${e.toUpperCase()}`).join(" or ")}.${hint}`
+    );
   }
   const st = statSync(filePath);
   if (libCache && libCache.path === filePath && libCache.mtimeMs === st.mtimeMs) return libCache;
@@ -2197,7 +3176,7 @@ ipcMain.handle("import:convert", (e, req) => {
   const results = [];
   for (const p of chosen) {
     const bundle = convertInstrument(bytes, lib, p, req.destDir, nodeFs, {
-      author: req.author || "JM Studios",
+      author: req.author || "Mireku",
       sourceFileName: basename(req.filePath),
       onProgress: ({ instrument, done, total }) => {
         const overall = doneOverall + done;
@@ -2311,7 +3290,7 @@ ipcMain.handle(
     };
     const every = Math.max(1, Math.floor(plan.sampleCount / 100));
     const bundle = convertDrop(plan, req.destDir, nodeFs, {
-      author: req.author || "JM Studios",
+      author: req.author || "Mireku",
       sourceLabel: dropSourceLabel(plan.sampleCount, req.options?.folderName ?? null),
       onProgress: ({ done, total, file }) => {
         if (done === total || done % every === 0) e.sender.send("drop:progress", { done, total, file });
@@ -2342,7 +3321,7 @@ ipcMain.handle("dialog:chooseFile", async () => {
     title: "Choose a Yamaha MONTAGE library",
     properties: ["openFile"],
     filters: [
-      { name: "Yamaha MONTAGE library", extensions: ["X7L", "x7l"] },
+      { name: "Yamaha YSFC library", extensions: ["X7L", "x7l", "X8L", "x8l"] },
       { name: "All files", extensions: ["*"] }
     ]
   });

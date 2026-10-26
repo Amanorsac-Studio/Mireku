@@ -1,3 +1,4 @@
+import { worldDisplayName } from '@jm/jmi-format/web';
 import { useApp } from '../../state/appStore';
 import { bridge, services } from '../../state/services';
 import { deserializeSession, sessionStats } from '../../engine/session';
@@ -59,7 +60,7 @@ export function HomeScreen() {
             try {
               const s = deserializeSession(json);
               const st = sessionStats(s);
-              name = `${s.config.instrumentName} · ${s.config.world} · ${s.config.captureMode}`;
+              name = `${s.config.instrumentName} · ${worldDisplayName(s.config.world)} · ${s.config.captureMode}`;
               progress = `${st.done} / ${st.total} · ${st.percent}%`;
             } catch {
               progress = 'corrupt snapshot';

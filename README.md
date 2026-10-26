@@ -30,6 +30,36 @@ cmake --build apps/signature/build --config Release --parallel
 ctest --test-dir apps/signature/build -C Release
 ```
 
+## Converting the artist's Yamaha libraries (`.X7L` / `.X8L`)
+
+One command. It takes a folder of libraries and a folder to write into:
+
+```
+npm run import:x7l -w jm-capture -- --in "C:/Users/amano/Downloads/JM Sounds" --out "C:/Users/amano/Documents/MIREKU/Imported Libraries"
+```
+
+Every library is converted **bit-perfect** — the PCM is copied byte for byte
+and never resampled — into one `.jmi` bundle per instrument, grouped from the
+library's own DPFM performance block. Each bundle is validated against
+`instrument.schema.json` before it is counted, and each library is reported as
+imported or refused **with its reason** (truncated download, parameter-only
+library, unsupported version), followed by a summary table.
+
+**An existing bundle is never overwritten.** A bundle name that is already
+taken — on disk, or earlier in the same run — gets a numeric suffix
+(`MKS20_2.jmi`). Bundle names collide across libraries, and an earlier run of
+the old harness destroyed one of the client's bundles this way.
+
+`--out` has **no default**, on purpose: the only folder that would not need
+moving afterwards is the live MIREKU library, and a batch of freshly converted,
+not-yet-auditioned instruments does not belong in among the bundles you perform
+from. Convert into an empty folder, listen to what came out, then move the
+keepers into `Documents/MIREKU/Library` and hit Rescan.
+
+Options: `--author <name>` (default "James Mireku"), `--help`. Implementation:
+[apps/capture/src/cli](apps/capture/src/cli) over the importer in
+[apps/capture/src/engine/import](apps/capture/src/engine/import).
+
 Testing: automated suites run in CI (see [.github/workflows/ci.yml](.github/workflows/ci.yml)); the manual smoke pass is [TESTING.md](TESTING.md). Judgment calls are logged in [DECISIONS.md](DECISIONS.md).
 
 When James's real bundles arrive: drop each `.jmi` folder into the MIREKU library folder (`Documents/MIREKU/Library`), hit Rescan. Zero code changes.

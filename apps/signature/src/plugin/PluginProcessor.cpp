@@ -1732,6 +1732,41 @@ JMSignatureProcessor::renamePerformancePreset (const juce::File& f, const juce::
 //   * the current page follows the instrument, so "where did it go?" is
 //     answered by the app being on its new page rather than by a message.
 //==============================================================================
+JMSignatureProcessor::RenameOutcome
+JMSignatureProcessor::renameBundle (const juce::File& bundleDir, const juce::String& newName)
+{
+    RenameOutcome out;
+    out.file = bundleDir;
+
+    // Every other instrument's name, so the write guard can refuse a duplicate
+    // before it writes rather than after.
+    juce::StringArray inUse;
+    for (const auto& bi : state.library.bundles())
+        if (bi.dir != bundleDir) inUse.add (bi.name);
+
+    auto wr = authoring::renameInstrument (bundleDir, newName, inUse);
+    if (! wr.ok) { out.message = wr.message; return out; }
+
+    const auto trimmed = newName.trim();
+    state.library.rescan();
+
+    // A slot already playing this instrument holds its own copy of the parsed
+    // instrument, and the slot header draws the name from there. Message thread
+    // only: the audio thread reads zones and samples, never meta — the same
+    // justification recategoriseBundle relies on.
+    for (int i = 0; i < 4; ++i)
+        if (state.slots[(size_t) i].bundleDir == bundleDir.getFullPathName())
+            if (auto lb = engines[(size_t) i].bundle())
+                lb->inst.meta.name = trimmed.toStdString();
+
+    out.ok = true;
+    out.message = wr.message;
+    out.note = wr.note;
+    stateChanged.sendChangeMessage();
+    return out;
+}
+
+//==============================================================================
 JMSignatureProcessor::RecategoriseOutcome
 JMSignatureProcessor::recategoriseBundle (const juce::File& bundleDir, int newWorld)
 {
@@ -1928,8 +1963,10 @@ juce::String JMSignatureProcessor::modBoundaryLine (int page) const
     if (page < 0 || page > 3) return {};                 // PERFORM captures everything
     auto c = modCaptureForSlot (slotForModelPage (page));
     if (! c.anyOnSlot()) return {};
-    return "A patch cannot hold " + c.phrase()
-         + ". Save a PERFORMANCE preset to keep that work.";
+    // Shortened in the same pass as saveOverLine: the button directly below it
+    // already says SAVE PERFORMANCE INSTEAD, so spelling out the instruction as
+    // well made two lines of prose out of one fact.
+    return "A patch cannot hold " + c.phrase() + ":";
 }
 
 //---------------------------------------------------------- SAVE OVER vs SAVE AS
@@ -1973,8 +2010,12 @@ juce::String JMSignatureProcessor::saveOverLine (int page) const
         where = authoring && authoring::looksLikeBundle (bundle) ? bundle.getFileName()
                                                                  : "your presets";
     }
-    return "OVERWRITE replaces \"" + target + "\" in " + where + ", keeping "
-         + file.getFileName() + ".bak. SAVE AS makes a NEW preset and never replaces anything.";
+    // AUTHORING PASS: the artist asked for this to be "simple... for now", and
+    // the two sentences that used to sit here explained SAVE AS as well — on a
+    // line that only ever appears because OVERWRITE is armed, i.e. while he is
+    // reading the button he already pressed. What he needs at that instant is
+    // which file is about to change; the rest moved to the button's tooltip.
+    return "Replaces \"" + target + "\" in " + where + " (keeps " + file.getFileName() + ".bak)";
 }
 
 // CLIENT REVIEW ROUND 3 (G): the browser listed nothing on PERFORM because the

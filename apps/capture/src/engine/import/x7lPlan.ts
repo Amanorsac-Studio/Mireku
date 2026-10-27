@@ -1459,6 +1459,17 @@ export function buildImportInstrument(
     }),
   }));
 
+  // An instrument sustains if, and only if, something in it actually loops.
+  //
+  // The planner's guess comes from the source's loop FIELDS, which every piano
+  // and electric piano in the corpus fills in — they declare a loop over their
+  // decay tail, to be read under a falling envelope. The converter drops those
+  // (see loopSeam.ts), so the fields are not the last word; the loops that
+  // survive into `facts` are. Deciding here, from the zones as written, keeps
+  // "sustaining" from meaning one thing in the plan and another in the bundle.
+  const anyLoop = [...zones, ...releaseZones].some((z) => z.roundRobins.some((rr) => rr.loop));
+  const soundType: SoundType = anyLoop ? plan.soundType : 'decaying';
+
   // `velocityXfade` is written because the library states it; it is inert
   // unless the player is in velocityMode "anchored", which this import does
   // not claim — see the note the planner adds.
@@ -1485,7 +1496,7 @@ export function buildImportInstrument(
       bitDepth: 16,
       notes: provenance,
     },
-    soundType: plan.soundType,
+    soundType,
     zones,
     velocityMap: plan.windows.map((w) => ({ layer: w.layer, name: w.name, lo: w.lo, hi: w.hi })),
     ...(releaseZones.length ? { releaseZones } : {}),

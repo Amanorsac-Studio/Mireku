@@ -203,6 +203,10 @@ public:
     /// Renames a user patch that is a loose file (release mode / the user folder).
     RenameOutcome renameUserPresetFile (const juce::File& f, const juce::String& newName);
     RenameOutcome renamePerformancePreset (const juce::File& f, const juce::String& newName);
+    /// Renames an INSTRUMENT (the artist's "sample"), which is its `meta.name`.
+    /// The .jmi folder does not move, so slots, performances and the presets
+    /// inside the bundle all keep pointing at it.
+    RenameOutcome renameBundle (const juce::File& bundleDir, const juce::String& newName);
 
     //------------------------------------------------------- re-categorise (world)
     // "James should be able to move sounds to categories he wants." The four

@@ -94,6 +94,8 @@ public:
         for (auto& f : driveDc_) f.prepare (sampleRate);
         starveRamp_ = 1.0f / (float) juce::jmax (1.0, sampleRate * 0.005);   // 5 ms in/out
         starveLimit_ = (int) (sampleRate * 4.0);                             // 4 s hard stop
+        endFadeFrames_ = juce::jmax (1.0, sampleRate * 0.005);               // 5 ms out of a one-shot
+        defaultXfFrames_ = juce::jmax (1.0, sampleRate * 0.030);             // 30 ms into a bare loop
         bendSemis_.store (0.0f);
         bendCur_ = 1.0;
         allNotesOff (false);
@@ -449,7 +451,27 @@ private:
         const double loopStart = hasLoop ? (double) sd.loop->startSample : 0;
         const double loopEnd = hasLoop ? (double) sd.loop->endSample : 0;
         const double loopLen = loopEnd - loopStart;
-        const double xf = hasLoop ? (double) juce::jmax<juce::int64> (1, sd.loop->crossfadeSamples) : 0;
+        // Every loop in the sampled libraries declares crossfadeSamples = 0.
+        // Taken literally that is a ONE-SAMPLE splice: a step discontinuity on
+        // every wrap, i.e. a click once per loop length. On a 16 s string loop
+        // that is a tick every 16 seconds for as long as the key is held.
+        //
+        // So a loop that declares no crossfade gets a short equal-power one.
+        // It is bounded by the audio that exists BEFORE loopStart, because the
+        // crossfade pre-reads there (`pos - loopLen`), and by half the loop, so
+        // the two halves of the fade can never overlap each other.
+        const double declaredXf = hasLoop ? (double) sd.loop->crossfadeSamples : 0.0;
+        const double xf = ! hasLoop  ? 0.0
+                        : declaredXf >= 1.0 ? declaredXf
+                        : juce::jmax (1.0, juce::jmin (defaultXfFrames_,
+                                                       juce::jmin (loopStart, loopLen * 0.5)));
+
+        // A one-shot ends when its audio does, and stopping dead on the last
+        // frame is itself a step discontinuity — audible whenever the recording
+        // ends while the note is still ringing, which is exactly what the piano
+        // tails do (they end around -25 dBFS). The last few ms ramp to silence.
+        const double lastFrame = (double) sd.lengthFrames - 1.0;
+        const double endFadeFrom = lastFrame - endFadeFrames_;
 
         float drive = 0.0f;
         if (world_ == 0) drive = engineParams_[0] / 100.0f;      // Rhodes Bark drive
@@ -539,7 +561,11 @@ private:
                 srr = v.driveShaper[1].process (srr * drivePre) * driveNorm;
             }
 
-            const float g = v.env * v.gain * v.starveGain;
+            float endG = 1.0f;
+            if (! hasLoop && v.pos > endFadeFrom)
+                endG = (float) juce::jlimit (0.0, 1.0, (lastFrame - v.pos) / endFadeFrames_);
+
+            const float g = v.env * v.gain * v.starveGain * endG;
             L[i] += sl * g;
             R[i] += srr * g;
 
@@ -632,6 +658,7 @@ private:
     int world_ = 0;
     double sr_ = 48000;
     juce::int64 stampCounter_ = 0;
+    double endFadeFrames_ = 240.0, defaultXfFrames_ = 1440.0;
     float starveRamp_ = 1.0f / 240.0f;
     int starveLimit_ = 192000;
     juce::AudioBuffer<float> scratch_;

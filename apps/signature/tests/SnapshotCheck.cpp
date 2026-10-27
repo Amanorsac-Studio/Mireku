@@ -2920,7 +2920,9 @@ int main (int argc, char** argv)
                    && warn.containsIgnoreCase ("modulation routing")
                    && warn.containsIgnoreCase ("arpeggiator"),
                    "it names what would be lost, in the artist's terms");
-            CHECK (warn.containsIgnoreCase ("PERFORMANCE"), "and names the save that WOULD keep it");
+            // The line states the LIMIT; the way out is the button directly
+            // under it, which is where the artist clicks. Asserted below on the
+            // panel, where the label he actually reads is.
             CHECK (proc.saveDestinationLine (0).containsIgnoreCase ("FACTORY")
                    && proc.saveDestinationLine (0).containsIgnoreCase (epBundle.getFileName()),
                    "the destination line names the bundle the patch is going into");
@@ -2928,6 +2930,9 @@ int main (int argc, char** argv)
             PresetBrowserPanel br (proc);
             br.setBounds (0, 0, Theme::L::browserW, Theme::L::browserH);
             br.rebuild();
+            CHECK (br.alternativeSaveOffered()
+                   && br.alternativeSaveText().containsIgnoreCase ("PERFORMANCE"),
+                   "and names the save that WOULD keep it, on the button that does it");
             CHECK (br.boundaryText() == warn && br.alternativeSaveOffered(),
                    "the browser shows that line and OFFERS \"SAVE PERFORMANCE INSTEAD\"");
 
@@ -3219,6 +3224,67 @@ int main (int argc, char** argv)
             CHECK (! proc.recategoriseBundle (libRoot.getChildFile ("NotABundle"), 2).ok,
                    "and so is something that is not a .jmi bundle");
 
+            // ---------------------------------------------------------------
+            // RENAMING A SOUND. The artist went looking for this in the save
+            // block and found the preset machinery instead, because the list
+            // refused to rename an instrument at all and told him to go rename
+            // a folder. It is `meta.name` — one guarded property — and the .jmi
+            // folder deliberately does NOT move, because slots, performances
+            // and the bundle's own presets all find it by path.
+            {
+                const auto folderBefore = mksBundle.getFileName();
+                auto before = ij.loadFileAsString();
+                auto ren = proc.renameBundle (mksBundle, "Jamestown Keys");
+                std::printf ("  -> %s\n", ren.message.toRawUTF8());
+                CHECK (ren.ok, "an instrument can be renamed from the app");
+
+                jmi::Instrument named;
+                std::string nerr;
+                CHECK (jmi::parseInstrumentJson (ij.loadFileAsString().toStdString(), named, nerr)
+                       && named.meta.name == "Jamestown Keys",
+                       "THE NEW NAME LANDED IN THE BUNDLE: instrument.json says so");
+                CHECK (mksBundle.getFileName() == folderBefore && mksBundle.isDirectory(),
+                       "and the .jmi folder did not move, so nothing that points at it broke");
+                CHECK (proc.engines[1].bundle() == nullptr
+                       || proc.engines[1].bundle()->dir != mksBundle
+                       || proc.engines[1].bundle()->inst.meta.name == "Jamestown Keys",
+                       "a slot already playing it shows the new name too");
+
+                bool listed = false;
+                for (auto& b : proc.state.library.bundles())
+                    if (b.dir == mksBundle && b.name == "Jamestown Keys") listed = true;
+                CHECK (listed, "and the library lists it under the new name");
+
+                // the guards
+                CHECK (! proc.renameBundle (mksBundle, "   ").ok, "an empty name is refused");
+                CHECK (! proc.renameBundle (mksBundle, "Jamestown Keys").ok,
+                       "renaming it to what it is already called is refused, not re-written");
+                CHECK (! proc.renameBundle (libRoot.getChildFile ("NotABundle"), "X").ok,
+                       "and so is something that is not a .jmi bundle");
+                {
+                    // a name another instrument already answers to is refused:
+                    // two rows reading the same thing is the problem he is
+                    // renaming to solve
+                    juce::String other;
+                    for (auto& b : proc.state.library.bundles())
+                        if (b.dir != mksBundle && other.isEmpty()) other = b.name;
+                    if (other.isNotEmpty())
+                        CHECK (! proc.renameBundle (mksBundle, other).ok,
+                               "a name another instrument already uses is refused");
+                }
+
+                // put the name back for the rest of the suite
+                CHECK (proc.renameBundle (mksBundle, named.meta.name == "Jamestown Keys"
+                                                         ? juce::JSON::parse (before)
+                                                               .getDynamicObject()
+                                                               ->getProperty ("meta")
+                                                               .getDynamicObject()
+                                                               ->getProperty ("name")
+                                                               .toString()
+                                                         : juce::String ("AuthMks")).ok,
+                       "and it can be renamed back");
+            }
+
             // put it back where the rest of the suite expects it
             CHECK (proc.recategoriseBundle (mksBundle, 1).ok, "and it can be moved back");
             proc.state.currentPage = 0;
@@ -3270,9 +3336,15 @@ int main (int argc, char** argv)
             CHECK (br.overwriteButtonText().containsIgnoreCase ("OVERWRITE")
                    && br.overwriteButtonText().contains ("Dial A"),
                    "and the control NAMES the preset it would replace, in its own label");
+            // The DRAWN line is deliberately short -- while OVERWRITE is armed,
+            // the one thing worth reading is which file is about to change.
             CHECK (br.overwriteText().containsIgnoreCase ("replaces \"Dial A\"")
-                   && br.overwriteText().containsIgnoreCase (".bak")
-                   && br.overwriteText().containsIgnoreCase ("never replaces anything"),
+                   && br.overwriteText().containsIgnoreCase (".bak"),
+                   "the drawn line names the preset replaced and the .bak kept");
+            // Both halves are still stated -- in the tooltip, which is where the
+            // sentence about SAVE AS moved when the line was cut back.
+            CHECK (br.overwriteTooltip().containsIgnoreCase ("replaces \"Dial A\"")
+                   && br.overwriteTooltip().containsIgnoreCase ("never replaces anything"),
                    "the wording states both halves: what OVERWRITE does and what SAVE AS does not");
             CHECK (! br.overwriteArmed(), "it starts unarmed");
 

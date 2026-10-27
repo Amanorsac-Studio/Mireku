@@ -15,6 +15,7 @@ import type { Preset } from '@jm/jmi-format/web';
 import { buildDefaultRack, defaultEngineParams } from '@jm/jmi-format/web';
 import { keyzoneWav, measureKeyzone, type X7lLibrary } from './x7l';
 import { buildImportInstrument, type SampleFacts, type X7lInstrumentPlan } from './x7lPlan';
+import { classifyWaveformLoop, loopSpansWholeSample, type LoopKind } from './loopSeam';
 
 export interface ImportFs {
   mkdir(dir: string): void;
@@ -84,6 +85,15 @@ export function convertInstrument(
   fs.mkdir(fs.join(bundlePath, 'samples'));
   fs.mkdir(fs.join(bundlePath, 'presets'));
 
+  // Which of this library's waveforms declare a sustain loop and which declare a
+  // decay tail. Measured once per waveform, before any zone is written, because
+  // the answer is a property of the waveform as a whole — see loopSeam.ts.
+  const loopKind = new Map<number, LoopKind>();
+  for (const zone of [...plan.zones, ...plan.releaseZones])
+    for (const s of zone.samples)
+      if (!loopKind.has(s.waveformIndex))
+        loopKind.set(s.waveformIndex, classifyWaveformLoop(bytes, lib.waveforms[s.waveformIndex]));
+
   const facts: Record<string, SampleFacts> = {};
   let bytesWritten = 0;
   let done = 0;
@@ -102,18 +112,18 @@ export function convertInstrument(
         peakDb: m.peakDb,
         lengthMs: round3((kz.lengthSamples / kz.sampleRate) * 1000),
         // A loop that spans the whole sample is not a loop — there is nothing
-        // to repeat — so it is written as `null`. Anything narrower is the
-        // library's real loop region and is carried straight over.
+        // to repeat. Nor is a DECAY TAIL: a region the source reads under a
+        // falling envelope, which held at full level swells back up on every
+        // wrap. Both are written as `null`, so the note plays the recording and
+        // stops. Only a real sustain loop is carried over.
         loop:
-          kz.loopStartSample === 0 && kz.loopEndSample === kz.lengthSamples - 1
+          loopSpansWholeSample(kz) || loopKind.get(s.waveformIndex) === 'tail'
             ? null
-            : kz.loopStartSample >= kz.loopEndSample
-              ? null
-              : {
-                  startSample: kz.loopStartSample,
-                  endSample: kz.loopEndSample,
-                  crossfadeSamples: 0,
-                },
+            : {
+                startSample: kz.loopStartSample,
+                endSample: kz.loopEndSample,
+                crossfadeSamples: 0,
+              },
       };
       done++;
       opts.onProgress?.({ instrument: plan.name, done, total });

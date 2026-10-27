@@ -229,6 +229,13 @@ public:
     }
     juce::String boundaryText() const { return boundaryLine_; }
     bool alternativeSaveOffered() const { return altSaveBtn_.isVisible(); }
+    /// The escape route's own label. The boundary LINE states the limit; this
+    /// button states the way out, so the self-check reads it here rather than
+    /// expecting the line to spell out both.
+    juce::String alternativeSaveText() const { return altSaveBtn_.getButtonText(); }
+    /// Where the full save-over explanation lives now that the drawn line is
+    /// cut back to the file that changes.
+    juce::String overwriteTooltip() { return overBtn_.getTooltip(); }
     juce::Rectangle<int> listBounds() const { return list_.getBounds(); }
     void setSaveName (const juce::String& n) { saveName_.setText (n, false); }
     void pressSave (bool performanceInstead = false)
@@ -498,9 +505,13 @@ private:
             juce::PopupMenu m;
             m.addSectionHeader (r.name.removeCharacters (juce::String::fromUTF8 ("\xE2\x96\xA0")).trim());
             m.addItem (1, "Toggle Favorite");
-            // NAME AND RENAME: a preset is renamed from the row that carries
-            // it, which is the only place its old name is on screen.
-            if (r.kind != Row::Bundle) m.addItem (3, "Rename...");
+            // NAME AND RENAME: a preset OR an instrument is renamed from the
+            // row that carries it, which is the only place its old name is on
+            // screen. Renaming an instrument used to be refused here and the
+            // artist sent to Explorer to rename a folder; it is `meta.name`,
+            // one guarded property, and nothing on disk moves — see
+            // authoring::renameInstrument.
+            m.addItem (3, r.kind == Row::Bundle ? "Rename sound..." : "Rename...");
             if (r.kind == Row::UserPreset || r.kind == Row::Performance) m.addItem (2, "Delete preset");
 
             // MOVE TO ANOTHER CATEGORY. Only for an instrument, and only in
@@ -547,7 +558,13 @@ private:
         overBtn_.setButtonText (! offer ? juce::String()
                                 : overArmed_ ? "CLICK AGAIN TO REPLACE \"" + overTarget_ + "\""
                                              : "OVERWRITE \"" + overTarget_ + "\"");
-        overBtn_.setTooltip (overLine_);
+        // The drawn line says which file changes; the full explanation — including
+        // what SAVE AS does instead — lives here, so shortening the line did not
+        // lose it.
+        overBtn_.setTooltip (overLine_.isEmpty()
+                                 ? juce::String()
+                                 : overLine_ + ". SAVE AS makes a NEW preset under the typed name and "
+                                               "never replaces anything.");
     }
 
     /// SAVE AS — a NEW preset under the typed name. It can fail, and when it
@@ -655,7 +672,7 @@ private:
                 out = proc_.renamePerformancePreset (r.file, newName);
                 break;
             case Row::Bundle:
-                out.message = "an instrument is renamed by renaming its .jmi folder, not from here";
+                out = proc_.renameBundle (r.file, newName);
                 break;
         }
         rebuild();
@@ -669,8 +686,10 @@ private:
     void promptRename (int index)
     {
         if (index < 0 || index >= (int) rows_.size()) return;
-        const auto oldName = rows_[(size_t) index].name;
-        auto* aw = new juce::AlertWindow ("Rename preset",
+        const auto& row = rows_[(size_t) index];
+        const auto oldName = row.name;
+        const bool isBundle = row.kind == Row::Bundle;
+        auto* aw = new juce::AlertWindow (isBundle ? "Rename sound" : "Rename preset",
                                           "New name for \"" + oldName + "\":",
                                           juce::MessageBoxIconType::NoIcon);
         aw->addTextEditor ("name", oldName, {});

@@ -770,6 +770,76 @@ inline WriteResult writeInstrumentWorld (const juce::File& bundleDir, const juce
 }
 
 //==============================================================================
+// RENAMING AN INSTRUMENT (a "sample", as the artist calls it).
+//
+// The list shows `meta.name`, not the folder name, so a rename is ONE property
+// on the same guarded path as a category move — and nothing on disk moves. That
+// matters more than it looks: a slot remembers its instrument by folder path,
+// as do performance snapshots and the presets inside the bundle. Renaming the
+// .jmi FOLDER would break every one of those references, which is why the list
+// used to refuse the whole operation and send the artist to Explorer instead.
+// Editing the display name breaks nothing, so it needs no ceremony.
+//
+// The folder keeps its original name, which also keeps the provenance readable:
+// the bundle that came from MKS20_EP1_EP2.X7L is still in a folder saying so,
+// whatever the instrument is called on screen.
+inline WriteResult renameInstrument (const juce::File& bundleDir, const juce::String& rawNewName,
+                                     const juce::StringArray& namesInUse = {})
+{
+    WriteResult r;
+    const auto newName = rawNewName.trim();
+    if (newName.isEmpty()) { r.message = "a name cannot be empty"; return r; }
+    if (newName.length() > 64) { r.message = "that name is longer than 64 characters"; return r; }
+    if (! looksLikeBundle (bundleDir))
+    {
+        r.message = bundleDir == juce::File()
+                      ? "there is no instrument bundle here to rename"
+                      : "not a .jmi bundle: " + bundleDir.getFullPathName();
+        return r;
+    }
+
+    auto ij = bundleDir.getChildFile ("instrument.json");
+    const auto originalText = ij.loadFileAsString();
+    const auto original = juce::JSON::parse (originalText);
+    auto* root = original.getDynamicObject();
+    auto* meta = root != nullptr ? root->getProperty ("meta").getDynamicObject() : nullptr;
+    if (meta == nullptr) { r.message = "instrument.json has no meta object"; return r; }
+
+    const auto oldName = meta->getProperty ("name").toString();
+    if (oldName == newName) { r.message = "that is already its name"; return r; }
+    // Two instruments sharing a display name is not corrupting, but it is
+    // indistinguishable on screen — and the artist is renaming precisely so he
+    // can tell them apart.
+    if (namesInUse.contains (newName, true))
+    {
+        r.message = "another instrument is already called \"" + newName + "\"";
+        return r;
+    }
+
+    auto edited = juce::JSON::parse (originalText);
+    edited.getDynamicObject()->getProperty ("meta").getDynamicObject()->setProperty ("name", newName);
+
+    auto validate = [&] (const juce::String& back, juce::String& why)
+    {
+        auto parsedBack = juce::JSON::parse (back);
+        if (! varsDifferOnlyAt (original, parsedBack, "meta.name", why)) return false;
+        jmi::Instrument inst;
+        std::string err;
+        if (! jmi::parseInstrumentJson (back.toStdString(), inst, err))
+        { why = juce::String (err); return false; }
+        if (juce::String (inst.meta.name) != newName)
+        { why = "the reader did not report the new name"; return false; }
+        return true;
+    };
+
+    r = guardedReplace (ij, juce::JSON::toString (edited, false), true, validate);
+    if (! r.ok) return r;
+
+    r.message = "renamed to " + newName;
+    return r;
+}
+
+//==============================================================================
 // COLLECTION — gathering everything the artist authored so it can come back.
 //
 // FORMAT DECISION: a plain, inspectable FOLDER TREE with a JSON manifest at its

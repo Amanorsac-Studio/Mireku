@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pedalboard Mock</title>
+<style>
+:root{
+  --bg:#141210; --panel:#1c1916; --line:#2c2823; --text:#ece6dc; --dim:#8d857a; --accent:#e8a33d;
+  --mono:ui-monospace,"JetBrains Mono",Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.3 "Segoe UI",system-ui,sans-serif;overflow:hidden;user-select:none}
+.app{width:1600px;height:1000px;display:grid;grid-template-rows:64px 46px 1fr;position:relative}
+header{display:flex;align-items:center;gap:16px;padding:0 18px;border-bottom:1px solid var(--line)}
+.logo{font-weight:800;letter-spacing:.04em}.logo small{display:block;font:9px var(--mono);color:var(--dim);letter-spacing:.3em}
+.preset{margin:0 auto;text-align:center;font-weight:700;font-size:19px}.preset small{display:block;font:10px var(--mono);color:var(--dim);letter-spacing:.2em}
+.hbtn{border:1px solid var(--line);border-radius:8px;padding:9px 14px;color:var(--text);background:#1a1714}
+nav{display:flex;gap:28px;padding:12px 20px;border-bottom:1px solid var(--line);color:var(--dim)}
+nav b{color:var(--text);border-bottom:2px solid var(--accent);padding-bottom:10px}
+main{display:grid;grid-template-columns:1fr 590px;gap:16px;padding:16px 18px;min-height:0}
+.left{display:grid;grid-template-rows:auto auto 1fr;gap:12px;min-height:0;position:relative}
+.right{display:grid;grid-template-rows:auto auto 1fr;gap:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
+.card h3{margin:0 0 10px;font-size:15px}
+
+/* ---------- the board ---------- */
+.boardwrap{position:relative}
+.boardbar{display:flex;align-items:center;gap:10px;margin-bottom:8px;color:var(--dim);font:10px var(--mono);letter-spacing:.2em}
+.boardbar .sp{flex:1}
+.addbtn{font:600 13px "Segoe UI";letter-spacing:0;color:#1a1408;background:var(--accent);border:0;border-radius:8px;padding:8px 14px;cursor:pointer}
+.board{position:relative;height:340px;border-radius:12px;padding:30px 34px 26px;
+  background:
+    linear-gradient(180deg,rgba(255,255,255,.06),transparent 10%,transparent 90%,rgba(0,0,0,.4)),
+    repeating-linear-gradient(90deg,#1b1b1d 0 2px,#202023 2px 4px);
+  box-shadow:inset 0 0 0 1px #2e2e31,inset 0 2px 0 #3a3a3e,0 14px 30px rgba(0,0,0,.6);
+  display:flex;align-items:flex-end;gap:26px;overflow:visible}
+.board::before,.board::after{content:"";position:absolute;left:14px;right:14px;height:8px;border-radius:4px;background:linear-gradient(#3b3b40,#232326)}
+.board::before{top:8px}.board::after{bottom:8px}
+.jackbox{position:absolute;top:50%;width:26px;height:64px;margin-top:-20px;border-radius:6px;background:linear-gradient(90deg,#2b2b2f,#18181a);display:grid;place-items:center;font:8px var(--mono);color:#777;writing-mode:vertical-rl;letter-spacing:.2em}
+.jackbox.in{left:4px}.jackbox.out{right:4px}
+svg.cables{position:absolute;inset:0;pointer-events:none;overflow:visible}
+.empty-hint{position:absolute;inset:0;display:grid;place-items:center;color:#666;font:12px var(--mono);letter-spacing:.2em;pointer-events:none}
+
+/* ---------- a pedal ---------- */
+.pedal{--c:#3d8a4a;--ink:#f4efe4;position:relative;width:150px;height:262px;flex:none;border-radius:9px;cursor:grab;
+  background:
+    radial-gradient(120% 60% at 30% 0%,rgba(255,255,255,.28),transparent 60%),
+    linear-gradient(170deg,color-mix(in oklab,var(--c),white 14%),var(--c) 45%,color-mix(in oklab,var(--c),black 30%));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.45),inset 0 -4px 8px rgba(0,0,0,.35),inset 1px 0 0 rgba(255,255,255,.15),
+    0 3px 0 color-mix(in oklab,var(--c),black 55%),0 16px 22px rgba(0,0,0,.6);
+  transition:transform .18s cubic-bezier(.2,.8,.2,1),filter .2s,opacity .2s}
+.pedal.wide{width:206px}
+.pedal.off{filter:saturate(.55) brightness(.78)}
+.pedal .jack{position:absolute;top:38px;width:9px;height:20px;background:linear-gradient(#c9c9c9,#7b7b7b);border-radius:2px}
+.pedal .jack.l{left:-8px}.pedal .jack.r{right:-8px}
+.pedal .screw{position:absolute;width:7px;height:7px;border-radius:50%;background:radial-gradient(circle at 35% 35%,#eee,#777 70%);box-shadow:0 1px 1px rgba(0,0,0,.5)}
+.pedal .screw:nth-of-type(1){left:6px;top:6px}.pedal .screw:nth-of-type(2){right:6px;top:6px}
+.pedal .screw:nth-of-type(3){left:6px;bottom:6px}.pedal .screw:nth-of-type(4){right:6px;bottom:6px}
+.knobs{display:flex;flex-wrap:wrap;justify-content:center;gap:6px 6px;padding:18px 8px 0}
+.k{display:grid;justify-items:center;gap:3px;width:40px}
+.knob{--a:0deg;width:34px;height:34px;border-radius:50%;cursor:ns-resize;position:relative;
+  background:radial-gradient(circle at 38% 30%,#5a5a5a,#141414 62%);box-shadow:0 3px 4px rgba(0,0,0,.6),inset 0 1px 1px rgba(255,255,255,.25);transform:rotate(var(--a))}
+.knob::after{content:"";position:absolute;left:50%;top:3px;width:3px;height:12px;margin-left:-1.5px;border-radius:2px;background:#f1ece2}
+.pedal.whiteknobs .knob{background:radial-gradient(circle at 38% 30%,#fff,#cfcac0 65%,#9d978c)}
+.pedal.whiteknobs .knob::after{background:#222}
+.k span{font:700 8px/1 var(--mono);color:var(--ink);opacity:.85;letter-spacing:.08em;text-transform:uppercase}
+.knob .tip{position:absolute;left:50%;top:-24px;transform:translateX(-50%) rotate(calc(-1*var(--a)));background:#000c;color:#fff;font:10px var(--mono);padding:2px 5px;border-radius:4px;display:none;white-space:nowrap}
+.knob.active .tip{display:block}
+.led{position:absolute;left:50%;margin-left:-5px;bottom:104px;width:10px;height:10px;border-radius:50%;background:#ff4b2b;box-shadow:0 0 10px 3px rgba(255,75,43,.7),inset 0 -1px 2px rgba(0,0,0,.4)}
+.pedal.off .led{background:#4a1d16;box-shadow:inset 0 -1px 2px rgba(0,0,0,.4)}
+.pname{position:absolute;left:0;right:0;bottom:66px;text-align:center;color:var(--ink);font:italic 800 17px/1 Georgia,serif;letter-spacing:-.01em;text-shadow:0 1px 0 rgba(0,0,0,.25)}
+.pname small{display:block;font:600 7px var(--mono);font-style:normal;letter-spacing:.25em;opacity:.7;margin-top:3px}
+.foot{position:absolute;left:50%;bottom:16px;width:44px;height:44px;margin-left:-22px;border-radius:50%;cursor:pointer;
+  background:radial-gradient(circle at 40% 35%,#fdfdfd,#a9a9a9 45%,#5e5e5e 75%);box-shadow:0 0 0 4px #2a2a2a55,0 4px 6px rgba(0,0,0,.6),inset 0 -2px 3px rgba(0,0,0,.4)}
+.foot:active{transform:translateY(1px) scale(.97)}
+.pedal.ghost{position:fixed;z-index:50;pointer-events:none;transform:rotate(-3deg) scale(1.04);opacity:.95;cursor:grabbing}
+.slot{flex:none;border:2px dashed rgba(232,163,61,.7);border-radius:10px;height:262px;background:rgba(232,163,61,.07)}
+.trash{position:absolute;left:50%;top:-6px;transform:translate(-50%,-100%);padding:8px 16px;border-radius:8px;background:#3a1612;color:#ff9c8c;font:12px var(--mono);opacity:0;transition:opacity .15s;pointer-events:none}
+.dragging .trash{opacity:1}
+.trash.hot{background:#c7392a;color:#fff}
+
+/* ---------- amp + cab (smaller cab than today) ---------- */
+.amp{background:linear-gradient(#efe5d0,#ddd0b6);border-radius:12px;padding:14px 18px;color:#2a2117;display:flex;align-items:center;gap:26px;box-shadow:0 0 0 2px #b9a882,0 10px 20px rgba(0,0,0,.5)}
+.amp .t{font:italic 800 26px Georgia,serif}.amp .t small{display:block;font:600 9px var(--mono);font-style:normal;letter-spacing:.2em;color:#6d6150}
+.amp .ak{display:grid;justify-items:center;gap:4px;font:700 9px var(--mono);letter-spacing:.1em}
+.amp .ak i{width:40px;height:40px;border-radius:50%;background:radial-gradient(circle at 38% 30%,#555,#111 62%);position:relative;box-shadow:0 3px 4px rgba(0,0,0,.4)}
+.amp .ak i::after{content:"";position:absolute;left:50%;top:4px;width:3px;height:13px;margin-left:-1.5px;background:#fff;border-radius:2px}
+.cab{border-radius:12px;min-height:0;position:relative;overflow:hidden;
+  background:repeating-linear-gradient(45deg,#3a2e22 0 2px,#4a3a2a 2px 4px);box-shadow:inset 0 0 0 10px #241d16,inset 0 0 60px rgba(0,0,0,.6)}
+.cabbar{position:absolute;left:20px;right:20px;bottom:16px;display:flex;gap:6px;align-items:center;background:#1a1612e6;border-radius:10px;padding:8px 10px;font-size:13px}
+.cabbar .ch{padding:6px 10px;border-radius:7px}.cabbar .ch.on{background:var(--accent);color:#1a1408;font-weight:600}
+.cabbar .sp{flex:1}
+
+/* ---------- pedal browser (opens over the cab, like a shop drawer) ---------- */
+.shop{position:absolute;left:0;right:0;bottom:0;height:478px;background:#171513;border:1px solid var(--line);border-radius:14px 14px 12px 12px;
+  box-shadow:0 -20px 40px rgba(0,0,0,.6);display:grid;grid-template-columns:300px minmax(0,1fr);transform:translateY(105%);transition:transform .35s cubic-bezier(.2,.8,.2,1);z-index:20}
+.shop.open{transform:none}
+.preview{border-right:1px solid var(--line);padding:18px;display:grid;grid-template-rows:auto 1fr auto;gap:10px}
+.preview .stage{display:grid;place-items:center;padding:6px 0}
+.preview h4{margin:0;font-size:20px}.preview p{margin:4px 0 0;color:var(--dim);font-size:13px;line-height:1.45}
+.preview .tag{font:10px var(--mono);letter-spacing:.2em;color:var(--accent)}
+.preview .go{display:flex;gap:8px}
+.ghostbtn{border:1px solid var(--line);background:#201d19;color:var(--text);border-radius:8px;padding:9px 14px;cursor:pointer}
+.grid{padding:14px 18px;min-width:0;display:grid;grid-template-rows:auto 1fr;gap:12px;min-height:0}
+.filters{display:flex;gap:6px;align-items:center;min-width:0}
+.chip{padding:6px 10px;border-radius:999px;border:1px solid var(--line);color:var(--dim);cursor:pointer;font-size:13px}
+.chip.on{background:#2a251f;color:var(--text);border-color:#4a4036}
+.search{margin-left:auto;background:#100e0c;border:1px solid var(--line);border-radius:8px;padding:7px 10px;color:var(--text);width:160px;min-width:0}
+.close{margin-left:8px}
+.tiles{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:16px 10px;overflow:auto;align-content:start;padding-right:6px}
+.tile{display:grid;justify-items:center;gap:8px;padding:10px 4px;border-radius:10px;cursor:grab;color:var(--dim);font-size:12.5px}
+.tile:hover,.tile.sel{background:#221e1a;color:var(--text)}
+.tile .mini{zoom:.5}
+.tile.onboard::after{content:"ON BOARD";font:9px var(--mono);letter-spacing:.15em;color:var(--accent)}
+
+.note{position:absolute;right:18px;bottom:12px;font:11px var(--mono);color:#6f675d}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <header>
+    <div class="logo">TOP END<small>AMANORSAC STUDIO</small></div>
+    <div class="preset">Bridge Drive<small>PRESET</small></div>
+    <span class="hbtn">Bypass</span><span class="hbtn">Tune</span><span class="hbtn">120 BPM · TAP</span><span class="hbtn">ASIO 11.5 ms</span>
+  </header>
+  <nav><b>Rig</b><span>Learn</span><span>Cover</span><span>Library</span><span>Settings</span></nav>
+  <main>
+    <section class="left">
+      <div class="boardwrap" id="boardwrap">
+        <div class="boardbar"><span>PEDALBOARD · DRAG TO REARRANGE · TURN KNOBS ON THE PEDAL · STOMP TO SWITCH</span><span class="sp"></span><button class="addbtn" id="openShop">+ Add pedal</button></div>
+        <div class="board" id="board">
+          <div class="jackbox in">INPUT</div><div class="jackbox out">TO AMP</div>
+          <svg class="cables" id="cables"></svg>
+        </div>
+        <div class="trash" id="trash">Drop here to remove</div>
+      </div>
+      <div class="amp">
+        <div class="t">Plexi 68<small>BRIT · EL34 · 50 W</small></div>
+        <div class="ak"><i style="transform:rotate(40deg)"></i>GAIN</div><div class="ak"><i></i>BASS</div><div class="ak"><i style="transform:rotate(15deg)"></i>MID</div>
+        <div class="ak"><i style="transform:rotate(15deg)"></i>TREBLE</div><div class="ak"><i style="transform:rotate(15deg)"></i>PRESENCE</div><div class="ak"><i style="transform:rotate(15deg)"></i>MASTER</div>
+      </div>
+      <div class="cab">
+        <div class="cabbar"><span style="color:var(--dim);font:10px var(--mono)">CAB</span><span class="ch">1×12 Open</span><span class="ch">2×12 Alnico</span><span class="ch on">4×12 V30</span><span class="ch">Your IR</span><span class="sp"></span><span style="color:var(--dim)">Mic Centre ─●── Edge</span></div>
+      </div>
+      <div class="shop" id="shop">
+        <div class="preview">
+          <div class="tag" id="pvTag">DRIVE</div>
+          <div class="stage" id="pvStage"></div>
+          <div>
+            <h4 id="pvName"></h4><p id="pvDesc"></p>
+            <div class="go" style="margin-top:12px"><button class="addbtn" id="pvAdd">Add to board</button><span style="color:var(--dim);font-size:12px;align-self:center">or drag it up</span></div>
+          </div>
+        </div>
+        <div class="grid">
+          <div class="filters" id="filters"><input class="search" id="search" placeholder="Search pedals"><button class="ghostbtn close" id="closeShop">Done</button></div>
+          <div class="tiles" id="tiles"></div>
+        </div>
+      </div>
+    </section>
+    <section class="right">
+      <div class="card"><h3>All presets</h3><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="card" style="padding:28px 14px 12px">Call to Worship</div><div class="card" style="padding:28px 14px 12px">Glass Clean</div>
+        <div class="card" style="padding:28px 14px 12px;background:var(--accent);color:#1a1408;font-weight:700">Bridge Drive</div><div class="card" style="padding:28px 14px 12px">Swell Pad</div></div></div>
+      <div class="card"><h3>Looper</h3><div style="color:var(--dim)">REC · STOP · UNDO · CLEAR — unchanged</div></div>
+      <div class="card"><h3>Output</h3><div style="color:var(--dim)">unchanged</div></div>
+    </section>
+  </main>
+  <div class="note">MOCK — sounds are not connected</div>
+</div>
+<script>
+const LIB = [
+  {id:'gate', name:'Noise Gate', sub:'utility', cat:'Utility', c:'#6c7480', knobs:['Thresh','Release'], v:[3,4], d:'Silences hum and hiss between notes. Sits first.'},
+  {id:'comp', name:'Squeeze', sub:'compressor', cat:'Dynamics', c:'#2f5d9e', knobs:['Level','Attack','Sustain'], v:[6,4,5], d:'Evens out your picking and adds sustain to clean parts.'},
+  {id:'tube', name:'Tube Drive', sub:'overdrive', cat:'Drive', c:'#3f9a54', knobs:['Drive','Tone','Level'], v:[4,6,7], wk:true, d:'Mid-hump overdrive. Tightens the amp for leads.'},
+  {id:'fuzz', name:'Big Muff-in', sub:'fuzz', cat:'Drive', c:'#b6322a', knobs:['Volume','Tone','Sustain'], v:[6,5,8], wk:true, d:'Thick, sustaining fuzz wall.'},
+  {id:'klon', name:'Gold Boost', sub:'clean boost', cat:'Drive', c:'#c9a24a', ink:'#2a1d08', knobs:['Gain','Treble','Output'], v:[3,5,7], d:'Transparent push into the amp.'},
+  {id:'chor', name:'Chorus', sub:'modulation', cat:'Modulation', c:'#4aa3b5', knobs:['Rate','Depth','Mix'], v:[3,5,5], d:'Shimmering doubled clean.'},
+  {id:'phase', name:'Phase 90s', sub:'phaser', cat:'Modulation', c:'#d26a26', knobs:['Speed','Mix'], v:[4,6], d:'Swirling four-stage phaser.'},
+  {id:'trem', name:'Tremolo', sub:'modulation', cat:'Modulation', c:'#a9b8bf', ink:'#1d2328', knobs:['Rate','Depth','Shape'], v:[5,6,3], d:'Volume pulse, can lock to the click.'},
+  {id:'delay', name:'Tape Echo', sub:'delay', cat:'Time', c:'#3a3d42', knobs:['Time','Repeats','Mix','Wow'], v:[5,4,4,3], wide:true, d:'Warm repeats with tape wobble. Taps to the tempo.'},
+  {id:'dot', name:'Dotted 8th', sub:'delay', cat:'Time', c:'#1f6e86', knobs:['Time','Repeats','Mix'], v:[6,5,4], d:'The worship-lead rhythmic delay, synced to the BPM.'},
+  {id:'room', name:'Room', sub:'reverb', cat:'Time', c:'#e8e2d2', ink:'#2a2620', knobs:['Decay','Tone','Mix'], v:[4,6,3], d:'Small natural space.'},
+  {id:'shim', name:'Sky Verb', sub:'shimmer reverb', cat:'Time', c:'#2a8fa8', knobs:['Decay','Pre','Shimmer','Mix'], v:[8,3,6,5], wide:true, d:'Huge ambient reverb with octave shimmer for pads.'},
+  {id:'eq', name:'7-Band EQ', sub:'equaliser', cat:'Utility', c:'#24324a', knobs:['Low','Mid','High','Level'], v:[5,5,5,5], wide:true, d:'Shape the tone after the drive.'},
+  {id:'vol', name:'Swell', sub:'volume', cat:'Utility', c:'#4b4b4f', knobs:['Attack','Level'], v:[6,7], d:'Auto volume swells for violin-like pads.'},
+  {id:'oct', name:'Octaver', sub:'pitch', cat:'Pitch', c:'#7b3fa0', knobs:['Sub','Up','Dry'], v:[5,3,7], d:'Adds an octave below and above.'},
+  {id:'nam', name:'Your Amp', sub:'.nam capture', cat:'Utility', c:'#1d1d1d', knobs:['Input','Output'], v:[5,5], d:'Load a Neural Amp Modeler capture (.nam) of any amp or drive. Proposal — see notes.'},
+];
+let board = ['gate','tube','delay','room'];
+const state = {};   // per-pedal knob values and on/off
+const def = id => LIB.find(p=>p.id===id);
+const ang = v => -135 + v*27;
+
+function pedalEl(id, live){
+  const p = def(id), s = state[id] || (state[id] = {v:[...p.v], on:true});
+  const el = document.createElement('div');
+  el.className = 'pedal' + (p.wide?' wide':'') + (p.wk?' whiteknobs':'') + (live && !s.on?' off':'');
+  el.style.setProperty('--c', p.c); if (p.ink) el.style.setProperty('--ink', p.ink);
+  el.dataset.id = id;
+  el.innerHTML = '<i class="screw"></i><i class="screw"></i><i class="screw"></i><i class="screw"></i><i class="jack l"></i><i class="jack r"></i>'
+    + '<div class="knobs">' + p.knobs.map((k,i)=>`<div class="k"><div class="knob" data-i="${i}" style="--a:${ang(s.v[i])}"><b class="tip"></b></div><span>${k}</span></div>`).join('') + '</div>'
+    + '<div class="led"></div><div class="pname">' + p.name + '<small>' + p.sub.toUpperCase() + '</small></div><div class="foot"></div>';
+  return el;
+}
+
+const boardEl = document.getElementById('board'), cables = document.getElementById('cables');
+function render(){
+  boardEl.querySelectorAll('.pedal,.slot,.empty-hint').forEach(n=>n.remove());
+  board.forEach(id => boardEl.insertBefore(pedalEl(id,true), cables));
+  if (!board.length) boardEl.insertAdjacentHTML('beforeend','<div class="empty-hint">DRAG A PEDAL HERE</div>');
+  drawCables(); renderTiles();
+}
+function drawCables(){
+  const b = boardEl.getBoundingClientRect(), ps = [...boardEl.querySelectorAll('.pedal')];
+  const pts = [[24, 150]];
+  ps.forEach(p=>{const r=p.getBoundingClientRect(); pts.push([r.left-b.left-6, r.top-b.top+48],[r.right-b.left+6, r.top-b.top+48]);});
+  pts.push([b.width-24, 150]);
+  let d = '';
+  for (let i=0;i<pts.length;i+=2){ const [x1,y1]=pts[i],[x2,y2]=pts[i+1]; const sag=Math.min(70,Math.abs(x2-x1)*.4+46);
+    d += `<path d="M${x1} ${y1} C${x1+10} ${y1-sag} ${x2-10} ${y2-sag} ${x2} ${y2}" fill="none" stroke="#0b0b0c" stroke-width="7" stroke-linecap="round"/>`
+       + `<path d="M${x1} ${y1} C${x1+10} ${y1-sag} ${x2-10} ${y2-sag} ${x2} ${y2}" fill="none" stroke="#2c2c30" stroke-width="3" stroke-linecap="round"/>`; }
+  cables.innerHTML = d;
+}
+
+/* ---- knobs, footswitches, drag to rearrange / remove ---- */
+let drag = null;
+boardEl.addEventListener('pointerdown', e=>{
+  const knob = e.target.closest('.knob'), foot = e.target.closest('.foot'), ped = e.target.closest('.pedal');
+  if (!ped) return;
+  const id = ped.dataset.id;
+  if (foot){ state[id].on = !state[id].on; ped.classList.toggle('off', !state[id].on); return; }
+  if (knob){
+    const i=+knob.dataset.i, y0=e.clientY, v0=state[id].v[i], tip=knob.querySelector('.tip');
+    knob.classList.add('active'); tip.textContent=v0.toFixed(1); knob.setPointerCapture(e.pointerId);
+    const mv = ev=>{ const v=Math.max(0,Math.min(10,v0+(y0-ev.clientY)/14)); state[id].v[i]=v; knob.style.setProperty('--a',ang(v)+'deg'); tip.textContent=v.toFixed(1); };
+    const up = ()=>{ knob.classList.remove('active'); knob.removeEventListener('pointermove',mv); };
+    knob.addEventListener('pointermove',mv); knob.addEventListener('pointerup',up,{once:true});
+    return;
+  }
+  startDrag(e, id, ped);
+});
+boardEl.addEventListener('dblclick', e=>{ const k=e.target.closest('.knob'); if(!k) return; const id=k.closest('.pedal').dataset.id, i=+k.dataset.i; state[id].v[i]=def(id).v[i]; k.style.setProperty('--a',ang(def(id).v[i])+'deg'); });
+
+function startDrag(e, id, src){
+  const x0=e.clientX, y0=e.clientY; let started=false;
+  const mv = ev=>{
+    if (!started){ if (Math.hypot(ev.clientX-x0, ev.clientY-y0) < 5) return; started=true; begin(ev); }
+    move(ev);
+  };
+  const begin = ev=>{
+    const g = pedalEl(id, false); g.classList.add('ghost'); document.body.appendChild(g);
+    const r = (src||g).getBoundingClientRect();
+    drag = {id, ghost:g, from: src ? board.indexOf(id) : -1, ox: src ? x0-r.left : r.width/2, oy: src ? y0-r.top : 40};
+    if (src){ board.splice(drag.from,1); }
+    document.getElementById('boardwrap').classList.add('dragging');
+    renderWithSlot(-1);
+  };
+  const move = ev=>{
+    drag.ghost.style.left=(ev.clientX-drag.ox)+'px'; drag.ghost.style.top=(ev.clientY-drag.oy)+'px';
+    const b=boardEl.getBoundingClientRect(), over = ev.clientY>b.top-40 && ev.clientY<b.bottom+40 && ev.clientX>b.left && ev.clientX<b.right;
+    const t=document.getElementById('trash').getBoundingClientRect();
+    const onTrash = drag.from>=0 && ev.clientY < b.top;
+    document.getElementById('trash').classList.toggle('hot', onTrash);
+    drag.over = over && !onTrash; drag.trash = onTrash;
+    renderWithSlot(drag.over ? slotIndex(ev.clientX) : -1);
+  };
+  const up = ev=>{
+    window.removeEventListener('pointermove',mv);
+    if (!started){ if(!src) select(id); return; }
+    if (drag.over) board.splice(drag.slot,0,id);
+    else if (!drag.trash && drag.from>=0) board.splice(drag.from,0,id);   // dropped nowhere: put it back
+    drag.ghost.remove(); document.getElementById('boardwrap').classList.remove('dragging'); document.getElementById('trash').classList.remove('hot');
+    drag=null; render();
+  };
+  window.addEventListener('pointermove',mv); window.addEventListener('pointerup',up,{once:true});
+}
+function slotIndex(x){
+  const ps=[...boardEl.querySelectorAll('.pedal')]; let i=0;
+  for (const p of ps){ const r=p.getBoundingClientRect(); if (x > r.left + r.width/2) i++; }
+  return i;
+}
+function renderWithSlot(at){
+  if (drag) drag.slot = at;
+  boardEl.querySelectorAll('.pedal,.slot,.empty-hint').forEach(n=>n.remove());
+  board.forEach((id,i)=>{ if(i===at) addSlot(); boardEl.insertBefore(pedalEl(id,true), cables); });
+  if (at>=board.length) addSlot();
+  drawCables();
+  function addSlot(){ const s=document.createElement('div'); s.className='slot'; s.style.width=(def(drag.id).wide?206:150)+'px'; boardEl.insertBefore(s,cables); }
+}
+
+/* ---- pedal browser ---- */
+const shop=document.getElementById('shop'), tiles=document.getElementById('tiles');
+let cat='All', q='', sel='shim';
+['All','Drive','Dynamics','Modulation','Time','Pitch','Utility'].reverse().forEach(c=>{
+  const ch=document.createElement('span'); ch.className='chip'+(c==='All'?' on':''); ch.textContent=c;
+  ch.onclick=()=>{cat=c; document.querySelectorAll('.chip').forEach(x=>x.classList.toggle('on',x===ch)); renderTiles();};
+  document.getElementById('filters').prepend(ch);
+});
+document.getElementById('search').oninput=e=>{q=e.target.value.toLowerCase(); renderTiles();};
+function renderTiles(){
+  tiles.innerHTML='';
+  LIB.filter(p=>(cat==='All'||p.cat===cat)&&(p.name+p.sub).toLowerCase().includes(q)).forEach(p=>{
+    const t=document.createElement('div'); t.className='tile'+(p.id===sel?' sel':'')+(board.includes(p.id)?' onboard':'');
+    const m=document.createElement('div'); m.className='mini'; m.appendChild(pedalEl(p.id,false));
+    t.appendChild(m); t.insertAdjacentHTML('beforeend','<span>'+p.name+'</span>');
+    t.addEventListener('pointerdown',e=>{ e.preventDefault(); select(p.id); if(!board.includes(p.id)) startDrag(e,p.id,null); });
+    t.addEventListener('dblclick',()=>add(p.id));
+    tiles.appendChild(t);
+  });
+}
+function select(id){
+  sel=id; const p=def(id);
+  document.getElementById('pvStage').innerHTML=''; document.getElementById('pvStage').appendChild(pedalEl(id,false));
+  document.getElementById('pvName').textContent=p.name; document.getElementById('pvDesc').textContent=p.d;
+  document.getElementById('pvTag').textContent=p.cat.toUpperCase()+' · '+p.sub.toUpperCase();
+  document.getElementById('pvAdd').textContent = board.includes(id) ? 'On the board' : 'Add to board';
+  renderTiles();
+}
+function add(id){ if(!board.includes(id)){ board.push(id); render(); select(id);} }
+document.getElementById('pvAdd').onclick=()=>add(sel);
+document.getElementById('openShop').onclick=()=>shop.classList.add('open');
+document.getElementById('closeShop').onclick=()=>shop.classList.remove('open');
+if (location.hash==='#shop') shop.classList.add('open');
+render(); select(sel);
+</script>
+</body>
+</html>

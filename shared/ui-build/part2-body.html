@@ -32,10 +32,12 @@
   <section class="view on" id="view-rig">
     <div class="rigL">
       <div class="card board">
-        <div class="boardfit" id="boardFit"><div class="chain" id="chain"></div></div>
-        <div class="boardhint"><span class="cap">Tap the switch to stomp · tap the pedal to edit · hold for more</span><span class="cap" id="boardCount"></span></div>
+        <div class="boardfit" id="boardFit"><div class="chain" id="chain"></div><i class="dropmark" id="dropMark"></i></div>
+        <div class="boardhint"><span class="cap">Drag to move · turn knobs on the pedal · tap for all controls</span><span class="cap" id="boardCount"></span></div>
+        <div class="boardbin" id="boardBin">Drop here to remove</div>
       </div>
       <div class="amp" id="ampBox"></div>
+      <div class="pbrowse" id="pBrowse" aria-label="Pedal browser"></div>
     </div>
     <div class="rigR">
       <div class="card scenes">
@@ -231,9 +233,10 @@
   <!-- ═══════════ LIBRARY ═══════════ -->
   <section class="view" id="view-library">
     <div class="card libL">
-      <div class="search"><svg width="14" height="14" viewBox="0 0 14 14"><circle cx="6" cy="6" r="4.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="m9.2 9.2 3.3 3.3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><input id="libSearch" placeholder="Search presets, sets, songs" aria-label="Search"></div>
-      <div class="seg" id="libSeg"><button data-k="presets" class="on">Presets</button><button data-k="sets">Sets</button><button data-k="songs">Songs</button><button data-k="captures">Captures</button></div>
-      <div class="newrow"><button class="btn" id="libNewPreset">+ New preset</button><button class="btn" id="libNewSet">+ New set</button><button class="btn" id="libShare">Share presets</button></div>
+      <div class="search"><svg width="14" height="14" viewBox="0 0 14 14"><circle cx="6" cy="6" r="4.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="m9.2 9.2 3.3 3.3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><input id="libSearch" placeholder="Search presets, packs, sets, songs" aria-label="Search"></div>
+      <div class="seg" id="libSeg"><button data-k="presets" class="on">Presets</button><button data-k="packs">Packs</button><button data-k="sets">Sets</button><button data-k="songs">Songs</button><button data-k="captures">Captures</button></div>
+      <div class="newrow" id="libNewRow"></div>
+      <div class="libfilters" id="libFilters"></div>
       <div class="list" id="libList"></div>
       <div class="pager" id="libPager"></div>
     </div>

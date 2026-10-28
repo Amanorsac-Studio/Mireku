@@ -39,7 +39,8 @@ const between = (s, a, b) => { const i = s.indexOf(a); const j = s.indexOf(b, i)
 //------------------------------------------------------------ shared files
 for (const f of ['src/plugin/TopEndProcessor.cpp', 'src/plugin/TopEndProcessor.h', 'src/plugin/TopEndEditor.cpp',
                  'src/plugin/TopEndEditor.h', 'src/plugin/StandaloneApp.cpp',
-                 'src/engine/Looper.h', 'src/engine/Metronome.h'])
+                 'src/engine/Looper.h', 'src/engine/Metronome.h', 'src/engine/PresetPacks.h',
+                 'src/engine/NamModel.h', 'src/engine/nam/NamBridge.h', 'src/engine/nam/NamBridge.cpp'])
   copy(f);
 copy('src/engine/CoverPlayer.h', s => s.split('" - Guitar').join('" - Bass'));
 copy('tests/ProcessorTest.cpp', s => s

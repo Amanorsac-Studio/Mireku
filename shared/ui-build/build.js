@@ -41,7 +41,8 @@ k1 = edit(k1, [
 ], 'K1');
 
 //---------------------------------------------------------------- K2 preset menus
-const k2 = slice('/* ═════════════════════════════ PRESET MENU', '/* ═════════════════════════════ STATE / TICK');
+// openPresetMenu now lives in part4-lib.js (rows open out to show the pedals)
+const k2 = slice('/* ═════════════════════════════ PRESET MENU', 'function openPresetMenu(){');
 
 //---------------------------------------------------------------- K3 learn core
 let k3 = slice('const NN_SHARP=', '/*──────────────── analysis lookups ────────────────*/');
@@ -195,7 +196,6 @@ html = html.replace('#view-learn.on{grid-template-rows', '#view-learn{position:r
 // no chat. Every entry must be found, so a reworded source fails the build.
 const all = (s, a, b) => s.split(a).join(b);
 const COPY = [
-  ["' — it starts with an empty board'", "'. The board is empty.'"],
   ["' — add presets with +'", "'. Add presets with +.'"],
   ["' — you can keep playing'", "'. Playing continues.'"],
   ['MIDI Learn: move a control on your device', 'MIDI Learn: move a control on the device.'],
@@ -237,7 +237,6 @@ const COPY = [
   ['The device would not take that setting. Choose another.', 'The device rejected this setting.'],
   ["'Nothing to export yet'", "'Nothing to export.'"],
   ["'The backup could not be written'", "'Backup failed.'"],
-  ["'Could not export'", "'Export failed.'"],
   ['No takes yet. Press record to play over the song.', 'No takes. Press Record to record over the song.'],
 ];
 for (const [a, b] of COPY) { if (!html.includes(a)) throw new Error('copy not found: ' + a); html = all(html, a, b); }

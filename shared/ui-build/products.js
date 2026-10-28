@@ -41,6 +41,8 @@ const low = {
     ['Guitar amp, pedalboard, looper and music tutor.', 'Bass amp, pedalboard, looper and music tutor.'],
     ['Separate it to mute the guitar and play along.', 'Separate it to mute the bass and play along.'],
     ['Mute guitar', 'Mute bass'],
+    ['Your guitar as a bowed string: every note swells in like a bow, holds, and takes a player’s vibrato. Violin, viola or cello.',
+     'Your bass as a bowed string: every note swells in like a bow, holds, and takes a player’s vibrato. Cello, double bass or viola.'],
     ["an expression pedal goes on the Wah's Position", 'an expression pedal can drive any knob'],
     ['TOP END', 'LOW END'], ['Top End', 'Low End'], ['topend', 'lowend'],
     ["'te.cover'", "'le.cover'"],
@@ -73,6 +75,7 @@ const low = {
    shared stacked layout. */
 .rigL{grid-template-rows:minmax(0,1fr) auto}
 .rigL .amp{order:1} .rigL .board{order:2}
+.rigL>.amp,.rigL>.pbrowse{grid-row:1;grid-column:1} .rigL>.board{grid-row:2;grid-column:1}
 .rigR .looper{order:1} .rigR .scenes{order:2} .rigR .card:last-child{order:3}
 @media (min-width:901px) and (orientation:landscape){ .rigR{grid-template-rows:auto minmax(0,1fr) auto} }
 `,

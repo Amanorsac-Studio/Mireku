@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Library Packs Mock</title>
+<style>
+:root{--bg:#141210;--panel:#1c1916;--well:#100e0c;--line:#2c2823;--line2:#3d362f;--text:#ece6dc;--muted:#a39a8e;--dim:#8d857a;--accent:#e8a33d;
+  --mono:ui-monospace,"JetBrains Mono",Consolas,monospace}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.35 "Segoe UI",system-ui,sans-serif;overflow:hidden}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+.app{width:1600px;height:1000px;display:grid;grid-template-rows:64px 46px 1fr;position:relative}
+header{display:flex;align-items:center;gap:16px;padding:0 18px;border-bottom:1px solid var(--line)}
+.logo{font-weight:800;letter-spacing:.04em}.logo small{display:block;font:9px var(--mono);color:var(--dim);letter-spacing:.3em}
+.preset{margin:0 auto;text-align:center;font-weight:700;font-size:19px}.preset small{display:block;font:10px var(--mono);color:var(--dim);letter-spacing:.2em}
+.hbtn{border:1px solid var(--line);border-radius:8px;padding:9px 14px}
+nav{display:flex;gap:28px;padding:12px 20px;border-bottom:1px solid var(--line);color:var(--dim)}
+nav b{color:var(--text);border-bottom:2px solid var(--accent);padding-bottom:10px}
+main{display:grid;grid-template-columns:420px 1fr;gap:16px;padding:16px 18px;min-height:0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;min-height:0}
+.search{display:flex;align-items:center;gap:10px;background:var(--well);border:1px solid var(--line);border-radius:10px;padding:10px 14px;color:var(--dim)}
+.tabs{display:grid;grid-template-columns:repeat(5,1fr);margin-top:10px;background:var(--well);border:1px solid var(--line);border-radius:10px;padding:3px}
+.tabs button{padding:8px 0;border-radius:8px;color:var(--muted);font-size:13px}
+.tabs button.on{background:#2a251f;color:var(--text);font-weight:600}
+.row{display:flex;gap:8px;margin-top:10px}
+.btn{border:1px solid var(--line);border-radius:9px;padding:9px 13px;font-weight:600;font-size:13px;background:#1a1714}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#1a1408}
+.btn.danger{color:#ff9c8c}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+.chip{padding:5px 10px;border-radius:999px;border:1px solid var(--line);color:var(--muted);font-size:12px}
+.chip.on{background:#2a251f;color:var(--text);border-color:var(--line2)}
+.chip i{font-style:normal;color:var(--dim);font:10px var(--mono);margin-left:4px}
+.src{display:flex;gap:4px;margin-top:10px;font-size:12px;color:var(--dim);align-items:center}
+.src select{background:var(--well);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px 8px;font:inherit}
+.list{margin-top:10px;display:grid;gap:2px}
+.item{display:grid;grid-template-columns:30px 1fr auto;gap:12px;align-items:center;padding:9px 10px;border-radius:10px}
+.item.on{background:#3a2c17;box-shadow:inset 0 0 0 1px #6a4f25}
+.sw{display:grid;grid-template-columns:repeat(3,8px);gap:2px}.sw i{width:8px;height:8px;border-radius:2px;background:#3a3530}
+.item b{display:block;font-size:14px}.item small{font:10.5px var(--mono);color:var(--dim)}
+.tag{font:9.5px var(--mono);letter-spacing:.12em;color:var(--dim);border:1px solid var(--line);border-radius:6px;padding:2px 6px;white-space:nowrap}
+.tag.pk{color:var(--accent);border-color:#5a4220}
+.pager{display:flex;justify-content:center;gap:16px;margin-top:8px}.pager i{width:8px;height:8px;border-radius:50%;background:var(--line2)}.pager i.on{background:var(--accent)}
+.detail{display:grid;grid-template-rows:auto auto 1fr;gap:16px;padding:18px 22px}
+.dh{display:flex;align-items:flex-start;gap:14px}
+.dh .cap{font:10px var(--mono);letter-spacing:.2em;color:var(--dim)}
+.dh h1{margin:2px 0 0;font-size:30px;letter-spacing:-.02em}
+.dh .acts{margin-left:auto;display:flex;gap:8px}
+.meta{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+.strip{background:var(--well);border:1px solid var(--line);border-radius:12px;padding:18px;display:flex;gap:16px;align-items:center}
+.mp{width:36px;height:52px;border-radius:6px;box-shadow:inset 0 1px 0 rgba(255,255,255,.3),0 4px 8px rgba(0,0,0,.5)}
+.mpw{display:grid;justify-items:center;gap:6px;font-size:11px;color:var(--muted)}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:18px;min-height:0}
+.cols h3{margin:0 0 8px;font-size:15px}
+.line{display:flex;justify-content:space-between;padding:11px 12px;border:1px solid var(--line);border-radius:10px;margin-bottom:6px;font-size:13.5px}
+.line span{font:10px var(--mono);color:var(--dim);letter-spacing:.1em}
+.note{color:var(--muted);font-size:13px;line-height:1.5}
+/* packs */
+.pack{display:grid;grid-template-columns:52px 1fr auto;gap:12px;align-items:center;padding:10px;border-radius:12px}
+.pack.on{background:#3a2c17;box-shadow:inset 0 0 0 1px #6a4f25}
+.cover{display:block;width:52px;height:52px;flex:none;border-radius:10px;position:relative;overflow:hidden;box-shadow:inset 0 1px 0 rgba(255,255,255,.3),0 6px 12px rgba(0,0,0,.5)}
+.cover::after{content:"";position:absolute;inset:0;background:radial-gradient(120% 80% at 20% 0,rgba(255,255,255,.35),transparent 60%)}
+.cover b{position:absolute;left:7px;bottom:5px;font:800 italic 15px/1 Georgia,serif;color:#fff8;z-index:1}
+.bigcover{width:120px;height:120px;border-radius:18px}
+.bigcover b{font-size:30px;left:12px;bottom:10px}
+.pgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.pgrid .line{margin:0}
+.share{background:var(--well);border:1px dashed var(--line2);border-radius:12px;padding:14px 16px}
+.share ol{margin:6px 0 0;padding-left:18px;color:var(--muted);font-size:13px;line-height:1.6}
+/* sheets */
+.scrim{position:absolute;inset:0;background:rgba(8,7,6,.72);display:none;place-items:center;z-index:10}
+.scrim.on{display:grid}
+.sheet{width:860px;background:#1b1815;border:1px solid var(--line2);border-radius:16px;box-shadow:0 30px 60px rgba(0,0,0,.6)}
+.sheet .sh{display:flex;align-items:center;padding:16px 20px;border-bottom:1px solid var(--line)}
+.sheet .sh h2{margin:0;font-size:18px}.sheet .sh .x{margin-left:auto;color:var(--muted)}
+.sheet .sb{padding:18px 20px;display:grid;grid-template-columns:300px 1fr;gap:20px}
+.sheet .sf{display:flex;gap:8px;justify-content:flex-end;padding:14px 20px;border-top:1px solid var(--line);align-items:center}
+.fld{display:grid;gap:5px;margin-bottom:12px}
+.fld label{font:10px var(--mono);letter-spacing:.15em;color:var(--dim)}
+.fld input,.fld textarea{background:var(--well);border:1px solid var(--line);border-radius:9px;padding:9px 11px;color:var(--text);font:inherit;resize:none}
+.colors{display:flex;gap:6px}.colors i{width:26px;height:26px;border-radius:7px}.colors i.on{outline:2px solid var(--text);outline-offset:2px}
+.pick{display:grid;grid-template-columns:1fr 1fr;gap:4px;max-height:330px;overflow:hidden}
+.ck{display:flex;align-items:center;gap:9px;padding:7px 9px;border-radius:8px;border:1px solid var(--line);font-size:13px}
+.ck .box{width:16px;height:16px;border-radius:4px;border:1.5px solid var(--line2);display:grid;place-items:center;font-size:11px}
+.ck.on{border-color:#6a4f25;background:#2a2116}.ck.on .box{background:var(--accent);border-color:var(--accent);color:#1a1408}
+.ck small{margin-left:auto;font:9.5px var(--mono);color:var(--dim)}
+.warn{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:10px;background:#20251b;border:1px solid #3c4a2c;color:#c9dcae;font-size:12.5px;margin-top:10px}
+.drop{position:absolute;inset:118px 18px 18px 18px;border:2px dashed var(--accent);border-radius:16px;background:rgba(232,163,61,.08);display:none;place-items:center;z-index:9;font-size:22px;font-weight:700;color:var(--accent)}
+.drop small{display:block;font:12px var(--mono);color:var(--muted);text-align:center;margin-top:6px;font-weight:400}
+.tabbar{position:absolute;top:10px;right:18px;z-index:20;display:none}
+.mocknote{position:absolute;right:18px;bottom:4px;font:10px var(--mono);color:#6f675d}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="logo">TOP END<small>AMANORSAC STUDIO</small></div>
+    <div class="preset">Morning Glory Swell<small>PRESET · FROM SUNDAY PADS</small></div>
+    <span class="hbtn">Bypass</span><span class="hbtn">Tune</span><span class="hbtn">96 BPM · TAP</span><span class="hbtn">ASIO 11.5 ms</span>
+  </header>
+  <nav><span>Rig</span><span>Learn</span><span>Cover</span><b>Library</b><span>Settings</span></nav>
+  <main>
+    <section class="card" id="left"></section>
+    <section class="card detail" id="right"></section>
+  </main>
+  <div class="drop" id="drop"><div>Drop to install this pack<small>Sunday Pads.tepack · checked before anything is added</small></div></div>
+  <div class="scrim" id="scrim"><div class="sheet" id="sheet"></div></div>
+  <div class="mocknote">MOCK — nothing is saved</div>
+</div>
+<script>
+const CATS=[['All',124],['Worship',22],['Clean',14],['Crunch',12],['Rock',14],['Blues',10],['Metal',8],['Funk',7],['Country',6],['Jazz',5],['Ambient',12],['Lead',8],['Strings',6]];
+const PRE=[
+ ['Call to Worship','Worship','Black Panel · 4 pedals',['#5d636b','#7fa88a','#5f86a6','#8ea6b4']],
+ ['Morning Glory Swell','Worship','Solid Clean · 5 pedals',['#5d636b','#4b4b4f','#4f8f8a','#8ea6b4'],'Sunday Pads'],
+ ['Dotted 8th Anthem','Worship','Top Boost 30 · 5 pedals',['#5d636b','#c9c3b4','#6f9f5a','#3f7fa0']],
+ ['Altar Call','Worship','Tweed 57 · 4 pedals',['#5d636b','#7fa88a','#a8564e','#8ea6b4']],
+ ['Holy Ground Pad','Worship','Solid Clean · 4 pedals',['#5d636b','#7fa88a','#3f7fa0','#8ea6b4'],'Sunday Pads'],
+ ['Spirit Lead','Worship','Plexi 68 · 5 pedals',['#5d636b','#c9c3b4','#6f9f5a','#3f7fa0']],
+ ['Bridge Drive','Worship','Plexi 68 · 3 pedals',['#5d636b','#6f9f5a','#d9cfbd']],
+ ['Shimmer Benediction','Worship','Black Panel · 4 pedals',['#5d636b','#7fa88a','#5f86a6','#8ea6b4'],'Sunday Pads'],
+ ['Glass Clean','Worship','Plexi 68 · 5 pedals',['#5d636b','#7fa88a','#d8a64a','#3f7fa0']],
+ ['Prayer Room','Worship','Tweed 57 · 3 pedals',['#5d636b','#a8564e','#8ea6b4']],
+ ['Swell Pad','Worship','Solid Clean · 4 pedals',['#5d636b','#7fa88a','#4f8f8a','#8ea6b4']],
+];
+const PACKS=[
+ {n:'Factory',a:'Amanorsac Studio',c:'#e8a33d',k:'F',p:112,d:'Every preset that comes with Top End.',fac:true},
+ {n:'Sunday Pads',a:'Kwabena Mensah',c:'#2a8fa8',k:'S',p:24,d:'Swells, pads and shimmer for slow worship sets. Use a volume pedal on the Swell for the intros.'},
+ {n:'Blues Bar Night',a:'Ruth Adeyemi',c:'#9c4a3f',k:'B',p:16,d:'Three-chord crunch, slide leads and a dirty Tweed.'},
+ {n:'My Presets',a:'You',c:'#5d636b',k:'M',p:7,d:'The presets you have saved yourself.',mine:true},
+];
+let tab='presets', sel=1, cat='Worship', pack=1;
+const $=s=>document.querySelector(s);
+const sw=c=>'<span class="sw">'+[0,1,2,3,4,5].map(i=>'<i style="background:'+(c[i]||'#3a3530')+'"></i>').join('')+'</span>';
+const cover=(p,big)=>'<span class="cover'+(big?' bigcover':'')+'" style="background:linear-gradient(150deg,'+p.c+','+p.c+'aa 60%,#0008)"><b>'+p.k+'</b></span>';
+function left(){
+  const L=$('#left');
+  L.innerHTML='<div class="search">⌕ Search presets, packs, sets, songs</div>'
+   +'<div class="tabs">'+['Presets','Packs','Sets','Songs','Captures'].map(t=>'<button class="'+(tab===t.toLowerCase()?'on':'')+'" data-t="'+t.toLowerCase()+'">'+t+'</button>').join('')+'</div>';
+  if(tab==='presets'){
+    L.innerHTML+='<div class="row"><button class="btn">+ New preset</button><button class="btn">+ New set</button><button class="btn" data-a="make">Make a pack</button></div>'
+     +'<div class="chips">'+CATS.map(([c,n])=>'<button class="chip'+(c===cat?' on':'')+'">'+c+'<i>'+n+'</i></button>').join('')+'</div>'
+     +'<div class="src">Showing <select><option>All packs</option><option>Factory</option><option>Sunday Pads</option><option>Blues Bar Night</option><option>My presets</option></select> · 22 in Worship</div>'
+     +'<div class="list">'+PRE.slice(0,9).map((p,i)=>'<div class="item'+(i===sel?' on':'')+'" data-i="'+i+'">'+sw(p[3])+'<div><b>'+p[0]+'</b><small>'+p[2]+'</small></div>'+(p[4]?'<span class="tag pk">'+p[4].toUpperCase()+'</span>':'<span class="tag">'+p[1].toUpperCase()+'</span>')+'</div>').join('')+'</div>'
+     +'<div class="pager"><i class="on"></i><i></i></div>';
+  } else {
+    L.innerHTML+='<div class="row"><button class="btn primary" data-a="import">Install a pack…</button><button class="btn" data-a="make">Make a pack</button></div>'
+     +'<div class="list" style="margin-top:14px">'+PACKS.map((p,i)=>'<div class="pack'+(i===pack?' on':'')+'" data-p="'+i+'">'+cover(p)+'<div><b>'+p.n+'</b><small style="display:block;font:10.5px var(--mono);color:var(--dim)">'+p.a+' · '+p.p+' presets</small></div>'+(p.fac?'<span class="tag">BUILT IN</span>':p.mine?'<span class="tag">YOURS</span>':'<span class="tag pk">INSTALLED</span>')+'</div>').join('')+'</div>'
+     +'<p class="note" style="margin-top:14px">Drag a <b>.tepack</b> file onto Top End to install it. Low End packs are <b>.lepack</b>.</p>';
+  }
+  L.querySelectorAll('[data-t]').forEach(b=>b.onclick=()=>{tab=b.dataset.t==='packs'?'packs':'presets';render();});
+  L.querySelectorAll('[data-i]').forEach(b=>b.onclick=()=>{sel=+b.dataset.i;render();});
+  L.querySelectorAll('[data-p]').forEach(b=>b.onclick=()=>{pack=+b.dataset.p;render();});
+  L.querySelectorAll('.chip').forEach(b=>b.onclick=()=>{cat=b.firstChild.textContent;render();});
+  L.querySelectorAll('[data-a=make]').forEach(b=>b.onclick=()=>sheet('make'));
+  L.querySelectorAll('[data-a=import]').forEach(b=>b.onclick=()=>sheet('import'));
+}
+function right(){
+  const R=$('#right');
+  if(tab==='presets'){
+    const p=PRE[sel];
+    R.innerHTML='<div class="dh"><div><div class="cap">PRESET</div><h1>'+p[0]+'</h1><div class="meta"><span class="tag">'+p[1].toUpperCase()+'</span>'+(p[4]?'<span class="tag pk">FROM '+p[4].toUpperCase()+' · KWABENA MENSAH</span>':'<span class="tag">FACTORY</span>')+'</div></div>'
+     +'<div class="acts"><button class="btn">Loaded</button><button class="btn">Rename</button><button class="btn">Category ▾</button><button class="btn">Duplicate</button><button class="btn" data-a="make">Add to a pack</button><button class="btn danger">Delete</button></div></div>'
+     +'<div class="strip">'+p[3].map((c,i)=>'<span class="mpw"><span class="mp" style="background:'+c+'"></span>'+['Noise Gate','Swell','Analog Delay','Ambient Verb','Room'][i]+'</span>').join('<span style="color:#444">—</span>')+'</div>'
+     +'<div class="cols"><div><h3>Used in</h3><div class="line">Sunday Set<span>SCENE B · FOOTSWITCH 2</span></div></div><div><h3>History</h3><p class="note">Installed from <b>Sunday Pads</b> on 28 Oct. Your edits are saved to your copy; the pack file is untouched.</p></div></div>';
+  } else {
+    const p=PACKS[pack];
+    R.innerHTML='<div class="dh">'+cover(p,true)+'<div style="margin-left:6px"><div class="cap">PRESET PACK</div><h1>'+p.n+'</h1><div class="meta"><span class="tag">BY '+p.a.toUpperCase()+'</span><span class="tag">'+p.p+' PRESETS</span><span class="tag">TOP END 1.1</span></div><p class="note" style="max-width:520px;margin:10px 0 0">'+p.d+'</p></div>'
+     +'<div class="acts">'+(p.fac?'':'<button class="btn primary" data-a="share">Share this pack</button>')+(p.fac||p.mine?'':'<button class="btn danger">Remove pack</button>')+'</div></div>'
+     +'<div><h3 style="margin:0 0 8px;font-size:15px">In this pack</h3><div class="pgrid">'+['Morning Glory Swell','Holy Ground Pad','Shimmer Benediction','Still Waters','Selah Swell','Ocean Floor','Ember Pad','Doxology Lead','Quiet Hymn'].map(n=>'<div class="line">'+n+'<span>WORSHIP</span></div>').join('')+'</div></div>'
+     +(p.fac?'':'<div class="share"><b>How sharing works</b><ol><li><b>Share this pack</b> saves <code>'+p.n+'.tepack</code> to Documents › Amanorsac Studio › Top End › Packs and opens that folder.</li><li>Send the file any way you like — WhatsApp, email, Discord, Google Drive.</li><li>Whoever gets it drags it onto Top End. Nothing goes online from the app.</li></ol></div>');
+  }
+  R.querySelectorAll('[data-a=make]').forEach(b=>b.onclick=()=>sheet('make'));
+  R.querySelectorAll('[data-a=share]').forEach(b=>b.onclick=()=>sheet('share'));
+}
+function sheet(k){
+  const S=$('#sheet');
+  if(k==='make'){
+    const names=['Morning Glory Swell','Holy Ground Pad','Shimmer Benediction','Dotted 8th Anthem','Call to Worship','Spirit Lead','Altar Call','Prayer Room','Swell Pad','Glass Clean','Bridge Drive','Still Waters'];
+    S.innerHTML='<div class="sh"><h2>Make a pack</h2><button class="x" data-x>Close</button></div><div class="sb"><div>'
+     +'<div class="fld"><label>PACK NAME</label><input value="Sunday Pads"></div>'
+     +'<div class="fld"><label>MADE BY</label><input value="Kwabena Mensah"></div>'
+     +'<div class="fld"><label>ABOUT IT</label><textarea rows="3">Swells, pads and shimmer for slow worship sets.</textarea></div>'
+     +'<div class="fld"><label>COVER COLOUR</label><div class="colors">'+['#2a8fa8','#9c4a3f','#e8a33d','#6f9f5a','#7b3fa0','#5d636b'].map((c,i)=>'<i class="'+(i?'':'on')+'" style="background:'+c+'"></i>').join('')+'</div></div>'
+     +'<div class="warn">✓ Your audio interface, MIDI and Settings are never put in a pack — only sounds.</div></div>'
+     +'<div><div style="display:flex;align-items:center;margin-bottom:8px"><b>Choose presets</b><span class="chip on" style="margin-left:auto">Worship</span><span class="chip" style="margin-left:6px">All</span></div>'
+     +'<div class="pick">'+names.map((n,i)=>'<div class="ck'+(i<6?' on':'')+'"><span class="box">'+(i<6?'✓':'')+'</span>'+n+'<small>WORSHIP</small></div>').join('')+'</div>'
+     +'<p class="note" style="margin:10px 0 0">6 chosen · up to 200 in a pack</p></div></div>'
+     +'<div class="sf"><span class="note" style="margin-right:auto">Saves Sunday Pads.tepack to your Packs folder</span><button class="btn" data-x>Cancel</button><button class="btn primary" data-x>Save pack file</button></div>';
+  } else if(k==='import'){
+    S.innerHTML='<div class="sh"><h2>Install “Sunday Pads”?</h2><button class="x" data-x>Close</button></div><div class="sb"><div>'+cover(PACKS[1],true)
+     +'<div class="meta" style="margin-top:14px"><span class="tag">BY KWABENA MENSAH</span><span class="tag">24 PRESETS</span></div><p class="note">Swells, pads and shimmer for slow worship sets.</p></div>'
+     +'<div><b>What will be added</b><div class="pgrid" style="grid-template-columns:1fr 1fr;margin-top:8px">'+['Morning Glory Swell','Holy Ground Pad','Shimmer Benediction','Still Waters','Selah Swell','Ocean Floor','Ember Pad','Doxology Lead'].map(n=>'<div class="line">'+n+'<span>WORSHIP</span></div>').join('')+'</div>'
+     +'<p class="note" style="margin:8px 0 0">…and 16 more.</p>'
+     +'<div class="warn">✓ Checked: 24 presets, all for Top End, nothing but sounds. Your own presets are not changed — these are added as new ones.</div></div></div>'
+     +'<div class="sf"><button class="btn" data-x>Cancel</button><button class="btn primary" data-x>Install 24 presets</button></div>';
+  } else {
+    S.innerHTML='<div class="sh"><h2>Pack saved</h2><button class="x" data-x>Close</button></div><div class="sb" style="grid-template-columns:120px 1fr">'+cover(PACKS[1],true)
+     +'<div><p style="margin:0 0 6px"><b>Sunday Pads.tepack</b> is in Documents › Amanorsac Studio › Top End › Packs.</p><p class="note">Send it any way you like. Anyone with Top End drags it onto the app to install it. It is a small file (about 90 KB for 24 presets).</p></div></div>'
+     +'<div class="sf"><button class="btn" data-x>Done</button><button class="btn primary" data-x>Show the file</button></div>';
+  }
+  $('#scrim').classList.add('on');
+  S.querySelectorAll('[data-x]').forEach(b=>b.onclick=()=>$('#scrim').classList.remove('on'));
+}
+function render(){ left(); right(); }
+render();
+const h=location.hash.slice(1);
+if(h==='packs'){tab='packs';render();}
+if(h==='make') sheet('make');
+if(h==='import'){tab='packs';render();sheet('import');}
+if(h==='drop'){tab='packs';render();$('#drop').style.display='grid';}
+</script>
+</body>
+</html>

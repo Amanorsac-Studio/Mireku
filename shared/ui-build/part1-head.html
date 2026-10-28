@@ -133,32 +133,116 @@ main{position:relative;height:calc(100% - var(--hdr) - var(--tabs));overflow:hid
 #view-rig.on{grid-template-columns:minmax(0,1.62fr) minmax(290px,1fr);gap:14px}
 .rigL{display:grid;grid-template-rows:auto minmax(0,1fr);gap:14px;min-height:0}
 .rigR{display:grid;grid-template-rows:minmax(0,1fr) auto auto;gap:12px;min-height:0}
-/* pedalboard: painted stompboxes on one cable, scaled to fit, never scrolled */
-.board{padding:12px 12px 10px}
-.boardfit{position:relative;overflow:hidden}
-.chain{position:relative;display:flex;align-items:center;gap:9px;transform-origin:0 50%;width:max-content}
-.chain::before{content:"";position:absolute;left:14px;right:14px;top:50%;height:3px;border-radius:2px;background:#0b0a09;box-shadow:0 1px 0 rgba(255,255,255,.04)}
-.jack{position:relative;z-index:1;flex:none;width:34px;height:96px;border-radius:9px;border:1px solid var(--line);background:var(--well);display:grid;place-items:center}
+/* pedalboard: a real board (ribbed deck, rails, patch cables) carrying enclosures
+   drawn in layers - paint, the metal's finish, our printed artwork, hardware.
+   Scaled to fit, never scrolled. */
+.board{position:relative;padding:12px 12px 10px}
+.boardfit{position:relative;overflow:hidden;border-radius:12px;
+  background:linear-gradient(180deg,rgba(255,255,255,.05),transparent 14%,transparent 86%,rgba(0,0,0,.45)),repeating-linear-gradient(90deg,#19191b 0 2px,#212124 2px 4px);
+  box-shadow:inset 0 0 0 1px #2c2c30,inset 0 2px 0 #38383d,inset 0 -2px 0 #0c0c0d}
+.boardfit::before,.boardfit::after{content:"";position:absolute;left:10px;right:10px;height:6px;border-radius:3px;background:linear-gradient(#3c3c41,#222225);z-index:0;pointer-events:none}
+.boardfit::before{top:6px}.boardfit::after{bottom:6px}
+.chain{position:relative;display:flex;align-items:center;gap:16px;padding:24px 14px 22px;transform-origin:0 50%;width:max-content}
+.chain .brk{display:none}
+.chain.two{flex-wrap:wrap;row-gap:30px}
+.chain.two .brk{display:block;flex-basis:100%;height:0}
+.cables{position:absolute;left:0;top:0;pointer-events:none;overflow:visible;z-index:0}
+.cables .cb{fill:none;stroke:#09090a;stroke-width:6;stroke-linecap:round}
+.cables .cs{fill:none;stroke:#2e2e33;stroke-width:2.2;stroke-linecap:round}
+.jack{position:relative;z-index:1;flex:none;width:34px;height:110px;border-radius:9px;border:1px solid #2f2f33;background:linear-gradient(90deg,#26262a,#18181a);display:grid;place-items:center}
 .jack span{writing-mode:vertical-rl;transform:rotate(180deg);font-family:var(--font-num);font-size:10px;letter-spacing:.16em;color:var(--faint)}
-.ped{position:relative;z-index:1;flex:none;width:86px;height:132px;border-radius:11px;padding:9px 8px 8px;display:flex;flex-direction:column;align-items:center;gap:5px;
-  background:linear-gradient(180deg,rgba(255,255,255,.16),rgba(255,255,255,0) 38%,rgba(0,0,0,.16)),var(--c);color:var(--t);text-align:center;
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.28),inset 0 -2px 0 rgba(0,0,0,.25),0 6px 14px -6px rgba(0,0,0,.7);transition:transform .25s cubic-bezier(.16,1,.3,1),filter .25s}
-.ped:active{transform:translateY(1px) scale(.98)}
-.ped.off{filter:saturate(.18) brightness(.55)}
-.ped.sel{outline:2px solid var(--amber);outline-offset:3px}
-.ped .pk{display:flex;gap:2px;min-height:30px}
-.ped .pk svg{width:30px;height:30px}
-.ped .pn{font-weight:800;font-size:11px;line-height:1.08;letter-spacing:.01em;min-height:24px;display:flex;align-items:center}
-.ped .pled{width:7px;height:7px;border-radius:50%;background:rgba(0,0,0,.35);margin-top:auto}
-.ped:not(.off) .pled{background:#ff6b4a;box-shadow:0 0 0 2px rgba(255,107,74,.22),0 0 8px rgba(255,107,74,.7)}
-.ped .psw{width:30px;height:30px;border-radius:50%;background:radial-gradient(circle at 40% 35%,#e9e6e1,#8c8781 60%,#5b5752);box-shadow:0 2px 3px rgba(0,0,0,.45),inset 0 -1px 0 rgba(0,0,0,.3);flex:none}
-.ampmini{position:relative;z-index:1;flex:none;width:104px;height:132px;border-radius:11px;overflow:hidden;background:#1c1917;border:1px solid #2f2a25;display:flex;flex-direction:column;padding:6px;gap:5px;box-shadow:0 6px 14px -6px rgba(0,0,0,.7)}
+
+.ped{--c:#5d636b;--t:#f6efe4;position:relative;z-index:1;flex:none;width:112px;height:186px;border-radius:10px;padding:16px 8px 0;
+  display:flex;flex-direction:column;align-items:center;color:var(--t);text-align:center;cursor:grab;touch-action:none;
+  background:
+    radial-gradient(130% 70% at 22% -4%,rgba(255,255,255,.34),transparent 55%),
+    linear-gradient(172deg,rgba(255,255,255,.10),transparent 38%,rgba(0,0,0,.30)),
+    var(--c);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.5),inset 1px 0 0 rgba(255,255,255,.14),inset -1px 0 0 rgba(0,0,0,.22),inset 0 -3px 0 rgba(0,0,0,.3),
+    0 2px 0 rgba(0,0,0,.6),0 14px 18px -8px rgba(0,0,0,.85);
+  transition:transform .25s cubic-bezier(.16,1,.3,1),filter .25s,opacity .2s}
+.ped.w{width:150px}
+.ped.off{filter:saturate(.3) brightness(.62)}
+.ped.sel{outline:2px solid var(--amber);outline-offset:4px}
+.ped.lift{opacity:.25}
+/* the metal's finish: an SVG texture blended into the paint */
+.ped .tex{position:absolute;inset:0;border-radius:inherit;pointer-events:none;background-size:160px 160px}
+.fin-powder .tex{opacity:.55;mix-blend-mode:overlay;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.15' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+.fin-hammer .tex{opacity:.7;mix-blend-mode:overlay;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='h'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.085' numOctaves='3' stitchTiles='stitch'/%3E%3CfeDiffuseLighting lighting-color='%23fff' surfaceScale='3.2'%3E%3CfeDistantLight azimuth='225' elevation='52'/%3E%3C/feDiffuseLighting%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23h)'/%3E%3C/svg%3E")}
+.fin-brushed .tex{opacity:.6;mix-blend-mode:overlay;background-image:linear-gradient(100deg,transparent 30%,rgba(255,255,255,.22) 48%,transparent 62%),url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='b'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.004 0.95' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23b)'/%3E%3C/svg%3E");background-size:100% 100%,160px 160px}
+.fin-sparkle .tex{opacity:.75;mix-blend-mode:screen;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='s'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.9' numOctaves='1' seed='7' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncR type='discrete' tableValues='0 0 0 0 0 0 .9'/%3E%3CfeFuncG type='discrete' tableValues='0 0 0 0 0 0 .9'/%3E%3CfeFuncB type='discrete' tableValues='0 0 0 0 0 0 .9'/%3E%3CfeFuncA type='discrete' tableValues='0 0 0 0 0 0 1'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23s)'/%3E%3C/svg%3E")}
+.fin-wood .tex{opacity:.8;mix-blend-mode:overlay;background-size:100% 100%,220px 220px;background-image:linear-gradient(100deg,transparent 35%,rgba(255,230,190,.25) 50%,transparent 62%),url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='w'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.012 0.34' numOctaves='3' seed='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23w)'/%3E%3C/svg%3E")}
+/* screws, side jacks */
+.ped .sc{position:absolute;width:6px;height:6px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#f2f2f2,#8a8a8a 60%,#4a4a4a);box-shadow:0 1px 1px rgba(0,0,0,.55)}
+.ped .sc:nth-of-type(2){left:6px;top:6px}.ped .sc:nth-of-type(3){right:6px;top:6px}.ped .sc:nth-of-type(4){left:6px;bottom:6px}.ped .sc:nth-of-type(5){right:6px;bottom:6px}
+.ped .jk{position:absolute;top:26px;width:7px;height:17px;border-radius:2px;background:linear-gradient(#d6d6d6,#7d7d7d 60%,#5a5a5a)}
+.ped .jk.l{left:-6px}.ped .jk.r{right:-6px}
+/* knobs: knurled caps you turn on the board; the highlight stays put while the cap turns */
+.ped .pk{position:relative;display:flex;flex-wrap:nowrap;justify-content:center;gap:4px;min-height:46px}
+.pkn{display:grid;justify-items:center;gap:3px;width:28px;cursor:ns-resize;touch-action:none}
+.pkn .kb{position:relative;width:26px;height:26px;border-radius:50%;box-shadow:0 3px 3px rgba(0,0,0,.55),0 0 0 1px rgba(0,0,0,.55)}
+.pkn .cap{position:absolute;inset:0;border-radius:50%;transform:rotate(var(--a));
+  background:radial-gradient(circle,#262626 0 50%,transparent 52%),repeating-conic-gradient(#0e0e0e 0 7deg,#3b3b3b 7deg 14deg)}
+.pkn .cap::after{content:"";position:absolute;left:50%;top:2px;width:2.5px;height:10px;margin-left:-1.25px;border-radius:2px;background:#f3eee4}
+.pkn .gl{position:absolute;inset:0;border-radius:50%;pointer-events:none;background:radial-gradient(circle at 36% 28%,rgba(255,255,255,.38),transparent 55%)}
+.ped:not(.lite) .pkn .cap{background:radial-gradient(circle,#ece5d6 0 50%,transparent 52%),repeating-conic-gradient(#bdb4a2 0 7deg,#f4efe4 7deg 14deg)}
+.ped:not(.lite) .pkn .cap::after{background:#1d1a16}
+.pkn b{font:700 6.5px/1 var(--font-num);letter-spacing:.04em;opacity:.85;white-space:nowrap}
+/* LED in its bezel, printed artwork, name */
+.ped .pled{width:9px;height:9px;border-radius:50%;margin-top:8px;background:#4a1810;box-shadow:0 0 0 2px rgba(0,0,0,.35),inset 0 -1px 2px rgba(0,0,0,.5)}
+.ped:not(.off) .pled{background:radial-gradient(circle at 40% 35%,#ffd2c4,#ff4f2e 55%,#c42a12);box-shadow:0 0 0 2px rgba(0,0,0,.35),0 0 8px 2px rgba(255,79,46,.65)}
+.ped .art{width:46px;height:18px;margin-top:6px;opacity:.55}
+.ped .pn{font-weight:800;font-style:italic;font-size:13.5px;line-height:1.02;letter-spacing:-.01em;margin-top:2px;min-height:28px;display:flex;align-items:center;text-shadow:0 1px 0 rgba(0,0,0,.18)}
+.ped.lite .pn{text-shadow:0 1px 0 rgba(255,255,255,.3)}
+.ped .pft{margin-top:auto;padding-bottom:14px;display:grid;place-items:center}
+/* the footswitch: chrome cap on a nut */
+.ped .psw{width:34px;height:34px;border-radius:50%;flex:none;background:radial-gradient(circle at 42% 34%,#ffffff,#b9b9b9 42%,#6a6a6a 72%,#9a9a9a);
+  box-shadow:0 0 0 3px #77736d,0 0 0 4px rgba(0,0,0,.45),0 4px 6px rgba(0,0,0,.6),inset 0 -2px 3px rgba(0,0,0,.35)}
+.ped .psw:active{transform:translateY(1px) scale(.96)}
+.ped.ghost{position:fixed;z-index:200;pointer-events:none;transform-origin:0 0;cursor:grabbing;filter:drop-shadow(0 18px 18px rgba(0,0,0,.6))}
+.ped.ghost.bin{filter:drop-shadow(0 0 0 #c7392a) brightness(.6) sepia(.6) hue-rotate(-30deg)}
+.dropmark{position:absolute;top:10px;height:100px;width:4px;margin-left:-2px;border-radius:2px;background:var(--amber);box-shadow:0 0 12px rgba(227,164,71,.8);opacity:0;transition:opacity .12s;pointer-events:none;z-index:3}
+.dropmark.on{opacity:1}
+.boardbin{position:absolute;right:14px;top:-14px;padding:7px 14px;border-radius:9px;background:#3a1612;color:#ffab9c;font-size:12px;border:1px solid #6b2a20;opacity:0;transform:translateY(4px);transition:opacity .15s,transform .15s;pointer-events:none;z-index:5}
+.boardbin.on{opacity:1;transform:none}
+.boardbin.hot{background:#c7392a;color:#fff}
+body.dragging,body.dragging *{cursor:grabbing!important}
+.ampmini{position:relative;z-index:1;flex:none;width:104px;height:150px;border-radius:11px;overflow:hidden;background:#1c1917;border:1px solid #2f2a25;display:flex;flex-direction:column;padding:6px;gap:5px;box-shadow:0 10px 16px -6px rgba(0,0,0,.8)}
 .ampmini .pl{height:40px;border-radius:5px;background:var(--p);box-shadow:0 0 0 1.5px var(--pp);display:flex;align-items:center;justify-content:space-around;padding:0 5px}
 .ampmini .pl i{width:9px;height:9px;border-radius:50%;background:var(--k)}
 .ampmini .gr{flex:1;border-radius:5px;background:var(--g)}
 .ampmini b{position:absolute;left:0;right:0;bottom:8px;text-align:center;font-weight:800;font-style:italic;font-size:12px;color:#f0e2c4;text-shadow:0 1px 2px rgba(0,0,0,.85)}
-.addp{position:relative;z-index:1;flex:none;width:44px;height:132px;border-radius:11px;border:1px dashed var(--line2);background:var(--s1);color:var(--faint);font-size:22px}
+.addp{position:relative;z-index:1;flex:none;width:44px;height:186px;border-radius:11px;border:1px dashed var(--line2);background:rgba(28,25,23,.7);color:var(--faint);font-size:22px}
 .boardhint{display:flex;justify-content:space-between;margin-top:8px}
+.boardhint .cap{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.boardhint{gap:12px}
+
+/* pedal browser: opens over the amp, in the same grid cell */
+.rigL>.amp,.rigL>.pbrowse{grid-row:2;grid-column:1}
+.pbrowse{z-index:6;min-height:0;display:grid;grid-template-columns:minmax(220px,30%) minmax(0,1fr);border-radius:18px;background:#171513;border:1px solid var(--line);
+  box-shadow:0 -16px 40px rgba(0,0,0,.55);opacity:0;transform:translateY(14px);visibility:hidden;pointer-events:none;transition:opacity .22s,transform .3s cubic-bezier(.16,1,.3,1),visibility 0s .3s;overflow:hidden}
+.pbrowse.on{opacity:1;transform:none;visibility:visible;pointer-events:auto;transition:opacity .22s,transform .3s cubic-bezier(.16,1,.3,1)}
+.pbv{display:grid;grid-template-rows:auto minmax(0,1fr) auto auto auto;gap:6px;padding:16px;border-right:1px solid var(--line);min-height:0}
+.pbstage{display:grid;place-items:center;min-height:0}
+.pbstage{overflow:hidden}
+.pbstage .ped{cursor:default}
+.pbv h3{margin:4px 0 0;font-size:20px}
+.pbv p{margin:0;color:var(--muted);font-size:13px;line-height:1.45}
+.pbgo{display:flex;gap:10px;align-items:center;margin-top:8px}
+.pbside{display:grid;grid-template-rows:auto minmax(0,1fr) auto;gap:10px;padding:14px 16px;min-width:0;min-height:0}
+.pbbar{display:flex;gap:6px;align-items:center;flex-wrap:wrap;min-width:0}
+.pbbar .chip{padding:5px 10px;border-radius:999px;border:1px solid var(--line);color:var(--muted);font-size:12px}
+.pbbar .chip.on{background:var(--s2,#2a251f);color:var(--text);border-color:var(--line2)}
+.pbq{margin-left:auto;min-width:0;width:150px;background:var(--well);border:1px solid var(--line);border-radius:8px;padding:7px 10px;color:var(--text)}
+.pbside .pager{min-height:28px;margin-top:0}
+.pbgrid{display:grid;align-content:start;gap:8px;min-height:0;overflow:hidden}
+.pbt{display:grid;justify-items:center;align-content:start;gap:4px;padding:5px 2px;font-size:11.5px!important;border-radius:10px;color:var(--muted);font-size:12px;cursor:grab;touch-action:none}
+.pbt:hover,.pbt.on{background:#221e1a;color:var(--text)}
+.pbt .mini{width:48px;height:79px;display:block}
+.pbt .mini .ped{transform:scale(.42);transform-origin:0 0;cursor:inherit}
+.pbt .mini .ped.w{margin-left:-7px}
+.pbt .nm{line-height:1.15}
+.pbt.used .nm::after{content:"on board";display:block;color:var(--amber);font-size:9.5px}
 
 /* the amp: a real faceplate, filling the rest of the column */
 .amp{border-radius:18px;padding:12px;display:grid;grid-template-rows:auto minmax(0,1fr);gap:10px;min-height:0;
@@ -191,6 +275,7 @@ main{position:relative;height:calc(100% - var(--hdr) - var(--tabs));overflow:hid
 .grille::before{content:"";position:absolute;inset:0;background:radial-gradient(120% 140% at 50% 0%,rgba(255,220,170,.08),transparent 60%)}
 .plate{position:absolute;left:50%;top:12px;transform:translateX(-50%);padding:3px 14px;border-radius:5px;background:linear-gradient(180deg,#e8dcc0,#b9a57d);
   box-shadow:0 2px 4px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.5);font-weight:800;font-style:italic;font-size:14px;color:#3a2a1c;white-space:nowrap}
+.plate.in{position:static;transform:none;margin-left:auto;font-size:12px;padding:2px 10px;flex:none}
 .tray{position:absolute;left:10px;right:10px;bottom:10px;display:flex;align-items:center;gap:6px;padding:7px;border-radius:12px;flex-wrap:wrap;
   background:rgba(22,18,15,.6);backdrop-filter:blur(14px) saturate(1.2);-webkit-backdrop-filter:blur(14px) saturate(1.2);
   border:1px solid rgba(255,255,255,.09);box-shadow:inset 0 1px 0 rgba(255,255,255,.08)}
@@ -383,6 +468,75 @@ main{position:relative;height:calc(100% - var(--hdr) - var(--tabs));overflow:hid
 .arrow{flex:none;width:10px;height:2px;background:var(--line2);border-radius:1px}
 .libgrid{flex:1;display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;min-height:0}
 .libgrid h3{margin:0 0 9px;font-weight:700;font-size:14px}
+/* categories and where a preset came from */
+.libfilters{display:flex;flex-direction:column;gap:7px;margin-bottom:8px}
+.cchips{display:flex;flex-wrap:wrap;gap:5px}
+.cchip{padding:4px 9px;border-radius:999px;border:1px solid var(--line);color:var(--muted);font-size:12px;line-height:1.3}
+.cchip i{font-style:normal;font-family:var(--font-num);font-size:9.5px;color:var(--faint);margin-left:4px}
+.cchip.on{background:var(--s2,#2a251f);color:var(--ink);border-color:var(--line2)}
+.csrc{display:flex;align-items:center;gap:8px}
+.csrc select{flex:1;min-width:0;background:var(--well);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:5px 8px;font:inherit;font-size:12.5px}
+.li .k.pk,.ptags .k.pk{color:var(--amber);border-color:var(--amber-deep,#6a4f25);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ptags{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}
+.ptags .k{font-family:var(--font-num);font-size:9.5px;letter-spacing:.1em;color:var(--faint);border:1px solid var(--line2);border-radius:5px;padding:2px 6px}
+.pcover{position:relative;flex:none;display:block;width:40px;height:40px;border-radius:9px;overflow:hidden;box-shadow:inset 0 1px 0 rgba(255,255,255,.3),0 5px 10px rgba(0,0,0,.45)}
+.pcover::after{content:"";position:absolute;inset:0;background:radial-gradient(120% 80% at 20% 0,rgba(255,255,255,.35),transparent 60%)}
+.pcover b{position:absolute;left:6px;bottom:3px;z-index:1;font:800 italic 15px/1 Georgia,serif;color:rgba(255,255,255,.6)}
+.pcover.big{width:104px;height:104px;border-radius:16px}.pcover.big b{font-size:28px;left:10px;bottom:8px}
+.li.pli{min-height:56px}
+/* a preset in the Library: the same rig as the Rig page, with its sets and history beside it */
+.libbody{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 240px;gap:14px;margin-top:12px}
+.librig{min-height:0;height:100%}
+/* In the Library the rig shares the page with its details: on a narrower window the
+   cab tray keeps to one row (the mic is still under More) so the amp stays whole. */
+@media (max-width:1180px){ .librig .tray .mic{display:none} .librig .grille{min-height:72px} }
+.libside{min-height:0;overflow:hidden}
+.libside h3{margin:2px 0 8px;font-weight:700;font-size:14px}
+.libside .used{margin-bottom:14px}
+.libprev{height:100%;display:grid;grid-template-rows:minmax(0,1fr) auto;gap:10px;border-radius:14px;padding:12px;background:var(--well);border:1px solid var(--line)}
+.libprev .boardfit{height:100%}
+.libprev .chain{pointer-events:none}
+.libcta{display:flex;align-items:center;justify-content:space-between;gap:10px}
+/* a narrower window gives the rig the whole width: sets and history step aside */
+@media (max-width:1279px){
+  .libbody{grid-template-columns:minmax(0,1fr)}
+  .libside{display:none}
+  .libR .acts .btn{padding:6px 10px;font-size:12.5px;min-height:34px}
+  .libR .lhead h1{font-size:24px}
+}
+.csrc select{appearance:auto;font-weight:500}
+/* packs */
+.phead{justify-content:flex-start;gap:16px}
+.phead .acts{margin-left:auto}
+.pinh{margin:18px 0 8px;font-weight:700;font-size:14px}
+.pgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.pgrid.two{grid-template-columns:repeat(2,minmax(0,1fr));margin-top:8px}
+.pgi{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:40px;padding:0 11px;border-radius:9px;border:1px solid var(--line);font-size:13px;text-align:left;overflow:hidden}
+.pgi span{font-family:var(--font-num);font-size:9.5px;color:var(--faint);flex:none}
+.sharehow{margin-top:16px;padding:12px 14px;border-radius:12px;border:1px dashed var(--line2);background:var(--well);font-size:13px}
+.sharehow ol{margin:6px 0 0;padding-left:18px;color:var(--muted);line-height:1.6}
+.packdone{display:grid;grid-template-columns:104px 1fr;gap:16px;align-items:center}
+.makepack,.installpk{display:grid;grid-template-columns:260px minmax(0,1fr);gap:20px}
+.fld{display:grid;gap:5px;margin-bottom:10px}
+.fld textarea{resize:none}
+.pcols{display:flex;gap:6px;flex-wrap:wrap}
+.pcol{width:24px;height:24px;border-radius:7px}
+.pcol.on{outline:2px solid var(--ink);outline-offset:2px}
+.okmsg{margin-top:10px;padding:9px 11px;border-radius:10px;background:#20251b;border:1px solid #3c4a2c;color:#c9dcae;font-size:12.5px;line-height:1.45}
+.pkbar{display:flex;flex-wrap:wrap;align-items:center;gap:5px;margin-bottom:8px}
+.pkbar b{margin-right:auto}
+.pick{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px}
+.ck{display:flex;align-items:center;gap:8px;min-height:34px;padding:0 9px;border-radius:8px;border:1px solid var(--line);font-size:12.5px;text-align:left;min-width:0}
+.ck .box{flex:none;width:16px;height:16px;border-radius:4px;border:1.5px solid var(--line2);display:grid;place-items:center;font-size:11px}
+.ck .n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ck small{flex:none;font-family:var(--font-num);font-size:9px;color:var(--faint)}
+.ck.on{border-color:var(--amber-deep,#6a4f25);background:var(--amber-soft)}
+.ck.on .box{background:var(--amber);border-color:var(--amber);color:#1a1408}
+.pkfoot{display:flex;align-items:center;justify-content:space-between;margin-top:8px}
+.pkfoot .pager{margin-top:0}
+.packdrop{position:fixed;inset:12px;z-index:300;display:none;place-items:center;border:2px dashed var(--amber);border-radius:18px;background:rgba(20,16,12,.82);color:var(--amber);font-size:22px;font-weight:800;pointer-events:none;text-align:center}
+.packdrop small{display:block;margin-top:6px;font:500 12px var(--font-num);color:var(--muted)}
+.packdrop.on{display:grid}
 .used{display:grid;gap:6px}
 .used button{display:flex;align-items:center;justify-content:space-between;min-height:44px;padding:0 12px;border-radius:var(--r-sm);border:1px solid var(--line);font-size:13px;text-align:left}
 .used span{font-family:var(--font-num);font-size:10.5px;color:var(--faint)}
@@ -477,6 +631,22 @@ dl.helpdl dd{margin:2px 0 0;color:var(--muted);font-size:13px}
 .menu button{display:block;width:100%;text-align:left;min-height:44px;padding:0 12px;border-radius:8px;font-weight:600;font-size:13px}
 .menu button:active{background:var(--s3)}
 .plist{display:flex;flex-direction:column;gap:2px;max-height:46vh;overflow:auto;margin:-6px -6px 0}
+/* dark, thin scrollbars everywhere (the default white bar looked broken in the sheets) */
+*{scrollbar-width:thin;scrollbar-color:#3d3530 transparent}
+.pmenu{display:flex;flex-direction:column;gap:12px}
+.pmenu .plist{max-height:56vh;margin:0 -6px;padding:0 4px}
+.pmrow{border-radius:var(--r-sm);flex:none}
+.pmrow .li{width:100%}
+.pmrow.open{background:var(--well);box-shadow:inset 0 0 0 1px var(--line)}
+.pmrow.open .li{background:transparent;box-shadow:none}
+.pmbody{padding:2px 10px 12px;display:flex;flex-direction:column;gap:10px}
+.pmfit{overflow:hidden;border-radius:10px;background:var(--s1);border:1px solid var(--line);padding:2px}
+.pmfit .chain{pointer-events:none;flex-wrap:nowrap;width:max-content}
+.pmacts{display:flex;gap:8px;justify-content:flex-end}
+/* Your Amp: the capture chooser in the pedal sheet */
+.capick{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.capick select{flex:1 1 220px;min-height:44px;border-radius:10px;background:var(--s2);border:1px solid var(--line2);color:var(--ink);padding:0 12px;font:inherit;font-weight:600}
+.capick+.help{margin:8px 0 14px}
 .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(10px);z-index:70;background:var(--s3);border:1px solid var(--line2);
        padding:10px 16px;border-radius:10px;font-weight:600;font-size:13px;opacity:0;transition:opacity .18s,transform .18s;pointer-events:none}
 .toast.on{opacity:1;transform:translateX(-50%) translateY(0)}

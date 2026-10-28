@@ -45,6 +45,22 @@ for (const name of files) {
   for (const b of lib.blocks) text += `BLOCK ${b.tag} ${b.offset}\n`;
   text += `PERFORMANCES ${lib.performances.length}\n`;
   for (const p of lib.performances) text += `PERF ${p}\n`;
+  const dp = lib.dpfm ?? { performances: [], skipped: [] };
+  text += `DPFM perfs=${dp.performances.length} skipped=${dp.skipped.length}
+`;
+  for (const pf of dp.performances) {
+    text += `  PF ${pf.index} parts=${pf.parts.length} declared=${pf.declaredParts} name=${pf.name}
+`;
+    for (const pt of pf.parts)
+      for (const e of pt.elements)
+        text += `    EL ${pt.index}.${e.slot} on=${e.on ? 1 : 0} lib=${e.libraryWaveform ? 1 : 0}`
+              + ` wf=${e.waveformNumber} idx=${e.waveformIndex === null ? -1 : e.waveformIndex}`
+              + ` grp=${e.group} xa=${e.xa} rel=${e.release ? 1 : 0}`
+              + ` note=${e.noteLo}-${e.noteHi} vel=${e.velLo}-${e.velHi} xf=${e.velXfade}
+`;
+  }
+  for (const sk of dp.skipped) text += `  PFSKIP ${sk.index} ${sk.reason}
+`;
   for (const wf of lib.waveforms) {
     text += `WF ${wf.index} id=${wf.id} ch=${wf.channels} oneShot=${wf.oneShot ? 1 : 0}`
           + ` bytes=${wf.totalPcmBytes} name=${wf.name}\n`;

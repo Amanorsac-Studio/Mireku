@@ -13,6 +13,7 @@
 // studio-machine check, and the fixtures CI has are placeholder .jmi bundles,
 // not Yamaha libraries.
 #include "engine/import/X7lReader.h"
+#include "engine/import/X7lDpfm.h"
 
 /// Where the client's libraries live. Overridable so the same test can be
 /// pointed at another folder.
@@ -40,6 +41,25 @@ static juce::String dumpLibrary (const juce::File& f)
         for (auto& b : lib.blocks) out << "BLOCK " << b.first << " " << b.second << "\n";
         out << "PERFORMANCES " << lib.performances.size() << "\n";
         for (auto& p : lib.performances) out << "PERF " << p << "\n";
+        const auto dp = jm::x7l::decodeDpfm (static_cast<const juce::uint8*> (mb.getData()),
+                                             (juce::int64) mb.getSize(), lib);
+        out << "DPFM perfs=" << (int) dp.performances.size()
+            << " skipped=" << (int) dp.skipped.size() << "\n";
+        for (auto& pf : dp.performances)
+        {
+            out << "  PF " << pf.index << " parts=" << (int) pf.parts.size()
+                << " declared=" << pf.declaredParts << " name=" << pf.name << "\n";
+            for (auto& pt : pf.parts)
+                for (auto& e : pt.elements)
+                    out << "    EL " << pt.index << "." << e.slot
+                        << " on=" << (e.on ? 1 : 0) << " lib=" << (e.libraryWaveform ? 1 : 0)
+                        << " wf=" << e.waveformNumber << " idx=" << e.waveformIndex
+                        << " grp=" << e.group << " xa=" << e.xa << " rel=" << (e.release ? 1 : 0)
+                        << " note=" << e.noteLo << "-" << e.noteHi
+                        << " vel=" << e.velLo << "-" << e.velHi << " xf=" << e.velXfade << "\n";
+        }
+        for (auto& sk : dp.skipped)
+            out << "  PFSKIP " << sk.index << " " << sk.reason << "\n";
         for (auto& wf : lib.waveforms)
         {
             out << "WF " << wf.index << " id=" << wf.id << " ch=" << wf.channels

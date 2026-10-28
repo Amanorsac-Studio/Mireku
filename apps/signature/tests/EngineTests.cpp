@@ -8,6 +8,7 @@
 #include "engine/Sampler.h"
 #include "engine/AppState.h"
 #include "engine/Limiter.h"
+#include "../../../shared/tester-gate/TesterGate.h"
 
 using namespace jm;
 
@@ -1614,6 +1615,8 @@ static void testArpStateRoundTrip()
 // DSP STANDARDS PASS — aliasing (guide §1.3), DC blocking / feedback margin /
 // interpolation (§2), sample-rate and buffer-size independence (§4.1).
 #include "DspStandards.inc"
+// TEST-BUILD KEY GATE — shared/tester-gate/TesterGate.h, against signed vectors.
+#include "TesterGateTests.inc"
 
 //==============================================================================
 //==============================================================================
@@ -1949,6 +1952,9 @@ int main()
     testStarvationIsBoundedWhenAudioNeverArrives();
     testResidencyPolyphonyUnderLoad();
     testRealBundleResidency();
+    // TEST-BUILD KEY GATE. Runs in an ordinary build too: it passes the public
+    // key in explicitly, so it never depends on MIREKU_TESTER_BUILD.
+    testTesterGate();
     // DSP STANDARDS PASS
     testAliasSuppression();
     testToneBeforeAfter();

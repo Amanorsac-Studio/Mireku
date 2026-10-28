@@ -44,6 +44,15 @@ set(JMI_FORMAT_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../../packages/jmi-format/cp
 #    version is wanted, point JM_ASIO_SDK_DIR at a local SDK's `common`
 #    directory and JUCE's external-SDK path is used instead.
 option(JM_ASIO "Compile ASIO device support into the standalone" ON)
+
+# A TEST build asks for one signed key and goes silent when it expires
+# (src/plugin/TesterGate.h). OFF for a release: a release contains none of it,
+# and must not, because it carries a second signing key — the public half, but
+# the License Integration Standard's R2 forbids one in a release all the same.
+# This is NOT the studio's licensing system; see TesterGate.h for what it is.
+# Test builds are named "-Tester-" and the installer scripts refuse to package a
+# release whose binary still contains the key.
+option(MIREKU_TESTER_BUILD "Build a key-gated test build" OFF)
 set(JM_ASIO_SDK_DIR "" CACHE PATH
     "Optional: directory containing iasiodrv.h from a locally installed Steinberg ASIO SDK. \
 Leave empty to use the ASIO headers bundled with JUCE. The SDK is NOT redistributable and is \
@@ -185,7 +194,8 @@ target_compile_definitions(Mireku PUBLIC
     JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP=1
     # R6(1): device backends. These must be PUBLIC/on the shared-code target —
     # that is where JUCE compiles juce_audio_devices.
-    ${JM_AUDIO_BACKEND_DEFS})
+    ${JM_AUDIO_BACKEND_DEFS}
+    $<$<BOOL:${MIREKU_TESTER_BUILD}>:MIREKU_TESTER_BUILD=1>)
 if(JM_ASIO_INCLUDE_DIR)
     target_include_directories(Mireku PUBLIC "${JM_ASIO_INCLUDE_DIR}")
 endif()
@@ -201,6 +211,13 @@ endif()
 target_link_libraries(Mireku PRIVATE
     juce::juce_audio_utils
     juce::juce_dsp
+    # SHA-256 for the test-build key check (shared/tester-gate/TesterGate.h).
+    # Linked unconditionally, and genuinely needed in a release build too: the
+    # Gate is constructed either way and evaluates the stored key, which in a
+    # release build is checked against an EMPTY modulus and so can never verify.
+    # What a release build does not contain is the KEY — TesterKey.h's constant
+    # is never referenced, which is the part the installer scripts check for.
+    juce::juce_cryptography
     PUBLIC
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
@@ -217,6 +234,7 @@ target_compile_definitions(MirekuTests PRIVATE
     JUCE_USE_CURL=0
     JM_TESTDATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../testdata")
 target_link_libraries(MirekuTests PRIVATE
+    juce::juce_cryptography          # test-build key gate, via PluginProcessor.h
     juce::juce_audio_formats
     juce::juce_dsp
     juce::juce_events
@@ -244,6 +262,7 @@ target_compile_definitions(MirekuSnapshot PRIVATE
     JM_JMI_SCHEMA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../packages/jmi-format/schema"
     JM_LIBRARY_TESTDATA="${CMAKE_CURRENT_SOURCE_DIR}/../../testdata")
 target_link_libraries(MirekuSnapshot PRIVATE
+    juce::juce_cryptography          # test-build key gate, via PluginProcessor.h
     JMAssets
     juce::juce_audio_utils
     juce::juce_dsp
@@ -271,6 +290,7 @@ target_compile_definitions(MirekuValidation PRIVATE
     # not depend on which instruments a particular machine happens to have.
     JM_LIBRARY_TESTDATA="${CMAKE_CURRENT_SOURCE_DIR}/../../testdata")
 target_link_libraries(MirekuValidation PRIVATE
+    juce::juce_cryptography          # test-build key gate, via PluginProcessor.h
     JMAssets
     juce::juce_audio_utils
     juce::juce_dsp
@@ -290,6 +310,7 @@ if(JM_ASIO_INCLUDE_DIR)
     target_include_directories(MirekuDevices PRIVATE "${JM_ASIO_INCLUDE_DIR}")
 endif()
 target_link_libraries(MirekuDevices PRIVATE
+    juce::juce_cryptography          # test-build key gate, via PluginProcessor.h
     juce::juce_audio_devices
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags)

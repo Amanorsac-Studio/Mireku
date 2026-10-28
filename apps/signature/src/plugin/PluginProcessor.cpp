@@ -327,6 +327,13 @@ void JMSignatureProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     buffer.clear();
     const int n = buffer.getNumSamples();
     if (n == 0) return;
+
+    // TEST BUILDS ONLY. Without a valid, unexpired key the instrument is silent.
+    // The buffer is already cleared, and returning here means no voice is
+    // started and no MIDI is consumed, so nothing accumulates while it is shut.
+    // A release build compiles this out entirely (kEnabled is constexpr false).
+    if constexpr (tester::kEnabled)
+        if (! testerOpen_.load (std::memory_order_relaxed)) { midi.clear(); return; }
     if (slotBuf.getNumSamples() < n) slotBuf.setSize (2, n, false, false, true);
 
     // MODULATION PHASE 1 — the transport clock. getPosition() may ONLY be called
@@ -508,6 +515,13 @@ float JMSignatureProcessor::modulatedHostValue (int target) const
 void JMSignatureProcessor::timerCallback()
 {
     cpuLoad.store ((float) loadMeasurer.getLoadAsProportion());
+
+    // TEST BUILDS ONLY: re-decide against the clock about twice a minute, so a
+    // key that runs out while the app is open takes effect without a restart,
+    // and so the latest time this machine has been seen at is remembered (which
+    // is what stops winding the clock back from reviving an expired key).
+    if constexpr (tester::kEnabled)
+        if (++testerTick_ >= 30 * 30) { testerTick_ = 0; applyTesterVerdict (tester_.refresh()); }
 
     // learned CC events
     int s1, n1, s2, n2;

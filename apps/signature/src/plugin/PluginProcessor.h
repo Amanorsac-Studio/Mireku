@@ -8,6 +8,7 @@
 #include "../engine/Authoring.h"
 #include "../engine/Limiter.h"
 #include "../engine/MidiRouting.h"
+#include "TesterGate.h"
 
 namespace jm {
 
@@ -356,6 +357,25 @@ public:
 
     juce::ChangeBroadcaster stateChanged;    // UI listens: slots/presets/racks changed
 
+    //==========================================================================
+    // TEST BUILDS ONLY (MIREKU_TESTER_BUILD). Until a valid, unexpired test key
+    // is entered the instrument is silent and the editor shows nothing but the
+    // key panel. In a release build `testerGated()` is constexpr false, no
+    // member here does any work, and the binary carries no signing key at all.
+    // See TesterGate.h for what the key is, and is not.
+    bool testerGated() const noexcept { return tester::kEnabled; }
+    tester::Check testerStatus() const { return tester_.current(); }
+    /// Verifies and, if good, stores a typed key; opens the instrument on success.
+    tester::Check submitTesterKey (const juce::String& raw)
+    {
+        const auto c = tester_.submit (raw);
+        applyTesterVerdict (c);
+        return c;
+    }
+    /// Broadcasts whenever the verdict changes, so the panel can follow a key
+    /// that expires mid-session without polling.
+    juce::ChangeBroadcaster testerChanged;
+
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 
     /// ModApplier — audio thread. Pushes one modulated NORMALISED value into the
@@ -365,6 +385,20 @@ public:
     void applyModulatedValue (const ModDest& dest, float normalised) override;
 
 private:
+    //-------------------------------------------------- test-build key gate
+    /// Lives beside the settings, so every instance of the plug-in on this
+    /// machine reads the same key and the same remembered time.
+    tester::Gate tester_ { Library::appDataDir().getChildFile ("Security") };
+    /// Read by the audio thread every block; written only from the message
+    /// thread. True in a release build and never touched again.
+    std::atomic<bool> testerOpen_ { ! tester::kEnabled };
+    int testerTick_ = 0;                     // counts 30 Hz ticks to the half minute
+    void applyTesterVerdict (const tester::Check& c)
+    {
+        testerOpen_.store (c.status == tester::Status::ok, std::memory_order_relaxed);
+        testerChanged.sendChangeMessage();
+    }
+
     void timerCallback() override;
     /// The processor listens to its OWN stateChanged broadcast so that anything
     /// which reshapes the model — an FX unit added or removed, a preset loaded, a

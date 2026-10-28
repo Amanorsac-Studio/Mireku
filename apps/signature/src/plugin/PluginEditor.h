@@ -6,6 +6,7 @@
 #pragma once
 #include "PluginProcessor.h"
 #include "../ui/Perform.h"
+#include "../ui/TesterGatePanel.h"
 
 namespace jm {
 
@@ -91,6 +92,8 @@ private:
     std::unique_ptr<ModelPagePanel> modelPage_;
     std::unique_ptr<PerformCenterPanel> performPage_;
     std::unique_ptr<KeyboardStrip> keyboard_;   // R4(2): keys + pitch/mod wheels
+    /// TEST BUILDS ONLY — the key screen. Null in a release build.
+    std::unique_ptr<TesterGatePanel> gate_;
     bool showKeyboard_ = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (JMSignatureEditor)

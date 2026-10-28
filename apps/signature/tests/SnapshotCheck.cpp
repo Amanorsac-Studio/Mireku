@@ -3056,13 +3056,14 @@ int main (int argc, char** argv)
 
             auto* entries = man.getProperty ("entries", juce::var()).getArray();
             CHECK (entries != nullptr, "the manifest lists entries");
-            int nBundle = 0, nPerfF = 0, nPerfU = 0, nWorld = 0, nSettings = 0, nAuthored = 0;
+            int nBundle = 0, nPerfF = 0, nPerfU = 0, nWorld = 0, nSettings = 0, nAuthored = 0, nMeta = 0;
             bool everyFilePresent = true, everyHashRight = true;
             if (entries != nullptr)
                 for (auto& e : *entries)
                 {
                     const auto kind = e.getProperty ("kind", "").toString();
                     if (kind == "bundlePreset") ++nBundle;
+                    else if (kind == "bundleMeta") ++nMeta;
                     else if (kind == "performanceFactory") ++nPerfF;
                     else if (kind == "performanceUser") ++nPerfU;
                     else if (kind == "worldPreset") ++nWorld;
@@ -3108,6 +3109,67 @@ int main (int argc, char** argv)
             juce::String why;
             CHECK (bundleIsValid (epBundle, why), "and the bundle an import wrote into is still valid");
             if (why.isNotEmpty()) std::printf ("  bundle invalid: %s\n", why.toRawUTF8());
+
+            // ---------------------------------------------------------------
+            // "including moving categories renaming and all". The artist files
+            // a sound under a category and gives it a name; both live in
+            // instrument.json, which the collection did not used to carry, so
+            // the organising work was the one thing that never came back.
+            CHECK (nMeta >= 1, "each bundle's category and name are collected too");
+            {
+                auto metaFile = dest.getChildFile ("bundles").getChildFile (epBundle.getFileName())
+                                    .getChildFile ("instrument-meta.json");
+                CHECK (metaFile.existsAsFile(), "as a small record beside that bundle's presets");
+                const auto rec = juce::JSON::parse (metaFile.loadFileAsString());
+                CHECK (rec.getProperty ("name", "").toString().isNotEmpty()
+                       && rec.getProperty ("world", "").toString().isNotEmpty(),
+                       "carrying the two AUTHORED fields and nothing else");
+                CHECK (! rec.getDynamicObject()->hasProperty ("zones"),
+                       "NOT the whole instrument.json: zones, loops and soundType stay put, so a "
+                       "receiving bundle keeps the loop repair done on it");
+
+                // Now simulate the real round trip: the artist re-categorises and
+                // renames on HIS machine, sends the collection, and it is
+                // imported onto a library where the bundle is still as it
+                // shipped. Both decisions must land.
+                const auto ij = epBundle.getChildFile ("instrument.json");
+                const auto beforeName = juce::JSON::parse (ij.loadFileAsString())
+                                            .getProperty ("meta", juce::var())
+                                            .getProperty ("name", "").toString();
+                auto* edited = new juce::DynamicObject();
+                edited->setProperty ("name", "Mireku Tine");
+                edited->setProperty ("world", "strings");
+                metaFile.replaceWithText (juce::JSON::toString (juce::var (edited), false));
+                // the manifest records a checksum, so re-stamp it for this entry
+                {
+                    auto m2 = juce::JSON::parse (res.manifest.loadFileAsString());
+                    if (auto* a2 = m2.getProperty ("entries", juce::var()).getArray())
+                        for (auto& e2 : *a2)
+                            if (e2.getProperty ("kind", "").toString() == "bundleMeta"
+                                && e2.getProperty ("bundle", "").toString() == epBundle.getFileName())
+                                e2.getDynamicObject()->setProperty ("hash", authoring::contentHash (metaFile));
+                    res.manifest.replaceWithText (juce::JSON::toString (m2, false));
+                }
+
+                auto imp2 = authoring::importCollection (dest, libRoot, presetRoot);
+                for (auto& l : imp2.lines)
+                    if (l.contains ("instrument-meta")) std::printf ("    %s\n", l.toRawUTF8());
+                const auto after = juce::JSON::parse (ij.loadFileAsString()).getProperty ("meta", juce::var());
+                CHECK (after.getProperty ("name", "").toString() == "Mireku Tine",
+                       "A RENAME MADE ON HIS MACHINE COMES BACK: the bundle now carries the new name");
+                CHECK (after.getProperty ("world", "").toString() == "strings",
+                       "and so does the category he filed it under");
+                juce::String why2;
+                CHECK (bundleIsValid (epBundle, why2), "with the bundle still valid afterwards");
+
+                // re-importing the same collection changes nothing a second time
+                auto imp3 = authoring::importCollection (dest, libRoot, presetRoot);
+                CHECK (imp3.ok, "re-importing the same collection is a no-op, not an error");
+
+                // put it back for the rest of the suite
+                authoring::writeInstrumentWorld (epBundle, "rhodes-ep");
+                authoring::renameInstrument (epBundle, beforeName);
+            }
 
             {   // a tampered collection is refused per entry, not applied blindly
                 auto victim = dest.getChildFile ("performance/Factory/Set One.json");

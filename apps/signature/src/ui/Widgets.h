@@ -1382,14 +1382,52 @@ public:
         btn_.setButtonText (spec_.choices.empty() ? "" : juce::String (spec_.choices[(size_t) idx]));
     }
 
+    /// Caption type size, to match the knobs it shares a grid with. The dense
+    /// FX units drop a point; see ParamKnob::setLabelBelow.
+    void setCaptionHeight (float fontHeight)
+    {
+        name_.setFont (Theme::ui (fontHeight));
+        captionH_ = juce::roundToInt (fontHeight + 3.0f);
+        resized();
+    }
+
+    /// Which side of the control the caption sits on. It must match the KNOBS in
+    /// the same grid, because a caption below one row and a caption above the
+    /// next put two caption lines together with no control between them.
+    ///
+    /// Above is the default because that is what the model pages' knobs do
+    /// (caption over the knob, value under it — the arrangement the client
+    /// approved). The FX units set it below, to match ParamKnob::setLabelBelow.
+    void setCaptionBelow (bool below)
+    {
+        captionBelow_ = below;
+        resized();
+    }
+
     void resized() override
     {
         auto r = getLocalBounds();
-        name_.setBounds (r.removeFromTop (14));
+        // The caption goes on whichever side the knobs in this grid use.
+        //
+        // This control always put it ABOVE while ParamKnob with labelBelow puts
+        // its own BELOW, so in the FX units the caption at the bottom of one row
+        // met the caption at the top of the row beneath it: two caption lines
+        // together with no control between them, reading as one stacked pair.
+        // The tape delay showed "TONE / SYNC", "WOW/FLUTTER / DIVISION" and
+        // "MIX / PING-PONG", each naming two controls — a knob a row above and a
+        // switch a row below. One rule per grid is what keeps a row reading as
+        // a row.
+        name_.setBounds (captionBelow_ ? r.removeFromBottom (captionH_)
+                                       : r.removeFromTop (captionH_));
         if (spec_.kind == ParamKind::Bool)
             pill_.setBounds (r.withSizeKeepingCentre (juce::jmin (44, r.getWidth() - 4), juce::jmin (20, r.getHeight())));
         else
-            btn_.setBounds (r.reduced (2));
+            // Centred and capped rather than filling the cell: an enum button
+            // that takes the whole control area stands taller than the knob
+            // beside it, so a row of "4 / MIX" or "3/16 / TIME" sat on two
+            // different centre lines.
+            btn_.setBounds (r.withSizeKeepingCentre (juce::jmin (r.getWidth() - 4, 72),
+                                                     juce::jmin (r.getHeight() - 2, 30)));
     }
 
 private:
@@ -1399,6 +1437,8 @@ private:
     juce::TextButton btn_;
     PillToggle pill_;
     juce::Label name_;
+    int captionH_ = 14;
+    bool captionBelow_ = false;
 };
 
 //==============================================================================

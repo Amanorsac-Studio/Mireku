@@ -52,7 +52,10 @@ namespace jm::authoring {
 //==============================================================================
 inline constexpr const char* kAppVersion = JM_APP_VERSION;
 /// Version of the collection manifest format this build writes and can read.
-inline constexpr int kCollectionVersion = 1;
+/// 2 adds the `bundleMeta` entry — the category and name the artist filed a
+/// sound under. An older build reading a version-2 collection is stopped by the
+/// version gate rather than silently skipping those entries as unknown.
+inline constexpr int kCollectionVersion = 2;
 inline constexpr const char* kLedgerFileName = "authoring.json";
 inline constexpr const char* kManifestFileName = "authoring-collection.json";
 /// VENDOR RENAME (2026-10-26): these two `kind` tags named the old product.
@@ -855,6 +858,9 @@ inline WriteResult renameInstrument (const juce::File& bundleDir, const juce::St
 //     authoring-collection.json        the manifest
 //     bundles/<Name>.jmi/presets/*.json every preset in every library bundle
 //     bundles/<Name>.jmi/authoring.json the ledger (who authored what, when)
+//     bundles/<Name>.jmi/instrument-meta.json  the category and name it is filed
+//                                       under (the two AUTHORED fields of
+//                                       instrument.json, not the whole file)
 //     performance/Factory/*.json       factory performance snapshots
 //     performance/User/*.json          user performance snapshots
 //     presets/<world>/*.json           world user presets
@@ -867,12 +873,13 @@ inline WriteResult renameInstrument (const juce::File& bundleDir, const juce::St
 //==============================================================================
 struct CollectedEntry
 {
-    juce::String kind;         ///< bundlePreset | bundleLedger | performanceFactory
-                               ///< | performanceUser | worldPreset | settings
+    juce::String kind;         ///< bundlePreset | bundleLedger | bundleMeta
+                               ///< | performanceFactory | performanceUser
+                               ///< | worldPreset | settings
     juce::String path;         ///< path inside the collection
     juce::String origin;       ///< absolute source path
-    juce::String bundle;       ///< bundle folder name, for bundlePreset/bundleLedger
-    juce::String world;        ///< world folder name, for worldPreset
+    juce::String bundle;       ///< bundle folder name, for bundlePreset/Ledger/Meta
+    juce::String world;        ///< world id, for worldPreset and bundleMeta
     juce::String name;         ///< preset name as stored in the file
     juce::int64 bytes = 0;
     juce::String hash;
@@ -979,10 +986,56 @@ inline CollectResult collect (const juce::File& libraryDir, const juce::File& pr
                 e.modifiedAt = ledgerFile (bundle).getLastModificationTime().toISO8601 (true);
                 if (copyInto (ledgerFile (bundle), destRoot.getChildFile (e.path))) add (std::move (e));
             }
+
+            // ------------------------------------------- CATEGORY AND NAME
+            // The artist can re-categorise a sound and rename it, and both of
+            // those live in the bundle's instrument.json — a file the
+            // collection did not carry, so until now the one thing that never
+            // came back was the organising work.
+            //
+            // The two AUTHORED FIELDS travel, not the file. instrument.json also
+            // holds the zones, the loops and the measured levels, and a bundle
+            // on the receiving side may legitimately differ there (the loop
+            // repair changed `loop` and `soundType` on seven of them). Copying
+            // the whole file back would silently undo that. Carrying the
+            // decisions and re-applying them through the same guarded writers
+            // the UI uses cannot.
+            const auto meta = juce::JSON::parse (bundle.getChildFile ("instrument.json")
+                                                       .loadFileAsString())
+                                  .getProperty ("meta", juce::var());
+            if (auto* mo = meta.getDynamicObject())
+            {
+                auto obj = new juce::DynamicObject();
+                obj->setProperty ("name", mo->getProperty ("name"));
+                obj->setProperty ("world", mo->getProperty ("world"));
+                CollectedEntry e;
+                e.kind = "bundleMeta";
+                e.bundle = bundle.getFileName();
+                e.path = "bundles/" + e.bundle + "/instrument-meta.json";
+                e.origin = bundle.getChildFile ("instrument.json").getFullPathName();
+                e.name = mo->getProperty ("name").toString();
+                e.world = mo->getProperty ("world").toString();
+                auto out = destRoot.getChildFile (e.path);
+                out.getParentDirectory().createDirectory();
+                if (out.replaceWithText (juce::JSON::toString (juce::var (obj), false)))
+                {
+                    e.bytes = out.getSize();
+                    e.hash = contentHash (out);
+                    e.modifiedAt = bundle.getChildFile ("instrument.json")
+                                         .getLastModificationTime().toISO8601 (true);
+                    e.authored = true;    // the artist's own filing decision
+                    add (std::move (e));
+                }
+            }
         }
     }
     r.lines.add (juce::String (bundlePresets) + " bundle preset(s) from "
                  + juce::String (bundlesSeen) + " bundle(s)");
+    {
+        int metas = 0;
+        for (auto& e : entries) if (e.kind == "bundleMeta") ++metas;
+        r.lines.add (juce::String (metas) + " bundle category/name record(s)");
+    }
 
     // ------------------------------------------------------ performance presets
     auto perf = presetRoot.getChildFile ("Performance");
@@ -1167,6 +1220,48 @@ inline ImportResult importCollection (const juce::File& collectionRoot, const ju
         { r.lines.add ("info  " + rel + " - provenance, not imported"); continue; }
 
         juce::File target;
+        // ------------------------------------------- CATEGORY AND NAME back
+        // Applied through renameInstrument / writeInstrumentWorld — the same
+        // guarded writers the UI calls — rather than by copying the file over,
+        // so the receiving bundle keeps its own zones, loops and soundType.
+        // Both writers refuse a no-op change, which here means "already
+        // matches" and is counted as identical, not as a failure.
+        if (kind == "bundleMeta")
+        {
+            auto bundle = libraryDir.getChildFile (ev.getProperty ("bundle", "").toString());
+            if (! looksLikeBundle (bundle))
+            { fail ("bundle " + ev.getProperty ("bundle", "").toString() + " is not in this library"); continue; }
+
+            const auto want = juce::JSON::parse (src.loadFileAsString());
+            const auto wantName = want.getProperty ("name", "").toString();
+            const auto wantWorld = want.getProperty ("world", "").toString();
+            bool changed = false, failed = false;
+
+            if (wantWorld.isNotEmpty())
+            {
+                auto wr = writeInstrumentWorld (bundle, wantWorld);
+                if (wr.ok) { r.lines.add ("OK    " + rel + " -> category " + wantWorld); changed = true; }
+                else if (wr.message != "already in that category")
+                { fail ("category: " + wr.message); failed = true; }
+            }
+            if (! failed && wantName.isNotEmpty())
+            {
+                juce::StringArray inUse;
+                for (auto& other : libraryDir.findChildFiles (juce::File::findDirectories, false, "*.jmi"))
+                    if (other != bundle && looksLikeBundle (other))
+                        inUse.add (juce::JSON::parse (other.getChildFile ("instrument.json").loadFileAsString())
+                                       .getProperty ("meta", juce::var())
+                                       .getProperty ("name", "").toString());
+                auto wr = renameInstrument (bundle, wantName, inUse);
+                if (wr.ok) { r.lines.add ("OK    " + rel + " -> name \"" + wantName + "\""); changed = true; }
+                else if (wr.message != "that is already its name")
+                { fail ("name: " + wr.message); failed = true; }
+            }
+            if (failed) continue;
+            if (changed) ++r.applied;
+            else { r.lines.add ("same  " + rel); ++r.identical; }
+            continue;
+        }
         if (kind == "bundlePreset")
         {
             auto bundle = libraryDir.getChildFile (ev.getProperty ("bundle", "").toString());

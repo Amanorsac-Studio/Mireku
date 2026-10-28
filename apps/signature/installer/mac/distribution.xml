@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- MIREKU - macOS distribution. The five pages of the Installer & Packaging
+     Standard §5 map onto Installer.app's own: Welcome, Licence (+ Read Me),
+     Customise (the choices below, each naming its full path), Installing, and
+     the Conclusion, which lists what went where.
+
+     Two things the standard asks for that a .pkg cannot do, recorded here rather
+     than faked: the plug-in folders are fixed (which is correct - a plug-in
+     anywhere else is one no host finds), and there is no "second copy" field
+     because Installer.app has no free-text page.
+
+     The sample library is not a choice here: it is delivered separately and its
+     folder is set inside the app, under Settings. -->
+<installer-gui-script minSpecVersion="2">
+    <title>MIREKU @VERSION@</title>
+    <organization>com.amanorsac</organization>
+    <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+    <options customize="always" require-scripts="false" hostArchitectures="arm64,x86_64"/>
+    <volume-check><allowed-os-versions><os-version min="11.0"/></allowed-os-versions></volume-check>
+
+    <welcome file="welcome.html" mime-type="text/html"/>
+    <license file="licence.txt" mime-type="text/plain"/>
+    <readme file="readme.txt" mime-type="text/plain"/>
+    <conclusion file="conclusion.html" mime-type="text/html"/>
+
+    <choices-outline>
+        <line choice="app"/>
+        <line choice="vst3"/>
+        <line choice="au"/>
+        <line choice="docs"/>
+    </choices-outline>
+
+    <choice id="app" title="Standalone application" start_selected="true"
+            description="MIREKU as its own application.&#10;&#10;/Applications/MIREKU.app">
+        <pkg-ref id="com.amanorsac.mireku.app"/>
+    </choice>
+    <choice id="vst3" title="VST3 plug-in" start_selected="true"
+            description="For any DAW that loads VST3.&#10;&#10;/Library/Audio/Plug-Ins/VST3/MIREKU.vst3">
+        <pkg-ref id="com.amanorsac.mireku.vst3"/>
+    </choice>
+    <choice id="au" title="Audio Unit" start_selected="true"
+            description="For Logic Pro, GarageBand and MainStage.&#10;&#10;/Library/Audio/Plug-Ins/Components/MIREKU.component">
+        <pkg-ref id="com.amanorsac.mireku.au"/>
+    </choice>
+    <choice id="docs" title="Read Me and uninstaller" start_selected="true" enabled="false"
+            description="The Read Me and Uninstall MIREKU.command.&#10;&#10;/Library/Application Support/Amanorsac Studio/MIREKU">
+        <pkg-ref id="com.amanorsac.mireku.docs"/>
+    </choice>
+
+    <pkg-ref id="com.amanorsac.mireku.app"  version="@VERSION@">app.pkg</pkg-ref>
+    <pkg-ref id="com.amanorsac.mireku.vst3" version="@VERSION@">vst3.pkg</pkg-ref>
+    <pkg-ref id="com.amanorsac.mireku.au"   version="@VERSION@">au.pkg</pkg-ref>
+    <pkg-ref id="com.amanorsac.mireku.docs" version="@VERSION@">docs.pkg</pkg-ref>
+</installer-gui-script>

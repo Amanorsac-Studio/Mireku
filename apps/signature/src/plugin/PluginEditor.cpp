@@ -127,6 +127,17 @@ JMSignatureEditor::JMSignatureEditor (JMSignatureProcessor& p)
                      Theme::M::maxW, Theme::M::maxH);
     setSize (opening.x, opening.y);
     setPage (juce::jlimit (0, 4, proc_.state.currentPage));
+
+    // TEST BUILDS ONLY. Constructed last so it is the frontmost child, and only
+    // when this build is gated at all; a release build never makes one.
+    if (proc_.testerGated())
+    {
+        gate_ = std::make_unique<TesterGatePanel> (proc_);
+        addAndMakeVisible (*gate_);
+        gate_->setVisible (TesterGatePanel::shouldShow (proc_));
+        gate_->setBounds (getLocalBounds());
+    }
+
     startTimerHz (15);
 }
 
@@ -213,6 +224,11 @@ void JMSignatureEditor::resized()
     const float ox = ((float) getWidth() - Theme::M::designW * scale) * 0.5f;
     const float oy = ((float) getHeight() - Theme::M::designH * scale) * 0.5f;
     root_.setTransform (juce::AffineTransform::scale (scale).translated (ox, oy));
+
+    // TEST BUILDS ONLY: the key screen is a sibling of the scaled root, not a
+    // child of it, so it fills the window at 1:1 and is not letterboxed with the
+    // chassis.
+    if (gate_ != nullptr) gate_->setBounds (getLocalBounds());
 }
 
 } // namespace jm

@@ -793,20 +793,32 @@ public:
         for (auto& ps : spec.params)
         {
             auto path = prefix_ + ".fx" + juce::String (idx_) + "." + ps.id;
+            // `order_` is the layout order and it is the REGISTRY's order. The
+            // grid used to take every knob first and every switch afterwards,
+            // which moved each switch away from the parameter it qualifies: the
+            // tape delay's SYNC sat two cells from TIME, and DIVISION — which
+            // only means anything while SYNC is on — landed on a different row
+            // from both. The registry already lists them in the order an
+            // engineer reads them, so the panel follows it. See resized().
+            juce::Component* added = nullptr;
             if (ps.kind == ParamKind::Float)
             {
                 auto* k = new ParamKnob (proc_, path, ps.label, &ps);
                 k->setShowValue (false);
                 k->setLabelBelow (true, capHeight);
                 knobs_.add (k);
-                addAndMakeVisible (k);
+                added = k;
             }
             else
             {
                 auto* c = new ParamChoiceButton (proc_, path, ps.label, ps);
+                c->setCaptionHeight (capHeight);
+                c->setCaptionBelow (true);       // the knobs here use labelBelow
                 choices_.add (c);
-                addAndMakeVisible (c);
+                added = c;
             }
+            addAndMakeVisible (added);
+            order_.add (added);
         }
         bypass_.setButtonText ("BYPASS");
         bypass_.setFontHeight (11.0f);
@@ -882,9 +894,9 @@ public:
         title_.setBounds (head.reduced (S (26), 0));
         bypass_.setBounds (juce::Rectangle<int> (S (84), S (26)).withCentre ({ r.getCentreX(), S (189) }));
 
-        juce::Array<juce::Component*> items;
-        for (auto* k : knobs_) items.add (k);
-        for (auto* c : choices_) items.add (c);
+        // Registry order, set up in the constructor — knobs and switches
+        // interleaved as the registry lists them, not grouped by kind.
+        const juce::Array<juce::Component*>& items = order_;
 
         // CLIENT REQUEST — "put mix knob on all the time based effects".
         //
@@ -1053,6 +1065,8 @@ private:
     ux::RemoveChipButton removeBtn_;
     juce::OwnedArray<ParamKnob> knobs_;
     juce::OwnedArray<ParamChoiceButton> choices_;
+    /// Layout order = registry order. Owns nothing; knobs_ and choices_ do.
+    juce::Array<juce::Component*> order_;
     juce::Rectangle<int> gripArea_, headerArea_;
     bool headerHot_ = false, dragArmed_ = false, dragging_ = false;
 };
@@ -1525,6 +1539,7 @@ public:
     {
         knobs_.clear();
         choices_.clear();
+        order_.clear();                 // holds borrowed pointers into both
         settingsWidgets_.clear();
         browser_.reset();
         infoText_ = nullptr;
@@ -1581,16 +1596,19 @@ public:
                     for (auto& spec : fxSpec (FxType::vintageEq).params)
                     {
                         auto path = "slot" + slotStr + ".fx" + juce::String (eqIdx) + "." + spec.id;
+                        juce::Component* added = nullptr;
                         if (spec.kind == ParamKind::Float)
                         {
                             auto* k = new ParamKnob (proc_, path, spec.label, &spec);
-                            knobs_.add (k); addAndMakeVisible (k);
+                            knobs_.add (k); added = k;
                         }
                         else
                         {
                             auto* c = new ParamChoiceButton (proc_, path, spec.label, spec);
-                            choices_.add (c); addAndMakeVisible (c);
+                            choices_.add (c); added = c;
                         }
+                        addAndMakeVisible (added);
+                        order_.add (added);
                     }
             }
             else if (tab_ == 3) // SETTINGS — library folder + rescan
@@ -1724,9 +1742,11 @@ public:
         if (infoText_ != nullptr) { infoText_->setBounds (area.reduced (16)); return; }
         if (tab_ == 1 || tab_ == 2)
         {
-            juce::Array<juce::Component*> items;
-            for (auto* c : choices_) items.add (c);
-            for (auto* k : knobs_) items.add (k);
+            // Registry order here too. This panel grouped the other way round
+            // from the FX units — switches first, then knobs — so the same
+            // parameter list read in two different orders depending on which
+            // panel it was drawn in.
+            const juce::Array<juce::Component*>& items = order_;
             if (items.isEmpty()) return;
             const int perRow = juce::jmin (3, items.size());
             const int rows = (items.size() + perRow - 1) / perRow;
@@ -1860,6 +1880,8 @@ private:
     std::array<ux::TabCellButton, 5> tabs_;
     juce::OwnedArray<ParamKnob> knobs_;
     juce::OwnedArray<ParamChoiceButton> choices_;
+    /// Layout order = registry order. Owns nothing; knobs_ and choices_ do.
+    juce::Array<juce::Component*> order_;
     juce::OwnedArray<juce::Component> settingsWidgets_;
     juce::Label* infoText_ = nullptr;
     OutputMeterV2 meter_;

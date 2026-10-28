@@ -15,6 +15,7 @@
 #include "engine/import/X7lReader.h"
 #include "engine/import/X7lDpfm.h"
 #include "engine/import/X7lGrouping.h"
+#include "engine/import/X7lPlan.h"
 
 /// Where the client's libraries live. Overridable so the same test can be
 /// pointed at another folder.
@@ -84,6 +85,50 @@ static juce::String dumpLibrary (const juce::File& f)
             juce::StringArray ids;
             for (auto* w : ks) ids.add (juce::String (w->index));
             out << "  KSPLIT " << ids.joinIntoString ("+") << "\n";
+        }
+
+        // The full plan: the bundles this library would become, and the zone
+        // layout of each. This is what the converter writes, so an agreement
+        // here is an agreement on the bundles themselves.
+        const auto* raw = static_cast<const juce::uint8*> (mb.getData());
+        std::vector<double> levels;
+        for (auto& wf : lib.waveforms)
+            levels.push_back (jm::x7l::measureKeyzone (raw, jm::x7l::representativeKeyzone (wf)).peakDb);
+        try
+        {
+            const auto ip = jm::x7l::planImport (lib, dp, levels);
+            out << "INSTRUMENTS " << (int) ip.instruments.size() << "\n";
+            for (auto& in : ip.instruments)
+            {
+                out << "  INST " << in.index << " name=" << in.name << " bundle=" << in.bundleName
+                    << " world=" << in.world << " sustaining=" << (in.sustaining ? 1 : 0)
+                    << " ch=" << in.channels << " rate=" << (int) in.sampleRate
+                    << " keys=" << in.keyRangeLo << "-" << in.keyRangeHi
+                    << " notes=" << in.keyzoneCount << " samples=" << in.sampleCount
+                    << " xf=" << in.velXfade << " dpfm=" << (in.fromDpfm ? 1 : 0) << "\n";
+                for (auto& w : in.windows)
+                {
+                    juce::StringArray src;
+                    for (int s : w.sources) src.add (juce::String (s));
+                    out << "    VWIN " << w.layer << " " << w.name << " " << w.lo << "-" << w.hi
+                        << " src=" << src.joinIntoString ("+") << "\n";
+                }
+                for (auto& l : in.layerNames) out << "    LAYER " << l << "\n";
+                for (auto& z : in.zones)
+                    for (auto& s : z.samples)
+                        out << "    Z " << z.rootNote << " " << z.keyRangeLo << "-" << z.keyRangeHi
+                            << " v" << z.velRangeLo << "-" << z.velRangeHi
+                            << " " << s.file << " wf=" << s.waveformIndex << " kz=" << s.keyzoneIndex << "\n";
+                for (auto& z : in.releaseZones)
+                    for (auto& s : z.samples)
+                        out << "    R " << z.rootNote << " " << z.keyRangeLo << "-" << z.keyRangeHi
+                            << " v" << z.velRangeLo << "-" << z.velRangeHi
+                            << " " << s.file << " wf=" << s.waveformIndex << " kz=" << s.keyzoneIndex << "\n";
+            }
+        }
+        catch (const jm::x7l::PlanError& e)
+        {
+            out << "INSTRUMENTS refused: " << e.what() << "\n";
         }
         for (auto& wf : lib.waveforms)
         {

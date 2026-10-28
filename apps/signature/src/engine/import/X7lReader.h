@@ -643,4 +643,113 @@ inline Library parse (const juce::MemoryBlock& mb)
     return parse (static_cast<const juce::uint8*> (mb.getData()), (juce::int64) mb.getSize());
 }
 
+//==============================================================================
+// measurement and audio
+//==============================================================================
+
+struct SampleMeasurement
+{
+    double peakDb = -144.0;     ///< true peak in dBFS, <= 0 (floored at -144)
+    double tailRmsDb = -144.0;  ///< RMS of the final 5% of the sample, in dBFS
+};
+
+inline double round2 (double n) { return std::round (n * 100.0) / 100.0; }
+
+/// The keyzone nearest middle C - a fair, cheap stand-in for a whole waveform
+/// when all that is needed is its relative velocity level. Where a waveform
+/// carries its own velocity splits the loudest split is preferred, so two
+/// waveforms are compared at the same point in their dynamic range.
+inline const Keyzone& representativeKeyzone (const Waveform& wf)
+{
+    int topVel = 0;
+    for (auto& z : wf.keyzones) topVel = juce::jmax (topVel, z.velRangeHi);
+    const Keyzone* best = nullptr;
+    for (auto& z : wf.keyzones)
+    {
+        if (z.velRangeHi != topVel) continue;
+        if (best == nullptr || std::abs (z.rootNote - 60) < std::abs (best->rootNote - 60)) best = &z;
+    }
+    if (best != nullptr) return *best;
+    for (auto& z : wf.keyzones)
+        if (best == nullptr || std::abs (z.rootNote - 60) < std::abs (best->rootNote - 60)) best = &z;
+    return *best;
+}
+
+/// Peak and tail level of one keyzone, read straight from the source PCM.
+inline SampleMeasurement measureKeyzone (const juce::uint8* b, const Keyzone& zone)
+{
+    const juce::int64 n = (juce::int64) zone.lengthSamples;
+    const juce::int64 tailFrom = (juce::int64) std::floor ((double) n * 0.95);
+    int peak = 0;
+    double tailSq = 0;
+    juce::int64 tailN = 0;
+    for (auto& span : zone.pcm)
+    {
+        const auto* p = b + span.offset;
+        for (juce::int64 i = 0; i < n; ++i)
+        {
+            int v = p[i * 2] | (p[i * 2 + 1] << 8);
+            if (v > 32767) v -= 65536;
+            const int a = v < 0 ? -v : v;
+            if (a > peak) peak = a;
+            if (i >= tailFrom) { tailSq += (double) v * (double) v; ++tailN; }
+        }
+    }
+    auto db = [] (double x) { return x <= 0 ? -144.0 : juce::jmax (-144.0, 20.0 * std::log10 (x / 32768.0)); };
+    SampleMeasurement m;
+    m.peakDb = juce::jmin (0.0, round2 (db (peak)));
+    m.tailRmsDb = round2 (db (tailN != 0 ? std::sqrt (tailSq / (double) tailN) : 0.0));
+    return m;
+}
+
+/// The 44-byte canonical RIFF header for 16-bit integer PCM.
+inline void writePcm16WavHeader (juce::uint8* h, juce::int64 dataBytes, juce::uint32 sampleRate, int channels)
+{
+    auto tag = [h] (int at, const char* s) { for (int i = 0; i < 4; ++i) h[at + i] = (juce::uint8) s[i]; };
+    auto u32 = [h] (int at, juce::uint32 v)
+    {
+        h[at] = (juce::uint8) (v & 0xff);         h[at + 1] = (juce::uint8) ((v >> 8) & 0xff);
+        h[at + 2] = (juce::uint8) ((v >> 16) & 0xff); h[at + 3] = (juce::uint8) ((v >> 24) & 0xff);
+    };
+    auto u16 = [h] (int at, juce::uint32 v)
+    {
+        h[at] = (juce::uint8) (v & 0xff); h[at + 1] = (juce::uint8) ((v >> 8) & 0xff);
+    };
+    tag (0, "RIFF");  u32 (4, (juce::uint32) (36 + dataBytes));
+    tag (8, "WAVE");  tag (12, "fmt ");
+    u32 (16, 16);  u16 (20, 1);  u16 (22, (juce::uint32) channels);
+    u32 (24, sampleRate);
+    u32 (28, sampleRate * 2 * (juce::uint32) channels);   // byte rate
+    u16 (32, (juce::uint32) (2 * channels));              // block align
+    u16 (34, 16);
+    tag (36, "data"); u32 (40, (juce::uint32) dataBytes);
+}
+
+/// One keyzone as a complete WAV file.
+///
+/// Bit-perfect: a mono zone's PCM is copied as one contiguous block, and a
+/// stereo zone's two channel blocks are interleaved frame by frame. Every
+/// 16-bit sample word is the source word, unchanged - nothing is resampled,
+/// requantised or scaled on this path.
+inline juce::MemoryBlock keyzoneWav (const juce::uint8* b, const Keyzone& zone)
+{
+    juce::MemoryBlock wav ((size_t) (44 + zone.totalPcmBytes));
+    auto* out = static_cast<juce::uint8*> (wav.getData());
+    writePcm16WavHeader (out, zone.totalPcmBytes, zone.sampleRate, zone.channels);
+    if (zone.channels == 1)
+    {
+        std::memcpy (out + 44, b + zone.pcm[0].offset, (size_t) zone.pcm[0].bytes);
+        return wav;
+    }
+    const auto* left = b + zone.pcm[0].offset;
+    const auto* right = b + zone.pcm[1].offset;
+    juce::uint8* o = out + 44;
+    for (juce::uint32 i = 0; i < zone.lengthSamples; ++i)
+    {
+        *o++ = left[i * 2];      *o++ = left[i * 2 + 1];
+        *o++ = right[i * 2];     *o++ = right[i * 2 + 1];
+    }
+    return wav;
+}
+
 } // namespace jm::x7l

@@ -25,15 +25,18 @@ const out = join(tmp, 'x7l.mjs');
 // grouping the planner derives from it.
 const entry = join(tmp, 'entry.ts');
 writeFileSync(entry, [
-  "export { parseX7l } from " + JSON.stringify(join(capture, 'src/engine/import/x7l.ts')) + ";",
-  "export { dpfmPlan, findKeySplitGroups } from " + JSON.stringify(join(capture, 'src/engine/import/x7lPlan.ts')) + ";",
+  "export { parseX7l, measureKeyzone, representativeKeyzone } from " + JSON.stringify(join(capture, 'src/engine/import/x7l.ts')) + ";",
+  "export { dpfmPlan, findKeySplitGroups, planImport } from " + JSON.stringify(join(capture, 'src/engine/import/x7lPlan.ts')) + ";",
 ].join('\n'));
 await build({
   entryPoints: [entry],
   bundle: true, platform: 'node', format: 'esm', target: 'node20',
   outfile: out, logLevel: 'warning',
 });
-const { parseX7l, dpfmPlan, findKeySplitGroups } = await import(pathToFileURL(out).href);
+const { parseX7l, measureKeyzone, representativeKeyzone, dpfmPlan, findKeySplitGroups, planImport } =
+  await import(pathToFileURL(out).href);
+// The C++ dump prints the world as the enum's ordinal, so map the id to it.
+const WORLD_ORDER = ['rhodes-ep', 'mks', 'fm', 'strings'];
 
 const files = readdirSync(corpus).filter((n) => /\.(x7l|x8l)$/i.test(n)).sort();
 let text = '';
@@ -82,6 +85,39 @@ for (const name of files) {
   }
   for (const ks of findKeySplitGroups(lib.waveforms))
     text += `  KSPLIT ${ks.map((w) => w.index).join('+')}\n`;
+
+  // The full plan: the bundles this library would become, and each one's zone
+  // layout. Agreement here is agreement on the bundles themselves.
+  const levels = lib.waveforms.map((wf) => measureKeyzone(bytes, representativeKeyzone(wf)).peakDb);
+  let ip = null;
+  try {
+    ip = planImport(lib, levels);
+  } catch (e) {
+    text += `INSTRUMENTS refused: ${e.message}\n`;
+  }
+  if (ip) {
+    text += `INSTRUMENTS ${ip.instruments.length}\n`;
+    for (const inst of ip.instruments) {
+      text += `  INST ${inst.index} name=${inst.name} bundle=${inst.bundleName}`
+            + ` world=${WORLD_ORDER.indexOf(inst.world)} sustaining=${inst.soundType === 'sustaining' ? 1 : 0}`
+            + ` ch=${inst.channels} rate=${inst.sampleRate}`
+            + ` keys=${inst.keyRangeLo}-${inst.keyRangeHi} notes=${inst.keyzoneCount}`
+            + ` samples=${inst.sampleCount} xf=${inst.velXfade} dpfm=${inst.fromDpfm ? 1 : 0}\n`;
+      for (const w of inst.windows)
+        text += `    VWIN ${w.layer} ${w.name} ${w.lo}-${w.hi} src=${w.sources.join('+')}\n`;
+      for (const l of inst.layerNames) text += `    LAYER ${l}\n`;
+      for (const z of inst.zones)
+        for (const s of z.samples)
+          text += `    Z ${z.rootNote} ${z.keyRangeLo}-${z.keyRangeHi}`
+                + ` v${z.velRangeLo}-${z.velRangeHi} ${s.file}`
+                + ` wf=${s.waveformIndex} kz=${s.keyzoneIndex}\n`;
+      for (const z of inst.releaseZones)
+        for (const s of z.samples)
+          text += `    R ${z.rootNote} ${z.keyRangeLo}-${z.keyRangeHi}`
+                + ` v${z.velRangeLo}-${z.velRangeHi} ${s.file}`
+                + ` wf=${s.waveformIndex} kz=${s.keyzoneIndex}\n`;
+    }
+  }
   for (const wf of lib.waveforms) {
     text += `WF ${wf.index} id=${wf.id} ch=${wf.channels} oneShot=${wf.oneShot ? 1 : 0}`
           + ` bytes=${wf.totalPcmBytes} name=${wf.name}\n`;

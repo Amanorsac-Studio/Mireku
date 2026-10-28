@@ -16,6 +16,7 @@
 #include "engine/import/X7lDpfm.h"
 #include "engine/import/X7lGrouping.h"
 #include "engine/import/X7lPlan.h"
+#include "engine/import/X7lConvert.h"
 
 /// Where the client's libraries live. Overridable so the same test can be
 /// pointed at another folder.
@@ -155,6 +156,148 @@ static juce::String dumpLibrary (const juce::File& f)
         std::printf ("    %-34s %s: %s\n", f.getFileName().toRawUTF8(), k, e.what());
     }
     return out;
+}
+
+/// The end of the chain: actually convert the corpus and compare the bundles
+/// with the ones the TypeScript importer wrote. Bundles are the deliverable, so
+/// this is the check that matters most — everything else is a stage of it.
+///
+/// Set MIREKU_X7L_REFERENCE to a folder holding the TS importer's output
+/// (npm run import:x7l -w jm-capture -- --in <corpus> --out <that folder>).
+static void testX7lConvert()
+{
+    std::printf ("\n== X7L CONVERT (C++), bundles against the TypeScript importer's ==\n");
+    const auto dir = x7lCorpusDir();
+    if (! dir.isDirectory()) { std::printf ("  [SKIP] no corpus\n"); return; }
+
+    auto files = dir.findChildFiles (juce::File::findFiles, false, "*.X7L");
+    files.addArray (dir.findChildFiles (juce::File::findFiles, false, "*.X8L"));
+    // CASE-INSENSITIVE here, unlike the reader dump above, and the difference
+    // matters: the reference bundles come from the batch command, which walks
+    // the folder with readdirSync and gets the OS's case-insensitive order,
+    // while the reader dump compares against a script that uses JavaScript's
+    // own code-unit sort. Two libraries both contain a waveform called
+    // "Note on", so the SECOND one processed becomes Note_on_2.jmi - sorting
+    // differently from the reference swaps the two bundles and every one of
+    // their 128 samples then "differs".
+    struct ByName
+    {
+        static int compareElements (const juce::File& a, const juce::File& b)
+        { return a.getFileName().compareIgnoreCase (b.getFileName()); }
+    };
+    ByName cmp;
+    files.sort (cmp);
+
+    auto outDir = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                      .getChildFile ("mireku-x7l-cpp-bundles");
+    outDir.deleteRecursively();
+    outDir.createDirectory();
+
+    juce::StringArray taken;
+    int bundles = 0, refused = 0;
+    for (auto& f : files)
+    {
+        juce::MemoryBlock mb;
+        if (! f.loadFileAsData (mb)) continue;
+        const auto* raw = static_cast<const juce::uint8*> (mb.getData());
+        try
+        {
+            const auto lib = jm::x7l::parse (mb);
+            const auto dp = jm::x7l::decodeDpfm (raw, (juce::int64) mb.getSize(), lib);
+            std::vector<double> levels;
+            for (auto& wf : lib.waveforms)
+                levels.push_back (jm::x7l::measureKeyzone (raw, jm::x7l::representativeKeyzone (wf)).peakDb);
+            auto plan = jm::x7l::planImport (lib, dp, levels);
+            for (auto& inst : plan.instruments)
+            {
+                auto copy = inst;
+                copy.bundleName = jm::x7l::freeBundleName (outDir, inst.bundleName, taken);
+                jm::x7l::convertInstrument (raw, lib, copy, outDir, "James Mireku", f.getFileName());
+                ++bundles;
+            }
+        }
+        catch (const std::exception&) { ++refused; }
+    }
+    std::printf ("  wrote %d bundle(s) from %d file(s), %d refused\n", bundles, files.size(), refused);
+    CHECK (bundles > 0, "the C++ importer writes bundles");
+    std::printf ("  bundles: %s\n", outDir.getFullPathName().toRawUTF8());
+
+    // Every bundle must load through the shared reader the player uses.
+    int valid = 0;
+    for (auto& b : outDir.findChildFiles (juce::File::findDirectories, false, "*.jmi"))
+    {
+        jmi::Instrument inst;
+        std::string err;
+        const auto text = b.getChildFile ("instrument.json").loadFileAsString();
+        if (jmi::parseInstrumentJson (text.toStdString(), inst, err)) ++valid;
+        else std::printf ("  INVALID %s: %s\n", b.getFileName().toRawUTF8(), err.c_str());
+    }
+    CHECK (valid == bundles, "and every one of them parses as valid .jmi");
+
+    // Compare against the reference output, when it is present.
+    const auto refPath = juce::SystemStats::getEnvironmentVariable ("MIREKU_X7L_REFERENCE", {});
+    if (refPath.isEmpty()) { std::printf ("  [SKIP] set MIREKU_X7L_REFERENCE to compare bundles\n"); return; }
+    const juce::File refDir (refPath);
+    if (! refDir.isDirectory()) { std::printf ("  [SKIP] no reference folder at %s\n", refPath.toRawUTF8()); return; }
+
+    int sameAudio = 0, diffAudio = 0, sameJson = 0, diffJson = 0, missing = 0;
+    for (auto& b : outDir.findChildFiles (juce::File::findDirectories, false, "*.jmi"))
+    {
+        const auto other = refDir.getChildFile (b.getFileName());
+        if (! other.isDirectory()) { ++missing; std::printf ("  MISSING in reference: %s\n", b.getFileName().toRawUTF8()); continue; }
+
+        // Audio must be byte-identical: both importers claim bit-perfect.
+        for (auto& wav : b.getChildFile ("samples").findChildFiles (juce::File::findFiles, false, "*.wav"))
+        {
+            const auto peer = other.getChildFile ("samples").getChildFile (wav.getFileName());
+            juce::MemoryBlock a, c;
+            if (! peer.existsAsFile() || ! wav.loadFileAsData (a) || ! peer.loadFileAsData (c) || a != c)
+            {
+                if (++diffAudio <= 3)
+                    std::printf ("  AUDIO DIFFERS %s/%s\n", b.getFileName().toRawUTF8(), wav.getFileName().toRawUTF8());
+            }
+            else ++sameAudio;
+        }
+
+        // instrument.json is compared as PARSED JSON: both write the same facts,
+        // but key order and number formatting are a serialiser's business.
+        auto mine = juce::JSON::parse (b.getChildFile ("instrument.json").loadFileAsString());
+        auto theirs = juce::JSON::parse (other.getChildFile ("instrument.json").loadFileAsString());
+        // createdAt is the moment of import and can never match; both are valid
+        // ISO 8601, one in UTC and one with a local offset. Normalised in both
+        // copies so the comparison is about the CONTENT.
+        // Two fields are normalised in both copies, and only two:
+        //   createdAt - the moment of import, which can never match (both are
+        //               valid ISO 8601, one UTC and one with a local offset);
+        //   notes     - provenance PROSE. The two implementations word it
+        //               slightly differently (an em-dash against a hyphen, and
+        //               one sentence shortened here). It is a paragraph for a
+        //               human to read, carries no instrument data, and matching
+        //               it character for character would mean pinning English in
+        //               two languages. Everything that the player acts on -
+        //               soundType, zones, velocityMap, releaseZones, playback,
+        //               every loop and every measured level - must be identical.
+        // `notes` is normalised to the same value in both; `createdAt` is set to
+        // two DIFFERENT values on purpose, because varsDifferOnlyAt asserts that
+        // a difference exists at exactly that path and reports "nothing actually
+        // changed" when the two are wholly identical. Giving it one known
+        // difference makes a pass mean "identical everywhere else".
+        if (auto* m = mine.getProperty ("meta", juce::var()).getDynamicObject())
+        { m->setProperty ("createdAt", "A"); m->setProperty ("notes", "normalised"); }
+        if (auto* m = theirs.getProperty ("meta", juce::var()).getDynamicObject())
+        { m->setProperty ("createdAt", "B"); m->setProperty ("notes", "normalised"); }
+        juce::String why;
+        if (jm::authoring::varsDifferOnlyAt (theirs, mine, "meta.createdAt", why))
+            ++sameJson;
+        else { ++diffJson; if (diffJson <= 3) std::printf ("  JSON DIFFERS %s: %s\n", b.getFileName().toRawUTF8(), why.toRawUTF8()); }
+    }
+    std::printf ("  audio: %d identical, %d differing; instrument.json: %d matching, %d differing; %d missing\n",
+                 sameAudio, diffAudio, sameJson, diffJson, missing);
+    CHECK (diffAudio == 0 && sameAudio > 0, "EVERY SAMPLE IS BYTE-IDENTICAL to the TypeScript importer's");
+    CHECK (missing == 0, "and the same bundles were produced");
+    CHECK (diffJson == 0 && sameJson > 0,
+           "and every instrument.json matches field for field, apart from the import timestamp and the "
+           "provenance prose");
 }
 
 static void testX7lReader()

@@ -1958,6 +1958,7 @@ int main()
     // key in explicitly, so it never depends on MIREKU_TESTER_BUILD.
     testTesterGate();
     testX7lReader();
+    testX7lConvert();
     // DSP STANDARDS PASS
     testAliasSuppression();
     testToneBeforeAfter();

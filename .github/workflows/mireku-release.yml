@@ -40,12 +40,16 @@ jobs:
       # The C++ suite plays notes through real .jmi bundles, and testdata/*.jmi/
       # is gitignored - those are sample content, not source. Without them every
       # audio assertion fails for want of an instrument, which is exactly how the
-      # first run of this workflow failed. Same fixtures ci.yml uses.
+      # first run of this workflow failed.
+      #
+      # The FULL generator, not ci.yml's --quick one: quick makes 8 notes x 2
+      # layers = 16 zones, and this suite asserts the spec size of 30 x 4 = 120,
+      # which is how the second run failed.
       - name: Generate the test fixtures
         run: |
           npm ci
           npm run build -w @jm/jmi-format
-          npm run generate:quick -w @jm/placeholder-gen
+          npm run generate -w @jm/placeholder-gen
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
@@ -82,7 +86,7 @@ jobs:
         run: |
           npm ci
           npm run build -w @jm/jmi-format
-          npm run generate:quick -w @jm/placeholder-gen
+          npm run generate -w @jm/placeholder-gen
 
       - name: Import the signing certificates
         env:

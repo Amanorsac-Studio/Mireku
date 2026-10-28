@@ -37,3 +37,13 @@ apps/lowend/build-tester/
 apps/lowend/build-mac-tester/
 apps/lowend/
 apps/topend/
+
+# CLIENT SAMPLE CONTENT NEVER BELONGS IN THIS REPOSITORY.
+# Piano.jmi.zip (123 MB of James's recorded piano, 314 WAVs) was tracked, and
+# would have been published when this repo was made public. It was removed from
+# the working tree and from every commit; the copy kept is in
+# Documents\MIREKU Delivery. The library is delivered separately, outside git.
+*.jmi.zip
+*.jmi/
+MONTAGE/
+UsersamanoDocuments*/

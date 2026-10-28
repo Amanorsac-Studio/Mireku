@@ -19,13 +19,21 @@ const corpus = process.argv[2] || join(process.env.USERPROFILE || process.env.HO
 
 // The reader is TypeScript inside Capture, so it is bundled the same way the
 // import command bundles its own entry point.
-const out = join(mkdtempSync(join(tmpdir(), 'x7ldump-')), 'x7l.mjs');
+const tmp = mkdtempSync(join(tmpdir(), 'x7ldump-'));
+const out = join(tmp, 'x7l.mjs');
+// One entry re-exporting both modules, so the dump can reach the reader AND the
+// grouping the planner derives from it.
+const entry = join(tmp, 'entry.ts');
+writeFileSync(entry, [
+  "export { parseX7l } from " + JSON.stringify(join(capture, 'src/engine/import/x7l.ts')) + ";",
+  "export { dpfmPlan, findKeySplitGroups } from " + JSON.stringify(join(capture, 'src/engine/import/x7lPlan.ts')) + ";",
+].join('\n'));
 await build({
-  entryPoints: [join(capture, 'src', 'engine', 'import', 'x7l.ts')],
+  entryPoints: [entry],
   bundle: true, platform: 'node', format: 'esm', target: 'node20',
   outfile: out, logLevel: 'warning',
 });
-const { parseX7l } = await import(pathToFileURL(out).href);
+const { parseX7l, dpfmPlan, findKeySplitGroups } = await import(pathToFileURL(out).href);
 
 const files = readdirSync(corpus).filter((n) => /\.(x7l|x8l)$/i.test(n)).sort();
 let text = '';
@@ -59,8 +67,21 @@ for (const name of files) {
               + ` note=${e.noteLo}-${e.noteHi} vel=${e.velLo}-${e.velHi} xf=${e.velXfade}
 `;
   }
-  for (const sk of dp.skipped) text += `  PFSKIP ${sk.index} ${sk.reason}
-`;
+  for (const sk of dp.skipped) text += `  PFSKIP ${sk.index} ${sk.reason}\n`;
+
+  // Grouping: which waveforms the library itself says are one instrument.
+  const gp = dpfmPlan(lib);
+  text += `PLAN valid=${gp ? 1 : 0} groups=${gp ? gp.groups.size : 0}\n`;
+  if (gp) {
+    for (const [key, g] of gp.groups) {
+      const src = g.windowSource ?? '-';
+      const rel = g.release.length ? g.release.join('+') : '-';
+      text += `  GRP ${key} body=${g.body.join('+')} rel=${rel} xf=${g.velXfade} src=${src}\n`;
+      for (const w of g.windows ?? []) text += `    WIN ${w.lo}-${w.hi} wf=${w.waveformIndex}\n`;
+    }
+  }
+  for (const ks of findKeySplitGroups(lib.waveforms))
+    text += `  KSPLIT ${ks.map((w) => w.index).join('+')}\n`;
   for (const wf of lib.waveforms) {
     text += `WF ${wf.index} id=${wf.id} ch=${wf.channels} oneShot=${wf.oneShot ? 1 : 0}`
           + ` bytes=${wf.totalPcmBytes} name=${wf.name}\n`;

@@ -14,6 +14,7 @@
 // not Yamaha libraries.
 #include "engine/import/X7lReader.h"
 #include "engine/import/X7lDpfm.h"
+#include "engine/import/X7lGrouping.h"
 
 /// Where the client's libraries live. Overridable so the same test can be
 /// pointed at another folder.
@@ -60,6 +61,30 @@ static juce::String dumpLibrary (const juce::File& f)
         }
         for (auto& sk : dp.skipped)
             out << "  PFSKIP " << sk.index << " " << sk.reason << "\n";
+
+        // Grouping: which waveforms the library itself says are one instrument.
+        const auto gp = jm::x7l::dpfmPlan (lib, dp);
+        out << "PLAN valid=" << (gp.valid ? 1 : 0) << " groups=" << (int) gp.groups.size() << "\n";
+        for (auto& key : gp.order)
+        {
+            const auto& g = gp.groups.at (key);
+            juce::StringArray b, r;
+            for (int i : g.body) b.add (juce::String (i));
+            for (int i : g.release) r.add (juce::String (i));
+            out << "  GRP " << key << " body=" << b.joinIntoString ("+")
+                << " rel=" << (r.isEmpty() ? juce::String ("-") : r.joinIntoString ("+"))
+                << " xf=" << g.velXfade << " src=" << (g.windowSource.isEmpty() ? juce::String ("-")
+                                                                               : g.windowSource) << "\n";
+            for (auto& w : g.windows)
+                out << "    WIN " << w.lo << "-" << w.hi << " wf=" << w.waveformIndex << "\n";
+        }
+        // The key-split ladders, which are merged before grouping.
+        for (auto& ks : jm::x7l::findKeySplitGroups (lib.waveforms))
+        {
+            juce::StringArray ids;
+            for (auto* w : ks) ids.add (juce::String (w->index));
+            out << "  KSPLIT " << ids.joinIntoString ("+") << "\n";
+        }
         for (auto& wf : lib.waveforms)
         {
             out << "WF " << wf.index << " id=" << wf.id << " ch=" << wf.channels

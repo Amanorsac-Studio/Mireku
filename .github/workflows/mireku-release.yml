@@ -37,6 +37,16 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
 
+      # The C++ suite plays notes through real .jmi bundles, and testdata/*.jmi/
+      # is gitignored - those are sample content, not source. Without them every
+      # audio assertion fails for want of an instrument, which is exactly how the
+      # first run of this workflow failed. Same fixtures ci.yml uses.
+      - name: Generate the test fixtures
+        run: |
+          npm ci
+          npm run build -w @jm/jmi-format
+          npm run generate:quick -w @jm/placeholder-gen
+
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
 
@@ -65,6 +75,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
+
+      # See the Windows job: build-mac-pkg.sh runs MirekuTests, which needs real
+      # .jmi bundles, and testdata/*.jmi/ is gitignored sample content.
+      - name: Generate the test fixtures
+        run: |
+          npm ci
+          npm run build -w @jm/jmi-format
+          npm run generate:quick -w @jm/placeholder-gen
 
       - name: Import the signing certificates
         env:

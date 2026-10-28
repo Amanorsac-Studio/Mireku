@@ -19,7 +19,7 @@ static void testTesterGate()
     // ---- a good key
     auto c = evaluate (kGood, now, 0, mod, kProduct);
     CHECK (c.status == Status::ok, "a good key is accepted");
-    CHECK (c.daysLeft == 27, "and reports 27 days left three days into 30 (" + juce::String (c.daysLeft) + ")");
+    CHECK (c.daysLeft == 27, ("and reports 27 days left three days into 30 (" + juce::String (c.daysLeft) + ")").toRawUTF8());
     CHECK (c.expiresMs == kGoodExpiresMs, "and reports its expiry");
 
     // ---- how it may be written down
@@ -40,7 +40,7 @@ static void testTesterGate()
     // ---- what must NOT open it
     CHECK (evaluate ("", now, 0, mod, kProduct).status == Status::none, "an empty box is 'nothing entered'");
     for (auto* junk : { "abc", "a.b", ".", "..", "abc.", ".abc", "a.b.c", "!!!.???", "hello world" })
-        CHECK (evaluate (junk, now, 0, mod, kProduct).status == Status::malformed, juce::String ("not a key: ") + junk);
+        CHECK (evaluate (junk, now, 0, mod, kProduct).status == Status::malformed, (juce::String ("not a key: ") + junk).toRawUTF8());
     CHECK (evaluate (juce::String::repeatedString ("A", 900), now, 0, mod, kProduct).status == Status::malformed, "a long run of nonsense is not a key");
 
     const juce::String good (kGood);

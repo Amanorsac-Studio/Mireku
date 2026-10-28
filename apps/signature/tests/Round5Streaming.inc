@@ -343,11 +343,39 @@ static void testRealBundleResidency()
                  (double) (residentByteCounter().load() - beforeBytes) / (1024.0 * 1024.0));
     CHECK (loadMs < 3000.0, "message-thread bundle load stays under 3 s (no UI freeze)");
 
+    // THE FLAG MUST NOT STILL SAY "SETTLED" WITH WORK OUTSTANDING. This is the
+    // assertion that would have caught the macOS failure: enrol() used to leave
+    // the loader's settled flag reading true until the thread next woke, so a
+    // waiter could be told everything was resident while 360 bodies were not,
+    // and a held note then rendered silence past its 65536-frame head. The peek
+    // is waitUntilSettled(0), which reads the flag without waiting. Guarded on
+    // there actually being unpromoted samples, so it cannot misfire if a future
+    // loader really does finish inside the load.
+    {
+        int unpromoted = 0;
+        for (auto& z : b->samples) for (auto& s : z) if (! s->isFullyResident()) ++unpromoted;
+        std::printf ("  right after load: %d unpromoted, flag says settled=%d\n",
+                     unpromoted, (int) SampleLoader::instance().waitUntilSettled (0));
+        if (unpromoted > 0)
+            CHECK (! SampleLoader::instance().waitUntilSettled (0),
+                   "the loader does not report itself settled while bodies are still outstanding");
+    }
+
     const bool settled = SampleLoader::instance().waitUntilSettled (180000);
     std::printf ("  background promotion settled=%d, process-wide resident %.1f MB, %lld promotions\n",
                  (int) settled, (double) residentByteCounter().load() / (1024.0 * 1024.0),
                  (long long) SampleLoader::instance().promotions());
     CHECK (settled, "the background loader reaches full residency");
+    // Every sample, and the count printed, not just sample [0][0]. When this
+    // failed on the macOS runner the only thing the log said was that one
+    // sample was head-only, which gave no way to tell a stale "settled" flag
+    // from a reader that could not open a file.
+    // The count is PRINTED but not asserted: residency is capped at
+    // kMaxResidentBytes, so "all of them" is not a promise the loader makes.
+    // The canary is the one this test then renders.
+    int resident = 0;
+    for (auto& z : b->samples) for (auto& s : z) if (s->isFullyResident()) ++resident;
+    std::printf ("  fully resident: %d of %d samples\n", resident, nSamples);
     CHECK (b->samples[0][0]->isFullyResident(), "samples are fully resident, not head-only");
 
     SamplerEngine eng;

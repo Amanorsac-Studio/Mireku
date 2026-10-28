@@ -308,8 +308,25 @@ public:
     /// bundle that is swapped out frees its samples immediately.
     void enrol (const SamplePtr& s)
     {
-        const std::lock_guard<std::mutex> g (m_);
-        reg_.emplace_back (s);
+        {
+            const std::lock_guard<std::mutex> g (m_);
+            reg_.emplace_back (s);
+        }
+        // NEW WORK MEANS NOT SETTLED, SAID HERE RATHER THAN WHENEVER THE LOADER
+        // NEXT WAKES. The flag is the loader's public "nothing outstanding", and
+        // enrolling left it reading `true` until the thread came round again -
+        // which, once everything that fits is resident, is a 100 ms wait. A
+        // bundle load takes about 130 ms, so whether an observer saw the stale
+        // `true` came down to which of the two finished first. On the macOS
+        // runner it did: waitUntilSettled returned at once, the body of the
+        // first sample had not been promoted, and a held note rendered silence
+        // past the 65536-frame head. It passed locally every time.
+        //
+        // notify() as well as the flag: without it the loader sits out the rest
+        // of its idle wait before even looking at the new samples, which delays
+        // every bundle load by up to 100 ms for no reason.
+        settled_.store (false, std::memory_order_release);
+        notify();
     }
 
     /// Blocks (test / instrumentation helper only) until nothing is pending.

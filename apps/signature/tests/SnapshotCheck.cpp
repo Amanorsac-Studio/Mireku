@@ -306,6 +306,42 @@ int main (int argc, char** argv)
         // reference shows one (DECAYING). Kept hidden pending the client's call.
         CHECK (! findOne<OutputMeterV2> (page) == false, "OUTPUT meter present on the model page");
         if (isSix) savePng (page, "round2-page-mks-6knob.png");   // the 3x2 outlier
+
+        // EVERY SUB-TAB HAS TO LAY ITSELF OUT. AMP ENV shipped blank because the
+        // tab built its four knobs but never added them to the layout order, so
+        // resized() saw an empty list, returned early, and every knob stayed at
+        // zero size: visible, in the right parent, and 0x0. Checking the knob
+        // COUNT would have passed. This checks the bounds.
+        {
+            std::vector<ux::TabCellButton*> subTabs;
+            findAll<ux::TabCellButton> (page, subTabs);
+            const char* subNames[] = { "MAIN", "AMP ENV", "EQ", "SETTINGS", "INFO" };
+            for (int t = 0; t < (int) subTabs.size(); ++t)
+            {
+                subTabs[(size_t) t]->setToggleState (true, juce::sendNotificationSync);
+                std::vector<juce::Component*> widgets;
+                std::vector<ParamKnob*> ks;
+                std::vector<ParamChoiceButton*> cs;
+                findAll<ParamKnob> (page, ks);
+                findAll<ParamChoiceButton> (page, cs);
+                for (auto* k : ks) widgets.push_back (k);
+                for (auto* c : cs) widgets.push_back (c);
+                int unplaced = 0;
+                for (auto* wgt : widgets)
+                    if (wgt->isVisible() && wgt->getBounds().isEmpty())
+                        ++unplaced;
+                char m[160];
+                std::snprintf (m, sizeof (m), "%s / %s: %d control(s), %d with no bounds",
+                               worlds[w], subNames[juce::jmin (t, 4)], (int) widgets.size(), unplaced);
+                CHECK (unplaced == 0, m);
+            }
+            if (! subTabs.empty())
+            {
+                subTabs[1]->setToggleState (true, juce::sendNotificationSync);
+                if (w == 0) savePng (page, "round2-page-amp-env.png");
+                subTabs[0]->setToggleState (true, juce::sendNotificationSync);
+            }
+        }
     }
 
     // -------------------------------------------------------- full arrangement
@@ -380,11 +416,34 @@ int main (int argc, char** argv)
             findAll<FxUnitPanel> (*ed, units);
             std::printf ("  FX rack units on screen: %d\n", (int) units.size());
             CHECK (! units.empty() && (int) units.size() <= 6, "up to six FX units on the rack strip");
-            for (auto* u : units)
+            // A UNIT IS AS WIDE AS ITS PARAMETERS NEED, so the old "every plate
+            // at the kit's native 0.764:1" rule no longer holds: a five- or
+            // nine-parameter unit takes the wide plate, and drawFxPlate draws
+            // that as four patches rather than stretching the art. What must
+            // still hold is that units keep the rack's height, never fall below
+            // the readable minimum, sit in strip order without overlapping, and
+            // stop before the MASTER column.
             {
-                const float ar = (float) u->getWidth() / (float) u->getHeight();
-                CHECK (std::abs (ar - 0.764f) < 0.02f, "FX unit at the kit's native 0.764:1 plate ratio");
-                break;
+                int prevRight = L::fxUnitX - L::fxUnitGap;
+                for (auto* u : units)
+                {
+                    const auto b = u->getBounds();
+                    std::printf ("  fx unit \"%s\": %d params, %dx%d at x=%d\n",
+                                 fxSpec (u->fxType()).name,
+                                 (int) fxSpec (u->fxType()).params.size(),
+                                 b.getWidth(), b.getHeight(), b.getX());
+                    CHECK (b.getHeight() == L::fxUnitH, "FX unit at the rack's height");
+                    CHECK (b.getWidth() >= L::fxUnitMinW, "FX unit no narrower than the readable minimum");
+                    CHECK (b.getWidth() <= L::fxUnitWide, "FX unit no wider than the wide plate");
+                    CHECK (b.getX() >= prevRight, "FX units in order, not overlapping");
+                    CHECK (b.getRight() <= L::fxStripRight, "FX units stop before the MASTER column");
+                    // The whole point: a dense unit is WIDER than a sparse one.
+                    const bool dense = fxSpec (u->fxType()).params.size() > 4;
+                    CHECK (dense == (b.getWidth() > L::fxUnitW),
+                           dense ? "a 5+ parameter unit gets the wide plate"
+                                 : "a 4-or-fewer parameter unit keeps the standard plate");
+                    prevRight = b.getRight();
+                }
             }
             savePng (*ed, "round2-full-rhodes.png");
 
@@ -1942,6 +2001,64 @@ int main (int argc, char** argv)
         }
         savePng (*ed, "round7-fx-remove-control.png");
         savePng (*strip, "round7-fx-rack-strip.png");   // the strip alone, legibly
+
+        // A WIDE plate at 3x, so the four-patch joins can actually be judged.
+        // The seams are what makes variable-width units safe: get them wrong
+        // and there is a vertical line down the middle of a photoreal panel.
+        {
+            std::vector<FxUnitPanel*> us;
+            findAll<FxUnitPanel> (*strip, us);
+            for (auto* u : us)
+                if (u->getWidth() > Theme::L::fxUnitW)
+                {
+                    saveImage (strip->createComponentSnapshot (u->getBounds(), false, 3.0f),
+                               "round7-fx-wide-plate.png");
+                    break;
+                }
+        }
+
+        // A FULL RACK STILL FITS. Scaling the units down to the budget and then
+        // lifting the narrow ones back up to the minimum width can spend more
+        // than the strip has: three wide plus three narrow overran the MASTER
+        // column by ten pixels before layOutUnits paid the overshoot back. Every
+        // mix of six is checked, not just the one the default rack happens to
+        // produce.
+        {
+            using L = Theme::L;
+            const FxType wide = FxType::digitalDelay;   // 9 params
+            const FxType slim = FxType::widener;        //  2
+            bool allFit = true, worstSeen = false;
+            int worstRight = 0;
+            for (int nWide = 0; nWide <= 6; ++nWide)
+            {
+                FxRackState rack;
+                for (int i = 0; i < 6; ++i)
+                    rack.push_back (defaultUnitState (i < nWide ? wide : slim, true));
+                proc.state.slots[0].rack = rack;
+                proc.slotRacks[0].setState (rack);
+                auto* ed2 = dynamic_cast<JMSignatureEditor*> (proc.createEditor());
+                ed2->setSize (Theme::M::designW, Theme::M::designH);
+                std::vector<FxUnitPanel*> us2;
+                if (auto* s2 = findOne<FxRackStrip> (*ed2)) findAll<FxUnitPanel> (*s2, us2);
+                int right = 0, prevRight = L::fxUnitX - L::fxUnitGap;
+                bool ok = (int) us2.size() == 6;
+                for (auto* u : us2)
+                {
+                    ok &= u->getWidth() >= L::fxUnitMinW && u->getX() >= prevRight;
+                    prevRight = u->getRight();
+                    right = juce::jmax (right, u->getRight());
+                }
+                ok &= right <= L::fxStripRight;
+                std::printf ("  full rack, %d wide + %d slim: right edge %d (limit %d)%s\n",
+                             nWide, 6 - nWide, right, L::fxStripRight, ok ? "" : "   <-- OVERRUN");
+                if (! ok) { allFit = false; if (! worstSeen) { worstRight = right; worstSeen = true; } }
+                delete ed2;
+            }
+            juce::ignoreUnused (worstRight);
+            CHECK (allFit, "a full rack of six fits before the MASTER column, in every mix of widths");
+            proc.state.slots[0].rack = buildDefaultRack (0, false);
+            proc.slotRacks[0].setState (proc.state.slots[0].rack);
+        }
 
         // ---- item 3: the drag payload, the target, and the insertion indicator
         auto payload = fxdrag::makePayload (units[0]->rackPrefix(), units[0]->rackIndex());

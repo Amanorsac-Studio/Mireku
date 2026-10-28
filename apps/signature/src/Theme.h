@@ -234,6 +234,14 @@ public:
         static constexpr int fxTitleH = 26;
         static constexpr int fxRailX = 4, fxRailY = 32, fxRailW = 32, fxRailH = 215;
         static constexpr int fxUnitX = 42, fxUnitY = 32, fxUnitW = 164, fxUnitH = 215, fxUnitPitch = 168;
+        // A unit with five or more parameters needs three columns; at fxUnitW
+        // those are 52 px and the captions do not fit. fxUnitWide is three of
+        // the same 74 px cells a sparse unit gets. fxUnitGap is the space
+        // between plates (fxUnitPitch - fxUnitW, kept as its own name now that
+        // the pitch is no longer uniform). fxUnitMinW is where the strip stops
+        // shrinking units to fit and starts dropping the last one off the end.
+        static constexpr int fxUnitWide = 238, fxUnitGap = 4, fxUnitMinW = 140;
+        static constexpr int fxStripRight = 1054;   // fxMasterX: units end here
         static constexpr int fxDotsY = 258;
         static constexpr int fxMasterX = 1054, fxMasterY = 32, fxMasterW = 196, fxMasterH = 215;
 

@@ -787,10 +787,10 @@ public:
         removeBtn_.onClick = [this] { removeSelf(); };
         addAndMakeVisible (removeBtn_);
 
-        // The grid in resized() packs 5+ parameters into 3 columns, which makes
-        // each cell 52 px rather than 74 — so a dense unit's captions take the
-        // smaller of the two type sizes. (See the grid note in resized().)
-        const float capHeight = spec.params.size() <= 4 ? 10.0f : 9.0f;
+        // A dense unit asks for the wider plate (naturalWidth), so its three
+        // columns are the same 74 px as a sparse unit's two and its captions no
+        // longer have to take the smaller type size to fit.
+        const float capHeight = 10.0f;
         for (auto& ps : spec.params)
         {
             auto path = prefix_ + ".fx" + juce::String (idx_) + "." + ps.id;
@@ -878,10 +878,28 @@ public:
         }
     }
 
+    /// How wide this unit wants to be, at the rack's standard 215 px height.
+    ///
+    /// A UNIT IS AS WIDE AS ITS PARAMETERS NEED. Every unit used to be 164 px,
+    /// which is two 74 px cells, so a five- or nine-parameter unit had to fold
+    /// into three columns of 52 px: a 33 px knob under a caption like
+    /// "Wow/Flutter" with nowhere to put it. The widener has two parameters and
+    /// was given the same 164 px to spread them over. Width now follows the
+    /// column count, and the rack shares out what it has (FxRackStrip).
+    static int naturalWidth (FxType t)
+    {
+        const int n = (int) fxSpec (t).params.size();
+        return n <= 4 ? Theme::L::fxUnitW : Theme::L::fxUnitWide;
+    }
+    int naturalWidth() const { return naturalWidth (type_); }
+
     void resized() override
     {
         auto r = getLocalBounds();
-        const float u = (float) r.getWidth() / 164.0f;
+        // HEIGHT drives the chrome, not width. It used to be width/164, which
+        // was the same thing while every unit was 164 wide; the moment one is
+        // wider, a width-scaled S(189) puts BYPASS below the bottom edge.
+        const float u = (float) r.getHeight() / 215.0f;
         auto S = [u] (int v) { return juce::roundToInt ((float) v * u); };
         auto head = r.withY (S (8)).withHeight (S (20));
         power_.setBounds (r.getRight() - S (28), S (9), S (20), S (20));
@@ -907,27 +925,35 @@ public:
         // the chorus, the plate, the hall and both delays (they all carry mix
         // last), and it would have swallowed the new phaser/flanger MIX too.
         //
-        // The grid is now driven by the parameter COUNT, so every registry
-        // parameter has a cell. The cell geometry is chosen so the knob art
-        // does not shrink until it has to: ParamKnob with a label below takes
-        // `min(w, h - 13)` as its diameter, so the 2-column cell (74x58) and
-        // the 3-column cell (52x58) both yield a 45 px knob — only the 7-to-9
-        // parameter units (the two delays) drop to three rows and a 33 px knob.
+        // The grid is driven by the parameter COUNT, so every registry
+        // parameter has a cell.
+        //
+        // THE COLUMNS NOW DIVIDE THE UNIT'S ACTUAL WIDTH rather than sitting at
+        // fixed offsets measured on a 164 px plate. A five-parameter unit asks
+        // the rack for the wider plate and gets three 74 px cells instead of
+        // three 52 px ones, which is the difference between "Wow/Flutter" or
+        // "Pre-Delay" fitting under its knob and being clipped. When the rack
+        // is full and the strip has to shrink everything back towards 164, the
+        // same arithmetic simply yields narrower cells: no second code path.
         const int n = items.size();
         const int cols = n <= 4 ? 2 : 3;
         const int rows = n <= (cols * 2) ? 2 : 3;
-        const int cellW = cols == 2 ? S (74) : S (52);
+        // Only the WIDTH is new. The row height stays at the approved 58 (two
+        // rows) or 46 (three), centred in the band between the title plaque and
+        // BYPASS, so knob diameters are exactly what the client signed off:
+        // dividing the full band instead would have quietly grown a sparse
+        // unit's knobs from 45 px to 52.
         const int cellH = rows == 2 ? S (58) : S (46);
-        const int cx2[2] = { S (44), S (120) };
-        const int cx3[3] = { S (30), S (82), S (134) };
-        const int cy2[2] = { S (72), S (134) };
-        const int cy3[3] = { S (57), S (103), S (149) };
+        const int bandTop = S (34), bandBottom = S (176);
+        auto grid = juce::Rectangle<int> (S (6), 0, r.getWidth() - S (12), cellH * rows)
+                        .withCentre ({ r.getCentreX(), (bandTop + bandBottom) / 2 });
+        const int cellW = grid.getWidth() / cols;
         for (int i = 0; i < n; ++i)
         {
             const int col = i % cols, row = juce::jmin (rows - 1, i / cols);
-            const int x = cols == 2 ? cx2[col] : cx3[col];
-            const int y = rows == 2 ? cy2[row] : cy3[row];
-            items[i]->setBounds (juce::Rectangle<int> (cellW, cellH).withCentre ({ x, y }));
+            items[i]->setBounds (juce::Rectangle<int> (cellW, cellH)
+                                     .withCentre ({ grid.getX() + cellW * col + cellW / 2,
+                                                    grid.getY() + cellH * row + cellH / 2 }));
             items[i]->setVisible (i < cols * rows);
         }
     }
@@ -937,7 +963,7 @@ public:
         auto r = getLocalBounds().toFloat();
         kit::drawFxPlate (g, r, plateFamily (type_));
         // opaque local plaque behind the title — never trade contrast for pattern
-        const float u = r.getWidth() / 164.0f;
+        const float u = r.getHeight() / 215.0f;          // height, as in resized()
         auto plaque = juce::Rectangle<float> (r.getX() + 26 * u, r.getY() + 6 * u,
                                               r.getWidth() - 52 * u, 24 * u);
         g.setColour (juce::Colour (0xff0B0A08).withAlpha (0.80f));
@@ -966,6 +992,7 @@ public:
 
     int rackIndex() const { return idx_; }
     const juce::String& rackPrefix() const { return prefix_; }
+    FxType fxType() const { return type_; }
 
     //=================================================== CLIENT REVIEW R7 (3)
     // Drag to reorder, spec §4. The gesture is armed ONLY from the header
@@ -1296,14 +1323,76 @@ public:
         proc_.stateChanged.sendChangeMessage();
     }
 
+    /// Where each unit sits, and how wide it is.
+    ///
+    /// Units are no longer on a uniform pitch, so the x of unit i is not
+    /// arithmetic any more — resized(), the drop indicator and the drop-gap hit
+    /// test all read this one table instead of each recomputing it from the
+    /// pitch and drifting apart.
+    ///
+    /// Each unit asks for its natural width. If the rack wants more than the
+    /// strip has, every unit is scaled by the same factor down to fxUnitMinW:
+    /// a full rack of dense units therefore lands back on roughly the old
+    /// uniform 164, which is what it has always looked like.
+    void layOutUnits()
+    {
+        using L = Theme::L;
+        unitX_.clearQuick();
+        unitW_.clearQuick();
+        const int n = panels_.size();
+        if (n == 0) return;
+
+        int want = 0;
+        for (auto* p : panels_) want += p->naturalWidth();
+        const int avail = L::fxStripRight - L::fxUnitX - (n + 1) * L::fxUnitGap;   // +1 leaves room for ADD
+        const double k = want > avail ? (double) avail / (double) want : 1.0;
+
+        int total = 0;
+        for (int i = 0; i < n; ++i)
+        {
+            const int w = juce::jmax (L::fxUnitMinW,
+                                      juce::roundToInt (panels_[i]->naturalWidth() * k));
+            unitW_.add (w);
+            total += w;
+        }
+
+        // CLAMPING BREAKS THE BUDGET, so pay the difference back. Scaling alone
+        // is not enough: a full rack of three wide and three narrow units
+        // scales to 194 and 134, the narrow ones are then lifted to the 140
+        // minimum, and the rack runs ten pixels under the MASTER column. Take
+        // the overshoot a pixel at a time off whichever unit is widest, which
+        // leaves the narrow ones at their minimum and never produces a unit
+        // narrower than one it started wider than. Six units at the minimum
+        // always fit, so this terminates with room to spare.
+        while (total > avail)
+        {
+            int widest = -1;
+            for (int i = 0; i < n; ++i)
+                if (unitW_[i] > L::fxUnitMinW && (widest < 0 || unitW_[i] > unitW_[widest]))
+                    widest = i;
+            if (widest < 0) break;
+            unitW_.set (widest, unitW_[widest] - 1);
+            --total;
+        }
+
+        int x = L::fxUnitX;
+        for (int i = 0; i < n; ++i)
+        {
+            unitX_.add (x);
+            x += unitW_[i] + L::fxUnitGap;
+        }
+        addX_ = x;
+    }
+
     void resized() override
     {
         using L = Theme::L;
+        layOutUnits();
         for (int i = 0; i < panels_.size(); ++i)
-            panels_[i]->setBounds (L::fxUnitX + i * L::fxUnitPitch, L::fxUnitY, L::fxUnitW, L::fxUnitH);
+            panels_[i]->setBounds (unitX_[i], L::fxUnitY, unitW_[i], L::fxUnitH);
         if (addBtn_.isVisible())
             addBtn_.setBounds (juce::Rectangle<int> (110, 30)
-                                   .withCentre ({ L::fxUnitX + panels_.size() * L::fxUnitPitch + L::fxUnitW / 2,
+                                   .withCentre ({ addX_ + L::fxUnitW / 2,
                                                   L::fxUnitY + L::fxUnitH / 2 }));
         master_->setBounds (L::fxMasterX, L::fxMasterY, L::fxMasterW, L::fxMasterH);
     }
@@ -1366,7 +1455,9 @@ public:
         // Drawn in the gap between units so it never covers a control.
         if (dropGap_ >= 0)
         {
-            const float x = (float) (L::fxUnitX + dropGap_ * L::fxUnitPitch) - 4.0f;
+            // From the layout table, not the pitch: units have different widths.
+            const float x = (float) (dropGap_ < unitX_.size() ? unitX_[dropGap_] : addX_)
+                          - (float) L::fxUnitGap * 0.5f;
             auto bar = juce::Rectangle<float> (x - 1.5f, (float) L::fxUnitY - 4.0f,
                                                3.0f, (float) L::fxUnitH + 8.0f);
             g.setColour (Theme::gold.withAlpha (0.35f));
@@ -1383,12 +1474,14 @@ private:
     /// Insertion GAP (0..units) nearest to a pointer x in strip coordinates.
     int gapForX (int x) const
     {
-        using L = Theme::L;
-        const int n = panels_.size();
+        // Each unit's OWN midpoint, from the layout table. Computing it from a
+        // uniform pitch put the drop line in the wrong gap the moment the
+        // units stopped being the same width.
+        const int n = juce::jmin (panels_.size(), unitX_.size());
         int gap = 0;
         for (int i = 0; i < n; ++i)
-            if (x > L::fxUnitX + i * L::fxUnitPitch + L::fxUnitW / 2) gap = i + 1;
-        return juce::jlimit (0, n, gap);
+            if (x > unitX_[i] + unitW_[i] / 2) gap = i + 1;
+        return juce::jlimit (0, panels_.size(), gap);
     }
 
     void showAddMenu()
@@ -1417,6 +1510,10 @@ private:
     ux::PlateButton addBtn_;
     juce::OwnedArray<FxUnitPanel> panels_;
     std::unique_ptr<MasterFxColumn> master_;
+    /// Unit geometry, rebuilt by layOutUnits(). The single source for resized(),
+    /// the drop indicator and gapForX.
+    juce::Array<int> unitX_, unitW_;
+    int addX_ = Theme::L::fxUnitX;
     /// insertion point while a reorder drag is over the strip; -1 = no drag
     int dropGap_ = -1;
 };
@@ -1578,6 +1675,10 @@ public:
                     auto* k = new ParamKnob (proc_, "slot" + slotStr + ".ampenv." + ids[i], labels[i]);
                     knobs_.add (k);
                     addAndMakeVisible (k);
+                    // resized() lays out `order_`, not knobs_. A tab that adds a
+                    // widget without adding it here gets no bounds at all and the
+                    // page comes up EMPTY - which is exactly what AMP ENV did.
+                    order_.add (k);
                 }
             }
             else if (tab_ == 2) // EQ — the slot rack's Vintage EQ unit
@@ -1867,6 +1968,11 @@ public:
             // parameter list read in two different orders depending on which
             // panel it was drawn in.
             const juce::Array<juce::Component*>& items = order_;
+            // Widgets but no layout order means a tab built its controls and
+            // forgot to register them: every one would sit at zero size and the
+            // page would look empty. Catch it in development rather than in a
+            // screenshot from the artist.
+            jassert (! (items.isEmpty() && (knobs_.size() + choices_.size()) > 0));
             if (items.isEmpty()) return;
             const int perRow = juce::jmin (3, items.size());
             const int rows = (items.size() + perRow - 1) / perRow;

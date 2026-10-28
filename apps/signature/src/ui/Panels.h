@@ -9,6 +9,7 @@
 // kit in docs/hardware-kit. Behaviour/DSP authority remains JM-BUILD-SPEC.md —
 // no function was added or removed in this pass.
 #pragma once
+#include "../engine/import/X7lImportJob.h"
 #include "Widgets.h"
 #include "KenteTexture.h"
 #include "UxAssets.h"
@@ -1655,6 +1656,17 @@ public:
                 };
                 addAndMakeVisible (rescan);
                 settingsWidgets_.add (rescan);
+
+                // IMPORT A YAMAHA LIBRARY. The artist's own .X7L / .X8L files
+                // become .jmi bundles in his library folder without a round trip
+                // through the studio. The whole chain is in
+                // engine/import/X7lImportJob.h; this is only the gesture.
+                auto* import = new ux::PlateButton ("IMPORT LIBRARY...");
+                import->setTooltip ("Convert Yamaha .X7L / .X8L libraries into this library folder. "
+                                    "Existing instruments are never overwritten.");
+                import->onClick = [this] { chooseX7lFiles(); };
+                addAndMakeVisible (import);
+                settingsWidgets_.add (import);
             }
             else                // INFO — bundle meta (incl. sound type: metadata only)
             {
@@ -1688,6 +1700,109 @@ public:
         resized();
         refresh();
         repaint();
+    }
+
+    //================================================ IMPORT A YAMAHA LIBRARY
+    // Runs on a ThreadWithProgressWindow, not the message thread: a library is
+    // hundreds of megabytes and the conversion writes every sample to disk, so
+    // doing it inline would freeze the editor for minutes with no way to stop.
+    // The destination is the LIBRARY FOLDER shown directly above the button, so
+    // where it lands is on screen before the gesture starts.
+    // launchThread() rather than runThread(): the latter needs modal loops,
+    // which a plugin build does not have. The task owns itself, calls
+    // threadComplete on the message thread when it finishes or is cancelled, and
+    // deletes itself afterwards - so the completion handler is a callback rather
+    // than code after a blocking call.
+    struct ImportTask : public juce::ThreadWithProgressWindow
+    {
+        ImportTask (juce::Array<juce::File> f, juce::File dest, juce::String who,
+                    std::function<void (bool, x7l::ImportReport)> done)
+            : juce::ThreadWithProgressWindow ("Importing libraries", true, true),
+              files (std::move (f)), destDir (std::move (dest)), author (std::move (who)),
+              onDone (std::move (done))
+        {
+            setStatusMessage ("Reading...");
+        }
+
+        void run() override
+        {
+            report = x7l::importLibraries (
+                files, destDir, author,
+                [this] { return threadShouldExit(); },
+                [this] (const juce::String& what, double p)
+                {
+                    setProgress (p);
+                    setStatusMessage (what);
+                });
+        }
+
+        void threadComplete (bool userCancelled) override
+        {
+            if (onDone) onDone (! userCancelled, report);
+            delete this;
+        }
+
+        juce::Array<juce::File> files;
+        juce::File destDir;
+        juce::String author;
+        std::function<void (bool, x7l::ImportReport)> onDone;
+        x7l::ImportReport report;
+    };
+
+    void chooseX7lFiles()
+    {
+        chooser_ = std::make_unique<juce::FileChooser> (
+            "Choose Yamaha libraries to import",
+            juce::File::getSpecialLocation (juce::File::userHomeDirectory).getChildFile ("Downloads"),
+            "*.X7L;*.X8L;*.x7l;*.x8l");
+        chooser_->launchAsync (juce::FileBrowserComponent::openMode
+                                   | juce::FileBrowserComponent::canSelectFiles
+                                   | juce::FileBrowserComponent::canSelectMultipleItems,
+            [this] (const juce::FileChooser& fc)
+            {
+                juce::Array<juce::File> files;
+                for (auto& f : fc.getResults()) if (f.existsAsFile()) files.add (f);
+                if (files.isEmpty()) return;
+                runX7lImport (files);
+            });
+    }
+
+    void runX7lImport (const juce::Array<juce::File>& files)
+    {
+        const auto dest = proc_.state.library.libraryDir();
+        if (! dest.isDirectory())
+        {
+            styledAlert ("Import libraries",
+                         "Set the LIBRARY FOLDER first. Imported instruments are written into it.");
+            return;
+        }
+        // The panel can be rebuilt or destroyed while the import runs, so the
+        // completion handler holds a SafePointer and checks it.
+        juce::Component::SafePointer<ModelPagePanel> safe (this);
+        auto* task = new ImportTask (files, dest, "James Mireku",
+            [safe] (bool finished, x7l::ImportReport report) mutable
+            {
+                auto lines = report.summaryLines();
+                if (! finished) lines.insert (0, "Stopped. What had already been written was kept.");
+                if (auto* self = safe.getComponent())
+                {
+                    self->proc_.state.library.rescan();
+                    self->proc_.stateChanged.sendChangeMessage();
+                    self->rebuildContent();
+                    self->styledAlert ("Import libraries", lines.joinIntoString ("\n"));
+                }
+            });
+        task->launchThread();
+    }
+
+    void styledAlert (const juce::String& title, const juce::String& body)
+    {
+        auto opts = juce::MessageBoxOptions()
+                        .withIconType (juce::MessageBoxIconType::NoIcon)
+                        .withTitle (title)
+                        .withMessage (body)
+                        .withButton ("OK");
+        juce::AlertWindow::showAsync (opts, nullptr);
     }
 
     void toggleBrowser()
@@ -1737,6 +1852,11 @@ public:
             settingsWidgets_[2]->setBounds (row.removeFromLeft (130));
             row.removeFromLeft (12);
             settingsWidgets_[3]->setBounds (row.removeFromLeft (170));
+            if (settingsWidgets_.size() > 4)
+            {
+                row.removeFromLeft (12);
+                settingsWidgets_[4]->setBounds (row.removeFromLeft (180));
+            }
             return;
         }
         if (infoText_ != nullptr) { infoText_->setBounds (area.reduced (16)); return; }

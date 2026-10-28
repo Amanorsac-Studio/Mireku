@@ -1959,6 +1959,7 @@ int main()
     testTesterGate();
     testX7lReader();
     testX7lConvert();
+    testX7lImportGuards();
     // DSP STANDARDS PASS
     testAliasSuppression();
     testToneBeforeAfter();

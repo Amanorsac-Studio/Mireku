@@ -17,6 +17,7 @@
 #include "engine/import/X7lGrouping.h"
 #include "engine/import/X7lPlan.h"
 #include "engine/import/X7lConvert.h"
+#include "engine/import/X7lImportJob.h"
 
 /// Where the client's libraries live. Overridable so the same test can be
 /// pointed at another folder.
@@ -298,6 +299,112 @@ static void testX7lConvert()
     CHECK (diffJson == 0 && sameJson > 0,
            "and every instrument.json matches field for field, apart from the import timestamp and the "
            "provenance prose");
+}
+
+/// The guards the artist will actually meet: a file that is not a library, and
+/// importing the same library twice into a folder that already holds its
+/// bundles. Neither needs the corpus to be meaningful, but the double-import is
+/// the one that matters - a batch import once overwrote one of his own bundles.
+static void testX7lImportGuards()
+{
+    std::printf ("\n== X7L IMPORT GUARDS ==\n");
+    auto tmp = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                   .getChildFile ("mireku-x7l-guards-" + juce::Uuid().toDashedString());
+    tmp.createDirectory();
+
+    // ---- not a library at all
+    {
+        auto junk = tmp.getChildFile ("Not A Library.X7L");
+        junk.replaceWithText (juce::String::repeatedString ("nonsense ", 64));
+        juce::Array<juce::File> files { junk };
+        const auto report = jm::x7l::importLibraries (files, tmp.getChildFile ("out"), "Tester");
+        CHECK (report.imported == 0 && report.refused == 1, "a file that is not a YSFC library is refused");
+        CHECK (report.libraries.size() == 1 && report.libraries[0].refusal.isNotEmpty(),
+               "and the refusal says why, against that file's name");
+        std::printf ("    -> %s\n", report.libraries[0].refusal.toRawUTF8());
+        CHECK (report.bundles == 0, "nothing was written for it");
+    }
+
+    // ---- the never-overwrite guard, on names alone
+    {
+        auto dest = tmp.getChildFile ("names");
+        dest.createDirectory();
+        dest.getChildFile ("MKS20.jmi").createDirectory();
+        juce::StringArray taken;
+        CHECK (jm::x7l::freeBundleName (dest, "MKS20.jmi", taken) == "MKS20_2.jmi",
+               "a bundle folder already on disk is never reused");
+        CHECK (jm::x7l::freeBundleName (dest, "MKS20.jmi", taken) == "MKS20_3.jmi",
+               "and neither is one this run just handed out");
+        CHECK (jm::x7l::freeBundleName (dest, "Piano.jmi", taken) == "Piano.jmi", "a free name is used as it is");
+        bool doubled = false;
+        for (auto& n : taken) if (n.endsWith (".jmi.jmi")) doubled = true;
+        CHECK (! doubled, "and \".jmi\" is never doubled up");
+    }
+
+    // ---- importing the same library twice leaves the first copy alone
+    const auto dir = x7lCorpusDir();
+    auto sources = dir.isDirectory() ? dir.findChildFiles (juce::File::findFiles, false, "*.X7L")
+                                     : juce::Array<juce::File>();
+    if (sources.isEmpty()) { std::printf ("  [SKIP] no corpus for the double-import check\n"); tmp.deleteRecursively(); return; }
+    // The smallest library that actually yields bundles, so the check is quick.
+    // Sorted by size and tried in turn, because the smallest file in the corpus
+    // is a parameter-only DX7 set that imports nothing at all.
+    struct BySize
+    {
+        static int compareElements (const juce::File& a, const juce::File& b)
+        { return a.getSize() < b.getSize() ? -1 : (a.getSize() > b.getSize() ? 1 : 0); }
+    };
+    BySize bySize;
+    sources.sort (bySize);
+    {
+        auto dest = tmp.getChildFile ("twice");
+        juce::File smallest;
+        jm::x7l::ImportReport first;
+        for (auto& f : sources)
+        {
+            dest.deleteRecursively();
+            juce::Array<juce::File> one { f };
+            first = jm::x7l::importLibraries (one, dest, "Tester");
+            if (first.bundles > 0) { smallest = f; break; }
+        }
+        if (smallest == juce::File())
+        { std::printf ("  [SKIP] no library in the corpus produced bundles\n"); tmp.deleteRecursively(); return; }
+        juce::Array<juce::File> files { smallest };
+
+        // Fingerprint what the first run wrote.
+        // Keyed on the path RELATIVE TO dest, not on the bare file name: a
+        // bundle holds samples/ and presets/, and flattening them meant looking
+        // for presets/Default.json inside samples/.
+        std::map<juce::String, juce::int64> before;
+        for (auto& b : dest.findChildFiles (juce::File::findDirectories, false, "*.jmi"))
+            for (auto& f : b.findChildFiles (juce::File::findFiles, true, "*"))
+                before[f.getRelativePathFrom (dest)] = f.getSize();
+
+        const auto second = jm::x7l::importLibraries (files, dest, "Tester");
+        CHECK (second.bundles == first.bundles, "a second import of the same library writes its bundles again");
+
+        bool untouched = true;
+        juce::String firstMiss;
+        for (auto& [rel, size] : before)
+        {
+            const auto f = dest.getChildFile (rel);
+            if (! f.existsAsFile() || f.getSize() != size)
+            {
+                untouched = false;
+                if (firstMiss.isEmpty()) firstMiss = rel;
+            }
+        }
+        if (! firstMiss.isEmpty()) std::printf ("    first changed: %s\n", firstMiss.toRawUTF8());
+        CHECK (untouched, "AND LEAVES EVERY FILE OF THE FIRST IMPORT EXACTLY AS IT WAS");
+
+        int suffixed = 0;
+        for (auto& b : dest.findChildFiles (juce::File::findDirectories, false, "*.jmi"))
+            if (b.getFileNameWithoutExtension().matchesWildcard ("*_2", false)) ++suffixed;
+        CHECK (suffixed > 0, "the second copy is suffixed instead");
+        std::printf ("    %s imported twice: %d bundle(s) each time, %d suffixed\n",
+                     smallest.getFileName().toRawUTF8(), first.bundles, suffixed);
+    }
+    tmp.deleteRecursively();
 }
 
 static void testX7lReader()

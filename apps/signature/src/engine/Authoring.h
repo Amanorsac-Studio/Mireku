@@ -366,6 +366,14 @@ struct WriteResult
     juce::String message;
     juce::String note;        ///< non-fatal remark (e.g. a clamp, or a .bak written)
     juce::File backup;        ///< the .bak this write left behind, if any
+    /// The write was refused because the target ALREADY holds this value, so
+    /// nothing needed doing. Distinct from a failure: importing a collection
+    /// twice must report "identical", not an error.
+    ///
+    /// A flag rather than a message comparison. The import side used to match on
+    /// the refusal text, which broke the moment those sentences were rewritten -
+    /// user-facing wording is not an API.
+    bool unchanged = false;
 };
 
 inline bool looksLikeBundle (const juce::File& dir)
@@ -404,14 +412,14 @@ inline WriteResult guardedReplace (const juce::File& target, const juce::String&
     auto dir = target.getParentDirectory();
     if (! dir.isDirectory() && ! dir.createDirectory().wasOk())
     {
-        r.message = "cannot create " + dir.getFullPathName() + " (read-only library?)";
+        r.message = "Could not create " + dir.getFullPathName() + ". The library folder may be read only.";
         return r;
     }
     {
         auto probe = dir.getChildFile (".jm-write-probe");
         if (! probe.replaceWithText ("probe"))
         {
-            r.message = "that folder is not writable: " + dir.getFullPathName();
+            r.message = "Folder is not writable: " + dir.getFullPathName();
             return r;
         }
         probe.deleteFile();
@@ -437,7 +445,7 @@ inline WriteResult guardedReplace (const juce::File& target, const juce::String&
 
     if (! target.replaceWithText (text))
     {
-        r.message = "could not write " + target.getFullPathName();
+        r.message = "Could not write " + target.getFullPathName();
         return r;
     }
 
@@ -455,7 +463,7 @@ inline WriteResult guardedReplace (const juce::File& target, const juce::String&
     r.file = target;
     r.backup = bak;
     if (bak != juce::File())
-        r.note = "replaced the previous version (kept as " + bak.getFileName() + ")";
+        r.note = "Previous version kept as " + bak.getFileName();
     return r;
 }
 
@@ -491,7 +499,7 @@ inline WriteResult writeBundlePresetText (const juce::File& bundleDir, const juc
 {
     WriteResult r;
     const auto name = rawName.trim();
-    if (name.isEmpty()) { r.message = "a preset needs a name"; return r; }
+    if (name.isEmpty()) { r.message = "Name required."; return r; }
 
     if (! looksLikeBundle (bundleDir))
     {
@@ -521,7 +529,7 @@ inline WriteResult writeBundlePresetText (const juce::File& bundleDir, const juc
     if (r.backup != juce::File()) e.replaced = r.backup.getFileName();
     recordInLedger (bundleDir, e);
 
-    r.message = "saved to FACTORY: " + bundleDir.getFileName() + "/presets/" + r.file.getFileName();
+    r.message = "Saved to FACTORY: " + bundleDir.getFileName() + "/presets/" + r.file.getFileName();
     return r;
 }
 
@@ -555,11 +563,11 @@ inline WriteResult renameBundlePreset (const juce::File& bundleDir, const juce::
 {
     WriteResult r;
     const auto newName = rawNewName.trim();
-    if (newName.isEmpty()) { r.message = "a preset needs a name"; return r; }
-    if (newName.length() > 128) { r.message = "a preset name is at most 128 characters"; return r; }
+    if (newName.isEmpty()) { r.message = "Name required."; return r; }
+    if (newName.length() > 128) { r.message = "A preset name is at most 128 characters."; return r; }
     if (! looksLikeBundle (bundleDir))
     {
-        r.message = "not a .jmi bundle: " + bundleDir.getFullPathName();
+        r.message = "Not a .jmi bundle: " + bundleDir.getFullPathName();
         return r;
     }
 
@@ -601,7 +609,7 @@ inline WriteResult renameBundlePreset (const juce::File& bundleDir, const juce::
         bak.deleteFile();
         if (from.copyFileTo (bak)) from.deleteFile();
         else from.deleteFile();
-        r.note = "the old file was kept as " + bak.getFileName();
+        r.note = "Previous file kept as " + bak.getFileName();
     }
 
     // the ledger follows the file, so provenance is not orphaned by a rename
@@ -741,10 +749,11 @@ inline WriteResult writeInstrumentWorld (const juce::File& bundleDir, const juce
     const auto original = juce::JSON::parse (originalText);
     auto* root = original.getDynamicObject();
     auto* meta = root != nullptr ? root->getProperty ("meta").getDynamicObject() : nullptr;
-    if (meta == nullptr) { r.message = "instrument.json has no meta object"; return r; }
+    if (meta == nullptr) { r.message = "instrument.json has no meta object."; return r; }
     if (meta->getProperty ("world").toString() == worldId)
     {
-        r.message = "already in that category";
+        r.message = "Already in that category.";
+        r.unchanged = true;
         return r;
     }
 
@@ -768,7 +777,7 @@ inline WriteResult writeInstrumentWorld (const juce::File& bundleDir, const juce
     r = guardedReplace (ij, juce::JSON::toString (edited, false), true, validate);
     if (! r.ok) return r;
 
-    r.message = "moved " + bundleDir.getFileName() + " to " + worldId;
+    r.message = "Moved " + bundleDir.getFileName() + " to " + worldId + ".";
     return r;
 }
 
@@ -791,8 +800,8 @@ inline WriteResult renameInstrument (const juce::File& bundleDir, const juce::St
 {
     WriteResult r;
     const auto newName = rawNewName.trim();
-    if (newName.isEmpty()) { r.message = "a name cannot be empty"; return r; }
-    if (newName.length() > 64) { r.message = "that name is longer than 64 characters"; return r; }
+    if (newName.isEmpty()) { r.message = "Name required."; return r; }
+    if (newName.length() > 64) { r.message = "A sound name is at most 64 characters."; return r; }
     if (! looksLikeBundle (bundleDir))
     {
         r.message = bundleDir == juce::File()
@@ -806,10 +815,10 @@ inline WriteResult renameInstrument (const juce::File& bundleDir, const juce::St
     const auto original = juce::JSON::parse (originalText);
     auto* root = original.getDynamicObject();
     auto* meta = root != nullptr ? root->getProperty ("meta").getDynamicObject() : nullptr;
-    if (meta == nullptr) { r.message = "instrument.json has no meta object"; return r; }
+    if (meta == nullptr) { r.message = "instrument.json has no meta object."; return r; }
 
     const auto oldName = meta->getProperty ("name").toString();
-    if (oldName == newName) { r.message = "that is already its name"; return r; }
+    if (oldName == newName) { r.message = "Already named that."; r.unchanged = true; return r; }
     // Two instruments sharing a display name is not corrupting, but it is
     // indistinguishable on screen — and the artist is renaming precisely so he
     // can tell them apart.
@@ -838,7 +847,7 @@ inline WriteResult renameInstrument (const juce::File& bundleDir, const juce::St
     r = guardedReplace (ij, juce::JSON::toString (edited, false), true, validate);
     if (! r.ok) return r;
 
-    r.message = "renamed to " + newName;
+    r.message = "Renamed to " + newName + ".";
     return r;
 }
 
@@ -1241,7 +1250,7 @@ inline ImportResult importCollection (const juce::File& collectionRoot, const ju
             {
                 auto wr = writeInstrumentWorld (bundle, wantWorld);
                 if (wr.ok) { r.lines.add ("OK    " + rel + " -> category " + wantWorld); changed = true; }
-                else if (wr.message != "already in that category")
+                else if (! wr.unchanged)
                 { fail ("category: " + wr.message); failed = true; }
             }
             if (! failed && wantName.isNotEmpty())
@@ -1254,7 +1263,7 @@ inline ImportResult importCollection (const juce::File& collectionRoot, const ju
                                        .getProperty ("name", "").toString());
                 auto wr = renameInstrument (bundle, wantName, inUse);
                 if (wr.ok) { r.lines.add ("OK    " + rel + " -> name \"" + wantName + "\""); changed = true; }
-                else if (wr.message != "that is already its name")
+                else if (! wr.unchanged)
                 { fail ("name: " + wr.message); failed = true; }
             }
             if (failed) continue;

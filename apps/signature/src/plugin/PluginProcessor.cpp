@@ -1411,7 +1411,7 @@ JMSignatureProcessor::SaveOutcome JMSignatureProcessor::saveInstrumentPreset (in
     const auto name = rawName.trim();
     if (slot < 0 || slot >= 4 || name.isEmpty())
     {
-        out.message = "a preset needs a name";
+        out.message = "Name required.";
         return out;
     }
     const bool allowReplace = intent == SaveIntent::saveOver;
@@ -1425,7 +1425,7 @@ JMSignatureProcessor::SaveOutcome JMSignatureProcessor::saveInstrumentPreset (in
         // either, or "save as" would mean "save over" half the time.
         if (f.existsAsFile() && ! allowReplace)
         {
-            out.message = "\"" + name + "\" already exists - use OVERWRITE, or pick another name";
+            out.message = "\"" + name + "\" already exists. Use OVERWRITE to replace it, or enter another name.";
             return;
         }
         juce::File bak;
@@ -1437,15 +1437,15 @@ JMSignatureProcessor::SaveOutcome JMSignatureProcessor::saveInstrumentPreset (in
         }
         if (! f.replaceWithText (juce::JSON::toString (slotPresetToVar (slot, name), false)))
         {
-            out.message = "could not write " + f.getFullPathName();
+            out.message = "Could not write " + f.getFullPathName();
             return;
         }
         out.ok = true;
         out.dest = authoring::SaveDest::worldUserFolder;
         out.file = f;
-        out.message = "saved to USER presets: " + f.getFileName();
+        out.message = "Saved to USER presets: " + f.getFileName();
         if (bak != juce::File())
-            out.note = "replaced the previous version (kept as " + bak.getFileName() + ")";
+            out.note = "Previous version kept as " + bak.getFileName();
         if (why.isNotEmpty())
         {
             out.note = out.note.isEmpty() ? why : why + " | " + out.note;
@@ -1524,10 +1524,10 @@ JMSignatureProcessor::SaveOutcome JMSignatureProcessor::savePerformanceSnapshot 
 {
     SaveOutcome early;
     const auto name = rawName.trim();
-    if (name.isEmpty()) { early.message = "a performance needs a name"; return early; }
+    if (name.isEmpty()) { early.message = "Name required."; return early; }
     if (intent == SaveIntent::saveAs && performancePresetExists (name))
     {
-        early.message = "\"" + name + "\" already exists - use OVERWRITE, or pick another name";
+        early.message = "\"" + name + "\" already exists. Use OVERWRITE to replace it, or enter another name.";
         return early;
     }
 
@@ -1559,18 +1559,18 @@ JMSignatureProcessor::SaveOutcome JMSignatureProcessor::savePerformanceSnapshot 
         auto bak = f.getSiblingFile (f.getFileName() + ".bak");
         bak.deleteFile();
         f.copyFileTo (bak);
-        out.note = "replaced the previous version (kept as " + bak.getFileName() + ")";
+        out.note = "Previous version kept as " + bak.getFileName();
     }
     if (! f.replaceWithText (juce::JSON::toString (juce::var (o), false)))
     {
-        out.message = "could not write " + f.getFullPathName();
+        out.message = "Could not write " + f.getFullPathName();
         return out;
     }
     out.ok = true;
     out.file = f;
     out.dest = authoring ? authoring::SaveDest::performanceFactory
                          : authoring::SaveDest::performanceUser;
-    out.message = juce::String (authoring ? "saved to FACTORY performance: " : "saved to USER performance: ")
+    out.message = juce::String (authoring ? "Saved to FACTORY performances: " : "Saved to USER performances: ")
                 + f.getFileName();
     state.performPresetName = name;
     stateChanged.sendChangeMessage();
@@ -1591,9 +1591,9 @@ JMSignatureProcessor::renameInstrumentPreset (int slot, const juce::String& oldN
 {
     RenameOutcome out;
     const auto newName = rawNewName.trim();
-    if (slot < 0 || slot >= 4) { out.message = "no slot"; return out; }
-    if (newName.isEmpty()) { out.message = "a preset needs a name"; return out; }
-    if (newName == oldName) { out.message = "that is already its name"; return out; }
+    if (slot < 0 || slot >= 4) { out.message = "No slot selected."; return out; }
+    if (newName.isEmpty()) { out.message = "Name required."; return out; }
+    if (newName == oldName) { out.message = "Already named that."; return out; }
 
     auto bundle = bundleDirForSlot (slot);
     const bool inBundle = state.library.isAuthoring() && authoring::looksLikeBundle (bundle)
@@ -1621,7 +1621,7 @@ JMSignatureProcessor::renameInstrumentPreset (int slot, const juce::String& oldN
                      .getChildFile (juce::File::createLegalFileName (oldName) + ".json");
         if (! f.existsAsFile())
         {
-            out.message = "there is no preset called \"" + oldName + "\" to rename";
+            out.message = "No preset named \"" + oldName + "\".";
             return out;
         }
         auto r = renameUserPresetFile (f, newName);
@@ -1640,8 +1640,8 @@ JMSignatureProcessor::renameUserPresetFile (const juce::File& f, const juce::Str
 {
     RenameOutcome out;
     const auto newName = rawNewName.trim();
-    if (newName.isEmpty()) { out.message = "a preset needs a name"; return out; }
-    if (! f.existsAsFile()) { out.message = "that preset file is gone"; return out; }
+    if (newName.isEmpty()) { out.message = "Name required."; return out; }
+    if (! f.existsAsFile()) { out.message = "Preset file not found."; return out; }
 
     const auto oldName = f.getFileNameWithoutExtension();
     auto to = f.getSiblingFile (juce::File::createLegalFileName (newName) + ".json");
@@ -1653,7 +1653,7 @@ JMSignatureProcessor::renameUserPresetFile (const juce::File& f, const juce::Str
 
     auto v = juce::JSON::parse (f.loadFileAsString());
     if (auto* o = v.getDynamicObject()) o->setProperty ("name", newName);
-    else { out.message = "that preset is not a JSON object"; return out; }
+    else { out.message = "Preset file is not valid JSON."; return out; }
 
     // Validated the same way a save is: a rename must leave a preset that still
     // loads, and a user preset is read back by applyUserPresetToSlot.
@@ -1673,12 +1673,12 @@ JMSignatureProcessor::renameUserPresetFile (const juce::File& f, const juce::Str
         bak.deleteFile();
         f.copyFileTo (bak);
         f.deleteFile();
-        out.note = "the old file was kept as " + bak.getFileName();
+        out.note = "Previous file kept as " + bak.getFileName();
     }
     state.library.renameFavorite ("2|" + oldName, "2|" + newName);
     out.ok = true;
     out.file = to;
-    out.message = "renamed to \"" + newName + "\"";
+    out.message = "Renamed to \"" + newName + "\".";
     return out;
 }
 
@@ -1687,8 +1687,8 @@ JMSignatureProcessor::renamePerformancePreset (const juce::File& f, const juce::
 {
     RenameOutcome out;
     const auto newName = rawNewName.trim();
-    if (newName.isEmpty()) { out.message = "a performance needs a name"; return out; }
-    if (! f.existsAsFile()) { out.message = "that performance file is gone"; return out; }
+    if (newName.isEmpty()) { out.message = "Name required."; return out; }
+    if (! f.existsAsFile()) { out.message = "Performance file not found."; return out; }
 
     const auto oldName = f.getFileNameWithoutExtension();
     auto to = f.getSiblingFile (juce::File::createLegalFileName (newName) + ".json");
@@ -1696,7 +1696,7 @@ JMSignatureProcessor::renamePerformancePreset (const juce::File& f, const juce::
 
     auto v = juce::JSON::parse (f.loadFileAsString());
     if (auto* o = v.getDynamicObject()) o->setProperty ("name", newName);
-    else { out.message = "that performance is not a JSON object"; return out; }
+    else { out.message = "Performance file is not valid JSON."; return out; }
 
     // A performance snapshot is the ONLY thing that carries the artist's
     // modulation, so the read-back check is that it still loads as one: the
@@ -1719,13 +1719,13 @@ JMSignatureProcessor::renamePerformancePreset (const juce::File& f, const juce::
         bak.deleteFile();
         f.copyFileTo (bak);
         f.deleteFile();
-        out.note = "the old file was kept as " + bak.getFileName();
+        out.note = "Previous file kept as " + bak.getFileName();
     }
     state.library.renameFavorite ("3|" + oldName, "3|" + newName);
     if (state.performPresetName == oldName) state.performPresetName = newName;
     out.ok = true;
     out.file = to;
-    out.message = "renamed to \"" + newName + "\"";
+    out.message = "Renamed to \"" + newName + "\".";
     stateChanged.sendChangeMessage();
     return out;
 }
@@ -1786,7 +1786,7 @@ JMSignatureProcessor::recategoriseBundle (const juce::File& bundleDir, int newWo
 {
     RecategoriseOutcome out;
     out.world = newWorld;
-    if (newWorld < 0 || newWorld > 3) { out.message = "that is not one of the four categories"; return out; }
+    if (newWorld < 0 || newWorld > 3) { out.message = "Not one of the four categories."; return out; }
 
     auto wr = authoring::writeInstrumentWorld (bundleDir, juce::String (worldJsonId (newWorld)));
     if (! wr.ok) { out.message = wr.message; return out; }

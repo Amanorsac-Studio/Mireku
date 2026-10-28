@@ -574,7 +574,7 @@ private:
         auto name = saveName_.getText().trim();
         if (name.isEmpty())
         {
-            destLine_ = "NOT SAVED - type a name first (or use OVERWRITE to replace the loaded preset)";
+            destLine_ = "NOT SAVED. Enter a name, or use OVERWRITE to replace the loaded preset.";
             resultIsGood_ = false;
             repaint();
             return;
@@ -621,7 +621,7 @@ private:
         if (name.isEmpty()) name = proc_.state.performPresetName.trim();
         if (name.isEmpty())
         {
-            destLine_ = "NOT SAVED - type a name for the performance first";
+            destLine_ = "NOT SAVED. Enter a name for the performance.";
             resultIsGood_ = false;
             repaint();
             return;
@@ -648,7 +648,7 @@ private:
 
         // ...and say what actually happened, in place of what was going to.
         resultIsGood_ = out.ok && ! out.fellBack;
-        destLine_ = out.ok ? out.message : juce::String ("NOT SAVED - ") + out.message;
+        destLine_ = out.ok ? out.message : juce::String ("NOT SAVED. ") + out.message;
         if (out.note.isNotEmpty()) destLine_ += "  (" + out.note + ")";
         repaint();
     }
@@ -677,7 +677,7 @@ private:
         }
         rebuild();
         resultIsGood_ = out.ok;
-        destLine_ = out.ok ? out.message : juce::String ("NOT RENAMED - ") + out.message;
+        destLine_ = out.ok ? out.message : juce::String ("NOT RENAMED. ") + out.message;
         if (out.note.isNotEmpty()) destLine_ += "  (" + out.note + ")";
         repaint();
         return out.ok;
@@ -714,7 +714,7 @@ private:
         // its new one), so the list is rebuilt against where it now lives.
         rebuild();
         resultIsGood_ = out.ok;
-        destLine_ = out.ok ? out.message : juce::String ("NOT MOVED - ") + out.message;
+        destLine_ = out.ok ? out.message : juce::String ("NOT MOVED. ") + out.message;
         if (out.note.isNotEmpty()) destLine_ += "  (" + out.note + ")";
         repaint();
         return out.ok;

@@ -1624,6 +1624,8 @@ static void testArpStateRoundTrip()
 // ANCHORED PLAYBACK - level-matched recorded layers, hard switching, the
 // measurement pass. Held to the TypeScript reference by generated vectors.
 #include "AnchoredVelocity.inc"
+// HALL/SHIMMER feedback runaway - the client's "crashes with a weird frequency".
+#include "ShimmerRunaway.inc"
 
 //==============================================================================
 //==============================================================================
@@ -1974,6 +1976,7 @@ int main()
     testAnchoredPlanProperties();
     testMeasurePassWritesAnchoredBundle();
     testMeasureHandlesSamplesShorterThanTheWindow();
+    testShimmerFeedbackIsBounded();
     // DSP STANDARDS PASS
     testAliasSuppression();
     testToneBeforeAfter();

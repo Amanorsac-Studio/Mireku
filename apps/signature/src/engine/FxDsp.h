@@ -689,10 +689,17 @@ public:
         pre_.prepare (sr, 220.0f);
         shifter_.prepare (sr);
         modDl_.prepare (sr, 12.0f);
+        for (auto& f : shimLp_) f.setCutoff (5000.0f, sr);
+        for (auto& f : shimHp_) f.setCutoff (120.0f, sr);
         wet_.setSize (2, maxBlock);
         reset();
     }
-    void reset() override { rev_.reset(); pre_.reset(); shifter_.reset(); modDl_.reset(); shimL_ = shimR_ = 0; }
+    void reset() override
+    {
+        rev_.reset(); pre_.reset(); shifter_.reset(); modDl_.reset(); shimL_ = shimR_ = 0;
+        for (auto& f : shimLp_) f.z = 0.0f;
+        for (auto& f : shimHp_) f.lp.z = 0.0f;
+    }
     void process (juce::AudioBuffer<float>& b, double) override
     {
         const float size = p (0) / 100.0f;
@@ -727,6 +734,19 @@ public:
             wR[i] = pre_.read (1, d);
         }
         rev_.processStereo (wL, wR, n);
+        // LEVEL COMPENSATION, measured not guessed. juce::Reverb is Freeverb:
+        // its combs feed back at 0.7 + 0.28 * roomSize, and a comb's steady
+        // state gain is 1 / (1 - feedback). From room 0.5 to room 0.99 that is
+        // 6x to 44x - the hall at a long decay came out at +12.8 dB on noise
+        // that peaked at -6, four times over full scale, slamming the master
+        // limiter. Scaling the wet by (1 - fb) relative to a mid room keeps
+        // DECAY a time control rather than a volume control.
+        {
+            const float fb = 0.7f + 0.28f * rp.roomSize;
+            const float comp = juce::jlimit (0.05f, 1.0f, (1.0f - fb) / 0.16f);     // 0.16 == 1 - fb at room 0.5
+            juce::FloatVectorOperations::multiply (wL, comp, n);
+            juce::FloatVectorOperations::multiply (wR, comp, n);
+        }
         for (int i = 0; i < n; ++i)
         {
             if (mod > 0.001f)
@@ -740,6 +760,18 @@ public:
             {
                 float sl, srr;
                 shifter_.processSample (wL[i], wR[i], sl, srr);
+                // THE SHIMMER RUNAWAY. This is a feedback loop through a
+                // reverb whose room gain can exceed unity, and every pass
+                // through it shifts the signal UP an octave. Unguarded, a
+                // long decay climbed to a whine at the top of the band in a
+                // few seconds, aliased, and went non-finite - "crashes with a
+                // weird frequency". Three things the delays already had and
+                // this did not: a band limit on what recirculates (nothing
+                // above 5 kHz is shifted up again, nothing below 120 Hz piles
+                // up), and the same soft ceiling the delay feedback runs
+                // through, so the loop can sustain but never run away.
+                sl  = guard_.shape (shimLp_[0].process (shimHp_[0].process (sl)));
+                srr = guard_.shape (shimLp_[1].process (shimHp_[1].process (srr)));
                 shimL_ = sl * shimmer * 0.5f;
                 shimR_ = srr * shimmer * 0.5f;
             }
@@ -757,6 +789,9 @@ private:
     Lfo modLfo_;
     juce::AudioBuffer<float> wet_;
     float shimL_ = 0, shimR_ = 0;
+    SoftCeiling guard_ = makeLoopGuard();          // the delays' feedback guard, on the shimmer loop
+    std::array<OnePoleLP, 2> shimLp_;
+    std::array<OnePoleHP, 2> shimHp_;
 };
 struct PlateReverbFx : ReverbFxBase { PlateReverbFx() : ReverbFxBase (FxType::plateReverb, false) {} };
 struct HallShimmerFx : ReverbFxBase { HallShimmerFx() : ReverbFxBase (FxType::hallShimmer, true) {} };

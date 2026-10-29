@@ -243,7 +243,7 @@ struct Preset {
     std::vector<std::string> tags;
     JsonValue engine;   // flat object of world engine params
     std::vector<PresetFxUnit> fxRack;
-    double attackMs = 2.0, decayMs = 0.0, sustain = 100.0, releaseMs = 250.0;
+    double attackMs = 0.0, decayMs = 0.0, sustain = 100.0, releaseMs = 250.0;   // attack 0: the recording has its own
 };
 
 struct Instrument {

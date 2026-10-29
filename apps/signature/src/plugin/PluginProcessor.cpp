@@ -1068,7 +1068,9 @@ bool JMSignatureProcessor::setParamNormalized (const juce::String& path, float n
         auto id = rest.fromFirstOccurrenceOf ("ampenv.", false, false);
         auto& env = state.slots[(size_t) slot].ampEnv;
         auto& dst = engines[(size_t) slot].ampEnv();
-        if (id == "attackMs")  { env.attackMs = 1.0f + nv * nv * 1999.0f;  dst.attackMs = env.attackMs; }
+        // 0..2000 ms, squared taper. It used to be 1 + nv^2 * 1999: the knob
+        // could not reach 0, which is now the default.
+        if (id == "attackMs")  { env.attackMs = nv * nv * 2000.0f;  dst.attackMs = env.attackMs; }
         else if (id == "decayMs")   { env.decayMs = nv * nv * 4000.0f;    dst.decayMs = env.decayMs; }
         else if (id == "sustain")   { env.sustain = nv * 100.0f;          dst.sustain = env.sustain; }
         else if (id == "releaseMs") { env.releaseMs = 5.0f + nv * nv * 3995.0f; dst.releaseMs = env.releaseMs; }
@@ -1153,7 +1155,7 @@ float JMSignatureProcessor::getParamNormalized (const juce::String& path) const
     {
         auto id = rest.fromFirstOccurrenceOf ("ampenv.", false, false);
         auto& env = state.slots[(size_t) slot].ampEnv;
-        if (id == "attackMs") return std::sqrt (juce::jlimit (0.0f, 1.0f, (env.attackMs - 1.0f) / 1999.0f));
+        if (id == "attackMs") return std::sqrt (juce::jlimit (0.0f, 1.0f, env.attackMs / 2000.0f));
         if (id == "decayMs") return std::sqrt (juce::jlimit (0.0f, 1.0f, env.decayMs / 4000.0f));
         if (id == "sustain") return env.sustain / 100.0f;
         if (id == "releaseMs") return std::sqrt (juce::jlimit (0.0f, 1.0f, (env.releaseMs - 5.0f) / 3995.0f));

@@ -310,10 +310,13 @@ inline int selectZone (const jmi::Instrument& inst, int note, int vel)
 //==============================================================================
 struct AmpEnvParams        // per patch (spec §5.1 defaults)
 {
-    std::atomic<float> attackMs { 2.0f }, decayMs { 0.0f }, sustain { 100.0f }, releaseMs { 250.0f };
+    std::atomic<float> attackMs { 0.0f }, decayMs { 0.0f }, sustain { 100.0f }, releaseMs { 250.0f };
     void setDefaults (bool sustaining)
     {
-        attackMs = sustaining ? 10.0f : 2.0f;
+        // Attack 0 for every sound type (client, 2026-10-29): the recording
+        // carries its own attack. The Strings world's SWELL still imposes its
+        // own minimum in startVoice, because that control IS an attack.
+        attackMs = 0.0f;
         decayMs = 0.0f; sustain = 100.0f;
         releaseMs = sustaining ? 400.0f : 250.0f;
     }
@@ -704,10 +707,21 @@ private:
         const float velNorm = (float) vel / 127.0f;   // SHAPED velocity, stage one
         if (anchoredGain)
             v->gain = gain;                            // the plan already read DEPTH/OFFSET
-        else if (bundle_->inst.ampVelTrack >= 0.0)
-            v->gain = gain * engine_math::ampVelTrackGain (lvlVel, bundle_->inst.ampVelTrack);   // SFZ amp_veltrack
         else
-            v->gain = gain * (0.35f + 0.65f * lvlNorm);   // the JM default law
+        {
+            // THE DEFAULT LAW IS NOW SFZ amp_veltrack 100 - amplitude follows
+            // (v/127)^2 - unless the bundle declares its own track. The old
+            // JM law, 0.35 + 0.65 * v/127, had a floor of 0.35: nine dB from
+            // the softest touch to the hardest. The client played Imperial,
+            // whose first layer spans velocity 1..84, and could not hear any
+            // velocity at all - across that whole layer the old law moved
+            // under five dB. A piano moves thirty. (v/127)^2 is -42 dB at 1,
+            // -12 dB at 64, -6 dB at 90; DEPTH and OFFSET still shape the
+            // velocity it reads. Anchored bundles do not come through here.
+            const double track = bundle_->inst.ampVelTrack >= 0.0 ? bundle_->inst.ampVelTrack : 100.0;
+            v->gain = gain * engine_math::ampVelTrackGain (lvlVel, track);
+        }
+        juce::ignoreUnused (lvlNorm);
         v->startStamp = ++stampCounter_;
         v->env = 0; v->phase = 0;
         v->starveGain = 1.0f; v->starveSamples = 0;

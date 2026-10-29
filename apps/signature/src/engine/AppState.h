@@ -145,7 +145,10 @@ inline ParamValues engineParamsFromJmiPreset (const jmi::Preset& p, int world)
 }
 
 //==============================================================================
-struct AmpEnvState { float attackMs = 2, decayMs = 0, sustain = 100, releaseMs = 250; };
+// Attack defaults to 0 (2026-10-29, the client's call): a recording already
+// contains the instrument's own attack, and a ramp on top of it only softens
+// the transient that was captured. Saved presets keep whatever they say.
+struct AmpEnvState { float attackMs = 0, decayMs = 0, sustain = 100, releaseMs = 250; };
 
 /// Per-slot half of the velocity response: level only, applied after the
 /// sample layer has already been chosen. 64/64 is neutral, so a slot that has
@@ -545,7 +548,7 @@ struct AppState
         s.engineParams = paramValuesFromVar (v.getProperty ("engine", juce::var()), worldEngineControls (s.world));
         s.rack = rackFromVar (v.getProperty ("fxRack", juce::var()));
         auto env = v.getProperty ("ampEnvelope", juce::var());
-        s.ampEnv.attackMs = (float) (double) env.getProperty ("attackMs", 2.0);
+        s.ampEnv.attackMs = (float) (double) env.getProperty ("attackMs", 0.0);
         s.ampEnv.decayMs = (float) (double) env.getProperty ("decayMs", 0.0);
         s.ampEnv.sustain = (float) (double) env.getProperty ("sustain", 100.0);
         s.ampEnv.releaseMs = (float) (double) env.getProperty ("releaseMs", 250.0);

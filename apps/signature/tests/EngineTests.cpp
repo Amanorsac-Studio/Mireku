@@ -1621,6 +1621,9 @@ static void testArpStateRoundTrip()
 #include "X7lReaderTests.inc"
 // VELOCITY RESPONSE - the Yamaha-style two-stage curve, added 2026-10-29.
 #include "VelocityResponse.inc"
+// ANCHORED PLAYBACK - level-matched recorded layers, hard switching, the
+// measurement pass. Held to the TypeScript reference by generated vectors.
+#include "AnchoredVelocity.inc"
 
 //==============================================================================
 //==============================================================================
@@ -1966,6 +1969,10 @@ int main()
     testVelocityCurveShapes();
     testVelocityDepthAndOffset();
     testVelocityStateAndPresetRoundTrip();
+    // ANCHORED PLAYBACK
+    testAnchoredPlanMatchesTypeScript();
+    testAnchoredPlanProperties();
+    testMeasurePassWritesAnchoredBundle();
     // DSP STANDARDS PASS
     testAliasSuppression();
     testToneBeforeAfter();

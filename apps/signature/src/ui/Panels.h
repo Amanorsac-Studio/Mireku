@@ -532,6 +532,11 @@ private:
                                   w != currentWorld, w == currentWorld);
                 m.addSeparator();
                 m.addSubMenu ("Move to category", cats);
+                // MEASURE FOR ANCHORED PLAYBACK. Reads every sample, writes the
+                // measured level and anchor into instrument.json, switches the
+                // bundle to anchored velocity. Authoring only, for the same
+                // reason as the category move: it edits factory content.
+                m.addItem (4, "Measure levels (anchored playback)...");
             }
 
             // R3(A): targeted so it inherits the JM chrome LookAndFeel (an
@@ -541,6 +546,7 @@ private:
                 if (res == 1) proc_.state.library.toggleFavorite (r.favKey());
                 else if (res == 2) { r.file.moveToTrash(); }
                 else if (res == 3) { promptRename (row); return; }
+                else if (res == 4) { startMeasure (row); return; }
                 else if (res >= 10 && res <= 13) { applyRecategorise (row, res - 10); return; }
                 rebuild();
             });
@@ -702,6 +708,63 @@ private:
                 if (res == 1) applyRename (index, aw->getTextEditorContents ("name"));
                 delete aw;
             }), false);
+    }
+
+    //================================================ MEASURE FOR ANCHORED PLAYBACK
+    // The same shape as the X7L import: a ThreadWithProgressWindow that owns
+    // itself, launchThread() (no modal loop in a plugin), the result handed
+    // back on the message thread through a SafePointer. Measuring reads the
+    // whole bundle - hundreds of megabytes for a real piano - so it cannot run
+    // inline; writing is a message-thread act and stays in the processor.
+    struct MeasureTask : public juce::ThreadWithProgressWindow
+    {
+        MeasureTask (juce::File dir, std::function<void (authoring::MeasuredLevels)> done)
+            : juce::ThreadWithProgressWindow ("Measuring " + dir.getFileNameWithoutExtension(), true, true),
+              bundleDir (std::move (dir)), onDone (std::move (done))
+        {
+            setStatusMessage ("Reading samples...");
+        }
+        void run() override
+        {
+            result = authoring::measureBundleLevels (
+                bundleDir,
+                [this] { return threadShouldExit(); },
+                [this] (int zone, int count)
+                {
+                    setProgress (count > 0 ? (double) zone / (double) count : 0.0);
+                    setStatusMessage ("Zone " + juce::String (zone + 1) + " of " + juce::String (count));
+                });
+        }
+        void threadComplete (bool userCancelled) override
+        {
+            if (userCancelled) result.aborted = true;
+            if (onDone) onDone (std::move (result));
+            delete this;
+        }
+        juce::File bundleDir;
+        std::function<void (authoring::MeasuredLevels)> onDone;
+        authoring::MeasuredLevels result;
+    };
+
+    void startMeasure (int index)
+    {
+        if (index < 0 || index >= (int) rows_.size()) return;
+        auto r = rows_[(size_t) index];
+        if (r.kind != Row::Bundle) return;
+        juce::Component::SafePointer<PresetBrowserPanel> safe (this);
+        auto* task = new MeasureTask (r.file, [safe] (authoring::MeasuredLevels m)
+        {
+            if (auto* self = safe.getComponent())
+            {
+                auto out = self->proc_.applyBundleLevels (m);
+                self->rebuild();
+                self->resultIsGood_ = out.ok;
+                self->destLine_ = out.ok ? out.message : juce::String ("NOT MEASURED. ") + out.message;
+                if (out.note.isNotEmpty()) self->destLine_ += "  (" + out.note + ")";
+                self->repaint();
+            }
+        });
+        task->launchThread();
     }
 
     //================================================== MOVE TO ANOTHER CATEGORY
@@ -1687,11 +1750,12 @@ public:
         r.removeFromTop (6);
 
         auto right = r.withTrimmedLeft (graphBounds().getWidth() + 20);
+        // Five chips on one row - the same five, in the same order, as the
+        // client's own keyboard lists them.
         auto chipRow = right.removeFromTop (26);
-        const int cw = juce::jmin (62, chipRow.getWidth() / 4 - 5);
+        const int cw = juce::jmin (64, (chipRow.getWidth() - 5 * (chips_.size() - 1)) / juce::jmax (1, chips_.size()));
         for (int i = 0; i < chips_.size(); ++i)
         {
-            if (i == 4) { right.removeFromTop (5); chipRow = right.removeFromTop (26); }
             chips_[i]->setBounds (chipRow.removeFromLeft (cw));
             chipRow.removeFromLeft (5);
         }

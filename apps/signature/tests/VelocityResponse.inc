@@ -19,13 +19,14 @@ static void testVelocityCurveShapes()
     bool softUp = true, hardDown = true;
     for (int v = 2; v <= 126; ++v)
     {
-        softUp   &= shapeVelocity (v, VelCurve::soft1) >= v;
-        softUp   &= shapeVelocity (v, VelCurve::soft1) >= shapeVelocity (v, VelCurve::soft2);
-        hardDown &= shapeVelocity (v, VelCurve::hard1) <= v;
-        hardDown &= shapeVelocity (v, VelCurve::hard1) <= shapeVelocity (v, VelCurve::hard2);
+        softUp   &= shapeVelocity (v, VelCurve::soft) >= v;
+        hardDown &= shapeVelocity (v, VelCurve::hard) <= v;
     }
-    CHECK (softUp, "SOFT 1 >= SOFT 2 >= NORMAL everywhere in between");
-    CHECK (hardDown, "HARD 1 <= HARD 2 <= NORMAL everywhere in between");
+    CHECK (softUp, "SOFT >= NORMAL everywhere in between");
+    CHECK (hardDown, "HARD <= NORMAL everywhere in between");
+    CHECK (kVelCurveCount == 5, "five curves, the same five as the client's Montage");
+    CHECK (velCurveFromId ("soft1") == VelCurve::soft && velCurveFromId ("hard2") == VelCurve::hard,
+           "a settings.json from the seven-curve first cut still maps onto the five");
 
     // WIDE is the only one that bends both ways: down low, up high. That is
     // precisely what an exponent cannot do, which is why it has its own branch.

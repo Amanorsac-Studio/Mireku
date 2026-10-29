@@ -1849,6 +1849,44 @@ JMSignatureProcessor::renameBundle (const juce::File& bundleDir, const juce::Str
 }
 
 //==============================================================================
+JMSignatureProcessor::MeasureOutcome
+JMSignatureProcessor::applyBundleLevels (const authoring::MeasuredLevels& measured)
+{
+    MeasureOutcome out;
+    auto wr = authoring::writeBundleLevels (measured);
+    if (! wr.ok) { out.message = wr.message; return out; }
+
+    state.library.rescan();
+
+    // Any slot holding this bundle gets a FRESH load, swapped in under the
+    // engine's lock by setBundle. The slot's own state - its engine params,
+    // rack, amp envelope, velocity depth/offset - is deliberately untouched:
+    // syncSlotToDsp pushes it straight back, because setBundle resets the
+    // engine's envelope to the bundle's defaults.
+    const auto path = measured.bundleDir.getFullPathName();
+    for (int i = 0; i < 4; ++i)
+    {
+        if (state.slots[(size_t) i].bundleDir != path) continue;
+        juce::String err;
+        auto b = state.library.loadBundle (measured.bundleDir, err);
+        if (b == nullptr)
+        {
+            out.note = "reload failed: " + err;
+            continue;
+        }
+        engines[(size_t) i].setBundle (b);
+        syncSlotToDsp (i);
+        ++out.reloadedSlots;
+    }
+
+    out.ok = true;
+    out.message = wr.message;
+    if (wr.note.isNotEmpty()) out.note = wr.note;
+    stateChanged.sendChangeMessage();
+    return out;
+}
+
+//==============================================================================
 JMSignatureProcessor::RecategoriseOutcome
 JMSignatureProcessor::recategoriseBundle (const juce::File& bundleDir, int newWorld)
 {
@@ -2175,7 +2213,11 @@ void JMSignatureProcessor::setVelocityCurve (VelCurve c, int fixedVel)
 {
     state.library.setVelocityCurve (velCurveId (c), fixedVel);
     for (auto& e : engines) e.setVelCurve (c, fixedVel);
-    stateChanged.sendChangeMessage();
+    // NO stateChanged here. The editor treats that broadcast as "the
+    // instrument changed - rebuild everything", which rebuilt the centre page
+    // and dropped the player back on MAIN every time he clicked a curve. A
+    // global preference changes no structure; the velocity panel refreshes
+    // itself.
 }
 
 void JMSignatureProcessor::syncSlotToDsp (int i)

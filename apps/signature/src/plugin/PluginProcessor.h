@@ -225,6 +225,22 @@ public:
     };
     RecategoriseOutcome recategoriseBundle (const juce::File& bundleDir, int newWorld);
 
+    /// ANCHORED PLAYBACK (2026-10-29). Takes a finished measurement (made on a
+    /// worker thread by authoring::measureBundleLevels), writes it into the
+    /// bundle through the guard, re-scans the library and RELOADS the bundle
+    /// into any slot playing it. A reload rather than an in-place patch: the
+    /// audio thread reads zones under the engine's spin lock on every note-on,
+    /// and anchorVelocity / levelDb are exactly the fields it reads, so they
+    /// cannot be edited behind its back the way meta.name can.
+    struct MeasureOutcome
+    {
+        bool ok = false;
+        juce::String message;
+        juce::String note;
+        int reloadedSlots = 0;
+    };
+    MeasureOutcome applyBundleLevels (const authoring::MeasuredLevels& measured);
+
     /// CLIENT-FACING GAP FOUND 2026-10-26: neither setStateInformation() nor
     /// loadPerformancePreset() ever re-loaded the .jmi bundles their saved slots
     /// name, so restoring a session or RECALLING a performance preset restored

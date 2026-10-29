@@ -21,6 +21,10 @@ on:
         description: "Build a TEST package (asks for a test key; never sell it)"
         type: boolean
         default: true
+      windows_only:
+        description: "Skip the macOS package (it bills ~10x; a Windows-only tester update does not need it)"
+        type: boolean
+        default: false
   push:
     tags: ["mireku-v*"]
 
@@ -68,6 +72,8 @@ jobs:
           if-no-files-found: error
 
   macos-pkg:
+    # A tag build always makes both. A hand-started build can leave macOS out.
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.windows_only }}
     runs-on: macos-14
     timeout-minutes: 120
     env:

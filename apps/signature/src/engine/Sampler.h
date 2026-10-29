@@ -29,16 +29,18 @@ namespace jm {
 // five of them - including the awkward Depth 127 / Offset 0, which is meant to
 // be silent until velocity 64. The constants are all here, so tuning by ear
 // against a specific instrument is a local edit.
-enum class VelCurve { normal = 0, soft1, soft2, hard1, hard2, wide, fixed };
-inline constexpr int kVelCurveCount = 7;
+// FIVE curves, not seven. The client's own Montage offers Normal / Soft / Hard /
+// Wide / Fixed; the newer Montage M splits Soft and Hard in two, and the first
+// cut of this copied that list. The two should agree, and his keyboard wins.
+enum class VelCurve { normal = 0, soft, hard, wide, fixed };
+inline constexpr int kVelCurveCount = 5;
 
 inline const char* velCurveId (VelCurve c)
 {
     switch (c)
     {
-        case VelCurve::soft1: return "soft1";   case VelCurve::soft2: return "soft2";
-        case VelCurve::hard1: return "hard1";   case VelCurve::hard2: return "hard2";
-        case VelCurve::wide:  return "wide";    case VelCurve::fixed: return "fixed";
+        case VelCurve::soft: return "soft";   case VelCurve::hard: return "hard";
+        case VelCurve::wide: return "wide";   case VelCurve::fixed: return "fixed";
         case VelCurve::normal: default: return "normal";
     }
 }
@@ -46,9 +48,8 @@ inline const char* velCurveName (VelCurve c)
 {
     switch (c)
     {
-        case VelCurve::soft1: return "SOFT 1";  case VelCurve::soft2: return "SOFT 2";
-        case VelCurve::hard1: return "HARD 1";  case VelCurve::hard2: return "HARD 2";
-        case VelCurve::wide:  return "WIDE";    case VelCurve::fixed: return "FIXED";
+        case VelCurve::soft: return "SOFT";   case VelCurve::hard: return "HARD";
+        case VelCurve::wide: return "WIDE";   case VelCurve::fixed: return "FIXED";
         case VelCurve::normal: default: return "NORMAL";
     }
 }
@@ -56,6 +57,10 @@ inline VelCurve velCurveFromId (const juce::String& id)
 {
     for (int i = 0; i < kVelCurveCount; ++i)
         if (id == velCurveId ((VelCurve) i)) return (VelCurve) i;
+    // The seven-curve ids that a settings.json written by the first cut may
+    // still carry. Nothing shipped with them, but the file on this machine did.
+    if (id == "soft1" || id == "soft2") return VelCurve::soft;
+    if (id == "hard1" || id == "hard2") return VelCurve::hard;
     return VelCurve::normal;
 }
 
@@ -80,10 +85,8 @@ inline int shapeVelocity (int vel, VelCurve curve, int fixedVel = 100)
     }
     else
     {
-        const float g = curve == VelCurve::soft1 ? 0.55f
-                      : curve == VelCurve::soft2 ? 0.75f
-                      : curve == VelCurve::hard2 ? 1.35f
-                      : curve == VelCurve::hard1 ? 1.80f : 1.0f;
+        const float g = curve == VelCurve::soft ? 0.60f
+                      : curve == VelCurve::hard ? 1.65f : 1.0f;
         y = std::pow (t, g);
     }
     return juce::jlimit (1, 127, (int) std::lround (127.0f * y));
@@ -105,14 +108,20 @@ inline int levelVelocity (int vel, int depth, int offset)
 
 /// Equal-power velocity-layer crossfade over a ±8-velocity overlap around each
 /// layer boundary (spec §5.1). Returns (layerIndex, gain) pairs, gains²-sum 1.
-inline std::vector<std::pair<int, float>> layerGains (const std::vector<jmi::VelocityLayer>& layers, int vel)
+/// `overlap` is the half-width of the blend in velocity steps. 8 is the JM
+/// default; 0 is playback.velocityMode "switch" - one layer, always, which is
+/// what two different RECORDINGS of the same note need, because summing them
+/// comb-filters. (A synth's layers are the same oscillator twice; a piano's are
+/// two hammer strikes.)
+inline std::vector<std::pair<int, float>> layerGains (const std::vector<jmi::VelocityLayer>& layers, int vel,
+                                                      int overlap = 8)
 {
     std::vector<std::pair<int, float>> out;
     if (layers.empty()) { out.emplace_back (0, 1.0f); return out; }
     auto sorted = layers;
     std::sort (sorted.begin(), sorted.end(), [] (auto& a, auto& b) { return a.lo < b.lo; });
-    constexpr int kOverlap = 8;
-    for (size_t i = 0; i + 1 < sorted.size(); ++i)
+    const int kOverlap = juce::jmax (0, overlap);
+    for (size_t i = 0; kOverlap > 0 && i + 1 < sorted.size(); ++i)
     {
         const int b = sorted[i].hi;                       // boundary between i and i+1
         if (vel >= b - kOverlap && vel <= b + kOverlap)
@@ -129,6 +138,155 @@ inline std::vector<std::pair<int, float>> layerGains (const std::vector<jmi::Vel
         if (vel >= sorted[i].lo && vel <= sorted[i].hi) { out.emplace_back ((int) i, 1.0f); return out; }
     out.emplace_back (vel < sorted.front().lo ? 0 : (int) sorted.size() - 1, 1.0f);
     return out;
+}
+
+//==============================================================================
+// ANCHORED VELOCITY - a port of packages/jmi-format/src/velocity.ts, which is
+// the reference; tests/VelocityVectors.json is generated from that file and the
+// test holds this port to it.
+//
+// A recorded layer already carries the real instrument's loudness at the
+// velocity it was played (its ANCHOR). Restarting a velocity curve inside every
+// layer double-counts that: the level steps at each boundary and the overall
+// range balloons. Instead the level follows ONE continuous curve through the
+// measured level of each anchor, and a layer change only alters timbre.
+struct AnchoredLayer { int anchorVelocity = 64; float levelDb = 0.0f; };
+struct VelocityPart  { int index = 0; float gain = 1.0f; float cutoffHz = 0.0f; };   // cutoff 0 = none
+struct VelocityPlan  { float targetDb = 0.0f; std::vector<VelocityPart> parts; };
+
+namespace anchored_detail
+{
+    inline constexpr float kSoftFloorDb   = 24.0f;   // how far under the softest anchor the curve may fall
+    inline constexpr float kLoudCeilingDb = 3.0f;    // how far over the loudest it may rise
+    inline constexpr float kMaxTrimDb     = 12.0f;   // bounded correction: a mis-measured level cannot blow up
+    inline constexpr float kLoneSlopeDb   = 0.25f;   // dB per velocity step with only one layer to go on
+    inline constexpr float kFilterMaxHz   = 20000.0f;
+    inline constexpr float kFilterMinHz   = 1200.0f;
+    inline constexpr float kBrightSpan    = 32.0f;   // this many steps under its anchor = the full tilt
+    inline constexpr float kBrightOctaves = 1.5f;
+}
+
+/// The continuous level curve through the anchors, dBFS. `sorted` ascends by anchor.
+inline float anchoredTargetDb (const std::vector<AnchoredLayer>& sorted, int velocity)
+{
+    using namespace anchored_detail;
+    const float v = (float) juce::jlimit (1, 127, velocity);
+    if (sorted.empty()) return 0.0f;
+    const auto& first = sorted.front();
+    const auto& last  = sorted.back();
+    if (sorted.size() == 1)
+    {
+        const float db = first.levelDb + kLoneSlopeDb * (v - (float) first.anchorVelocity);
+        return juce::jlimit (first.levelDb - kSoftFloorDb, first.levelDb + kLoudCeilingDb, db);
+    }
+    if (v <= (float) first.anchorVelocity)
+    {
+        const auto& next = sorted[1];
+        const float slope = (next.levelDb - first.levelDb)
+                          / (float) juce::jmax (1, next.anchorVelocity - first.anchorVelocity);
+        return juce::jmax (first.levelDb - kSoftFloorDb,
+                           first.levelDb + slope * (v - (float) first.anchorVelocity));
+    }
+    if (v >= (float) last.anchorVelocity)
+    {
+        const auto& prev = sorted[sorted.size() - 2];
+        const float slope = (last.levelDb - prev.levelDb)
+                          / (float) juce::jmax (1, last.anchorVelocity - prev.anchorVelocity);
+        return juce::jmin (last.levelDb + kLoudCeilingDb,
+                           last.levelDb + slope * (v - (float) last.anchorVelocity));
+    }
+    for (size_t i = 0; i + 1 < sorted.size(); ++i)
+    {
+        const auto& a = sorted[i];
+        const auto& b = sorted[i + 1];
+        if (v >= (float) a.anchorVelocity && v <= (float) b.anchorVelocity)
+        {
+            const float t = (v - (float) a.anchorVelocity)
+                          / (float) juce::jmax (1, b.anchorVelocity - a.anchorVelocity);
+            return a.levelDb + t * (b.levelDb - a.levelDb);
+        }
+    }
+    return last.levelDb;
+}
+
+/// Which layers to play at `velocity`, at what gain, and how dark.
+///   xfade       half-width of the equal-power blend around a boundary; 0 = hard switch
+///   brightness  0..100, darkening below a layer's anchor; 0 = off
+///   levelVel    the velocity the LEVEL is read at. Defaults to `velocity`; the
+///               engine passes the DEPTH/OFFSET-shaped value here so those two
+///               knobs still work in anchored mode while the layer choice - the
+///               timbre - stays on the velocity actually played.
+inline VelocityPlan anchoredPlan (const std::vector<AnchoredLayer>& layers, int velocity,
+                                  float xfade = 0.0f, float brightness = 0.0f, int levelVel = -1)
+{
+    using namespace anchored_detail;
+    struct Ordered { AnchoredLayer l; int index; };
+    std::vector<Ordered> order;
+    for (size_t i = 0; i < layers.size(); ++i) order.push_back ({ layers[i], (int) i });
+    std::stable_sort (order.begin(), order.end(),
+                      [] (const Ordered& a, const Ordered& b) { return a.l.anchorVelocity < b.l.anchorVelocity; });
+    VelocityPlan plan;
+    if (order.empty()) return plan;
+
+    std::vector<AnchoredLayer> sorted;
+    for (auto& o : order) sorted.push_back (o.l);
+    const int v = juce::jlimit (1, 127, velocity);
+    plan.targetDb = anchoredTargetDb (sorted, levelVel < 0 ? v : juce::jlimit (1, 127, levelVel));
+
+    auto tilt = [&] (int anchor) -> float
+    {
+        if (brightness <= 0.0f) return 0.0f;
+        const float under = juce::jmin (0.0f, (float) (v - anchor));   // only ever darker, never brighter
+        if (under == 0.0f) return 0.0f;
+        const float oct = (under / kBrightSpan) * (brightness / 100.0f) * kBrightOctaves;
+        const float hz = juce::jlimit (kFilterMinHz, kFilterMaxHz, kFilterMaxHz * std::pow (2.0f, oct));
+        return hz >= kFilterMaxHz * 0.98f ? 0.0f : hz;
+    };
+    auto partFor = [&] (const Ordered& o, float weight)
+    {
+        VelocityPart p;
+        p.index = o.index;
+        p.gain = weight * std::pow (10.0f, juce::jlimit (-kMaxTrimDb, kMaxTrimDb, plan.targetDb - o.l.levelDb) / 20.0f);
+        p.cutoffHz = tilt (o.l.anchorVelocity);
+        return p;
+    };
+
+    // nearest anchor carries the timbre
+    size_t k = 0;
+    for (size_t i = 1; i < order.size(); ++i)
+        if (std::abs (order[i].l.anchorVelocity - v) < std::abs (order[k].l.anchorVelocity - v)) k = i;
+
+    if (xfade > 0.0f && order.size() > 1)
+    {
+        // blend across the boundary (the midpoint between two anchors) when inside the band
+        for (size_t i = 0; i + 1 < order.size(); ++i)
+        {
+            const auto& a = order[i];
+            const auto& b = order[i + 1];
+            if (v < a.l.anchorVelocity || v > b.l.anchorVelocity) continue;
+            const float boundary = (float) (a.l.anchorVelocity + b.l.anchorVelocity) * 0.5f;
+            const float half = juce::jmin (xfade, (float) (b.l.anchorVelocity - a.l.anchorVelocity) * 0.5f);
+            if (std::abs ((float) v - boundary) > half || half <= 0.0f) break;
+            const float u = juce::jlimit (0.0f, 1.0f, ((float) v - (boundary - half)) / (2.0f * half));
+            const float wLow = std::cos (u * juce::MathConstants<float>::halfPi);
+            const float wHigh = std::sin (u * juce::MathConstants<float>::halfPi);
+            plan.parts.push_back (partFor (a, wLow));
+            plan.parts.push_back (partFor (b, wHigh));
+            return plan;
+        }
+    }
+    plan.parts.push_back (partFor (order[k], 1.0f));
+    return plan;
+}
+
+/// SFZ amp_veltrack, for the non-anchored modes: 100 = amplitude follows
+/// (velocity/127)^2; 0 = velocity has no effect on level. A negative track means
+/// "not declared", and the caller keeps the JM default law.
+inline float ampVelTrackGain (int velocity, double track)
+{
+    const float t = (float) juce::jlimit (0.0, 100.0, track) / 100.0f;
+    const float v = (float) juce::jlimit (1, 127, velocity) / 127.0f;
+    return 1.0f - t + t * v * v;
 }
 
 /// Pick the best zone for (note, velocity): key range + velocity window match,
@@ -274,11 +432,44 @@ public:
         vel = engine_math::shapeVelocity (vel, (VelCurve) velCurve_.load (std::memory_order_relaxed),
                                           velFixed_.load (std::memory_order_relaxed));
 
+        const int depth = velDepth_.load (std::memory_order_relaxed);
+        const int offset = velOffset_.load (std::memory_order_relaxed);
+
+        // ANCHORED playback: the bundle's zones carry the velocity each layer
+        // was recorded at and its measured level, so the level follows one
+        // continuous curve through those anchors and a layer change only
+        // changes timbre. Falls through to the window logic below when the
+        // bundle says anchored but a note has no measured zones.
+        if (inst.velocityAnchored)
+        {
+            std::vector<engine_math::AnchoredLayer> layers;
+            std::vector<int> zoneIdx;
+            for (size_t i = 0; i < inst.zones.size(); ++i)
+            {
+                auto& z = inst.zones[i];
+                if (note < z.keyRangeLo || note > z.keyRangeHi) continue;
+                if (z.roundRobins.empty() || z.anchorVelocity <= 0 || z.levelDb > 0.0) continue;
+                layers.push_back ({ z.anchorVelocity, (float) z.levelDb });
+                zoneIdx.push_back ((int) i);
+            }
+            if (! layers.empty())
+            {
+                auto plan = engine_math::anchoredPlan (layers, vel, (float) inst.velocityXfade,
+                                                       (float) inst.velocityBrightness,
+                                                       engine_math::levelVelocity (vel, depth, offset));
+                for (auto& part : plan.parts)
+                    if (part.gain > 1.0e-4f)
+                        startVoice (zoneIdx[(size_t) part.index], note, vel, part.gain, part.cutoffHz, true);
+                return;
+            }
+        }
+
         int selVel = vel;
         if (world_ == 0)                                   // Rhodes Bark: crossfade bias
             selVel = juce::jlimit (1, 127, vel + (int) (engineParams_[0] * 0.30f));
 
-        auto gains = engine_math::layerGains (inst.velocityMap, selVel);
+        // "switch" = one layer, no blend. The JM default blends +-8.
+        auto gains = engine_math::layerGains (inst.velocityMap, selVel, inst.velocitySwitch ? 0 : 8);
         for (auto& [layerIdx, gain] : gains)
         {
             int repVel = selVel;
@@ -477,7 +668,12 @@ private:
         void release() { if (! releasing) { releasing = true; phase = 3; } }
     };
 
-    void startVoice (int zoneIdx, int note, int vel, float gain)
+    /// `brightCutoffHz` > 0 darkens the voice (anchored brightness tilt).
+    /// `anchoredGain` means `gain` is already the absolute level from the
+    /// anchored plan and the JM velocity law must NOT be applied on top - that
+    /// double-counting is the very thing anchored mode exists to remove.
+    void startVoice (int zoneIdx, int note, int vel, float gain,
+                     float brightCutoffHz = 0.0f, bool anchoredGain = false)
     {
         auto& inst = bundle_->inst;
         auto& zone = inst.zones[(size_t) zoneIdx];
@@ -506,7 +702,12 @@ private:
                                                             velOffset_.load (std::memory_order_relaxed));
         const float lvlNorm = (float) lvlVel / 127.0f;
         const float velNorm = (float) vel / 127.0f;   // SHAPED velocity, stage one
-        v->gain = gain * (0.35f + 0.65f * lvlNorm);
+        if (anchoredGain)
+            v->gain = gain;                            // the plan already read DEPTH/OFFSET
+        else if (bundle_->inst.ampVelTrack >= 0.0)
+            v->gain = gain * engine_math::ampVelTrackGain (lvlVel, bundle_->inst.ampVelTrack);   // SFZ amp_veltrack
+        else
+            v->gain = gain * (0.35f + 0.65f * lvlNorm);   // the JM default law
         v->startStamp = ++stampCounter_;
         v->env = 0; v->phase = 0;
         v->starveGain = 1.0f; v->starveSamples = 0;
@@ -523,16 +724,22 @@ private:
         v->driveShaper[0].reset();
         v->driveShaper[1].reset();
         v->driveOn = false;
-        v->useLp = (world_ == 2);                       // FM: velocity→brightness
-        if (v->useLp)
+        // One low-pass per voice, two reasons to want it: the FM world's
+        // velocity->brightness voicing, and the anchored brightness tilt
+        // (darker below a layer's anchor). Both can apply; the darker wins.
+        float cutoff = 0.0f;
+        if (world_ == 2)                                // FM: velocity->brightness
         {
             const float bright = engineParams_[0] / 100.0f;
             // FM brightness tracks the SHAPED velocity, not the levelled one:
             // DEPTH and OFFSET are a level control, and letting them open
             // the filter too would make them change the tone as well.
-            const float cutoff = 900.0f * std::pow (2.0f, 2.0f + 2.6f * (bright * velNorm + (1.0f - bright) * 0.75f));
-            for (auto& f : v->lp) { f.setCutoff (juce::jmin (cutoff, 18000.0f), sr_); f.reset(); }
+            cutoff = juce::jmin (18000.0f, 900.0f * std::pow (2.0f, 2.0f + 2.6f * (bright * velNorm + (1.0f - bright) * 0.75f)));
         }
+        if (brightCutoffHz > 0.0f) cutoff = cutoff > 0.0f ? juce::jmin (cutoff, brightCutoffHz) : brightCutoffHz;
+        v->useLp = cutoff > 0.0f;
+        if (v->useLp)
+            for (auto& f : v->lp) { f.setCutoff (cutoff, sr_); f.reset(); }
 
         v->sample->voiceRefs++;
         v->sample->lastUseMs.store (coarseNowMs().load (std::memory_order_relaxed), std::memory_order_relaxed);

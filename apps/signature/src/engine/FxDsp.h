@@ -10,6 +10,9 @@
 #include <functional>
 #include <memory>
 #include "FxParams.h"
+// Signalsmith Stretch (MIT) - the Hall/Shimmer's pitch shifter. See the
+// CMakeLists block that fetches it; the licence notice ships with the product.
+#include "signalsmith-stretch.h"
 #include "Antialias.h"
 
 namespace jm {
@@ -677,6 +680,108 @@ struct OctaveUpShifter
     }
 };
 
+//===================================================== FDN reverb core
+// Replaces juce::Reverb (Freeverb) under both the Plate and the Hall
+// (2026-10-29, after measuring it): Freeverb's eight parallel combs feed back
+// at 0.7 + 0.28 * room, so their steady-state gain swings 6x..44x with the
+// DECAY control, "20 s" cannot be reached (about 9 s is the ceiling), its
+// input is L+R summed, and its tail is a comb's. This is an eight-line
+// feedback delay network with a Householder mixing matrix: lossless mixing,
+// so the ONLY loss is the per-line gain, which is computed from the RT60 the
+// control asks for - DECAY now means seconds. Stereo in (odd lines take the
+// right channel), stereo out, per-line damping, and slow modulation of the
+// read positions so a long tail does not ring on a fixed set of modes.
+struct FdnReverb
+{
+    static constexpr int N = 8;
+    // Mutually prime-ish lengths in ms at size 1.0, spread over ~2 octaves so
+    // the mode density fills in quickly. Scaled by SIZE.
+    static constexpr float kBaseMs[N] = { 23.1f, 29.7f, 37.3f, 43.9f, 53.3f, 61.7f, 73.9f, 89.3f };
+
+    void prepare (double sampleRate)
+    {
+        sr = sampleRate;
+        const int maxLen = (int) (sr * 0.0893 * 1.6) + 256;      // longest line at size 1.6, plus mod room
+        size = juce::nextPowerOfTwo (maxLen);
+        for (auto& b : buf) b.assign ((size_t) size, 0.0f);
+        reset();
+    }
+    void reset()
+    {
+        for (auto& b : buf) std::fill (b.begin(), b.end(), 0.0f);
+        for (auto& d : damp) d.reset();
+        w = 0; phase = 0.0;
+    }
+    /// size 0..1 -> 0.45x..1.6x of the base lengths. rt60 in seconds. damp 0..1
+    /// (0 = bright, 1 = dark). mod 0..1 depth of the read-position wobble.
+    void setParams (float size01, float rt60Seconds, float damp01, float mod01)
+    {
+        const float scale = 0.45f + 1.15f * juce::jlimit (0.0f, 1.0f, size01);
+        const float rt = juce::jmax (0.05f, rt60Seconds);
+        float gSq = 0.0f;
+        for (int i = 0; i < N; ++i)
+        {
+            lenSamp[i] = (float) (kBaseMs[i] * 0.001 * sr) * scale;
+            // -60 dB after rt60 seconds of travelling round THIS line
+            gain[i] = std::pow (10.0f, -3.0f * lenSamp[i] / (rt * (float) sr));
+            gSq += gain[i] * gain[i];
+            modDepth[i] = mod01 * (float) (sr * 0.0004) * (1.0f + 0.15f * (float) i);   // up to ~0.5 ms
+        }
+        const float cutoff = 1500.0f + 16500.0f * (1.0f - damp01) * (1.0f - damp01);
+        for (auto& d : damp) d.setCutoff (juce::jmin (cutoff, (float) (sr * 0.45)), sr);
+        // LEVEL: the energy a lossless-mixed network holds scales as
+        // 1 / sqrt (1 - g^2); from 1 s to 20 s that is about 9 dB. Physically
+        // right - a cathedral IS louder in the tail - but it makes DECAY a
+        // volume control, which it was before and must not be again.
+        // Normalised to a 2 s room.
+        const float gMean = std::sqrt (gSq / (float) N);
+        const float lenMean = 0.0514f * (float) sr * scale;
+        const float gRef = std::pow (10.0f, -3.0f * lenMean / (2.0f * (float) sr));
+        // Exponent 0.32, not the 0.5 the stored-energy argument gives: the
+        // measured burst PEAK follows the tail energy less than fully (the
+        // first second of a tail is mostly early energy), and 0.5 came out
+        // 4.2 dB quiet at 20 s against 1 s. 0.32 measures within a dB.
+        comp = juce::jlimit (0.15f, 1.5f, std::pow ((1.0f - gMean * gMean) / (1.0f - gRef * gRef), 0.32f));
+        modInc = 0.31 / sr;                                   // ~0.3 Hz, one LFO, N phase offsets
+    }
+    void process (float inL, float inR, float& outL, float& outR)
+    {
+        float v[N];
+        float sum = 0.0f;
+        const int m = size - 1;
+        for (int i = 0; i < N; ++i)
+        {
+            const float ph = (float) (phase + (double) i / (double) N);
+            const float d = lenSamp[i] + modDepth[i] * std::sin (juce::MathConstants<float>::twoPi * ph);
+            const float rp = (float) w - d;
+            const int i0 = (int) std::floor (rp);
+            const float frac = rp - (float) i0;
+            const int a = (i0 % size + size) & m;
+            const int b = (a + 1) & m;
+            const float x = buf[i][(size_t) a] * (1.0f - frac) + buf[i][(size_t) b] * frac;
+            v[i] = damp[i].process (x) * gain[i];
+            sum += v[i];
+        }
+        phase += modInc; if (phase >= 1.0) phase -= 1.0;
+        // Householder: y = v - (2/N) * sum. Orthogonal, so lossless.
+        const float k = 2.0f / (float) N * sum;
+        for (int i = 0; i < N; ++i)
+            buf[i][(size_t) w] = (v[i] - k) + ((i & 1) ? inR : inL) * 0.5f;
+        w = (w + 1) & m;
+        // alternating-sign taps so the two outputs decorrelate
+        outL = (v[0] - v[2] + v[4] - v[6]) * 0.5f * comp;
+        outR = (v[1] - v[3] + v[5] - v[7]) * 0.5f * comp;
+    }
+    float compensation() const { return comp; }
+
+    std::array<std::vector<float>, N> buf;
+    std::array<OnePoleLP, N> damp;
+    std::array<float, N> lenSamp {}, gain {}, modDepth {};
+    int size = 0, w = 0;
+    double sr = 48000, phase = 0.0, modInc = 0.0;
+    float comp = 1.0f;
+};
+
 //================================================ 10/11. Plate + Hall/Shimmer
 class ReverbFxBase : public FxUnit
 {
@@ -685,110 +790,95 @@ public:
     void prepare (double sr, int maxBlock) override
     {
         sr_ = sr;
-        rev_.setSampleRate (sr);
+        fdn_.prepare (sr);
         pre_.prepare (sr, 220.0f);
-        shifter_.prepare (sr);
         modDl_.prepare (sr, 12.0f);
         for (auto& f : shimLp_) f.setCutoff (5000.0f, sr);
         for (auto& f : shimHp_) f.setCutoff (120.0f, sr);
         wet_.setSize (2, maxBlock);
+        shim_.setSize (2, maxBlock);
+        // SIGNALSMITH STRETCH as the octave-up shifter. The grain shifter it
+        // replaces measured as contributing NOTHING audible at shimmer 100,
+        // and before it was guarded it ran away. presetCheaper is the
+        // smaller FFT; a shimmer is heard through a long tail, where its
+        // extra smearing is invisible and its CPU saving is not.
+        shifter_.presetCheaper (2, (float) sr);
+        shifter_.setTransposeSemitones (12.0f);
         reset();
     }
     void reset() override
     {
-        rev_.reset(); pre_.reset(); shifter_.reset(); modDl_.reset(); shimL_ = shimR_ = 0;
+        fdn_.reset(); pre_.reset(); modDl_.reset(); shifter_.reset();
+        shim_.clear();
         for (auto& f : shimLp_) f.z = 0.0f;
         for (auto& f : shimHp_) f.lp.z = 0.0f;
     }
     void process (juce::AudioBuffer<float>& b, double) override
     {
         const float size = p (0) / 100.0f;
-        const float decay = p (1);
+        const float decay = p (1);                                   // seconds, and now it means it
         const float shimmer = hall_ ? p (2) / 100.0f : 0.0f;
         const float mod = hall_ ? p (3) / 100.0f : 0.0f;
         const float preMs = hall_ ? 8.0f : p (2);
-        const float damp = hall_ ? 0.35f : p (3) / 100.0f;
+        const float damp = hall_ ? 0.45f : p (3) / 100.0f;
         const float mix = p (4) / 100.0f;
 
-        juce::Reverb::Parameters rp;
-        const float decayNorm = juce::jlimit (0.0f, 1.0f,
-            (std::log (decay) - std::log (hall_ ? 0.5f : 0.3f)) / (std::log (hall_ ? 20.0f : 8.0f) - std::log (hall_ ? 0.5f : 0.3f)));
-        rp.roomSize = juce::jlimit (0.0f, 0.99f, 0.45f + 0.35f * size + 0.19f * decayNorm);
-        rp.damping  = juce::jlimit (0.0f, 1.0f, damp);
-        rp.wetLevel = 1.0f; rp.dryLevel = 0.0f;
-        rp.width = 1.0f;
-        rev_.setParameters (rp);
-        modLfo_.setRate (0.7f, sr_);
+        // A plate is a smaller, denser, brighter space than a hall: the same
+        // network at 0.55 of the size, with a touch of built-in modulation so
+        // its short tail does not ring metallic.
+        fdn_.setParams (hall_ ? size : size * 0.55f, decay, damp, hall_ ? 0.25f + 0.75f * mod : 0.15f);
 
         const int n = b.getNumSamples();
         auto* L = b.getWritePointer (0);
         auto* R = b.getNumChannels() > 1 ? b.getWritePointer (1) : L;
         auto* wL = wet_.getWritePointer (0);
         auto* wR = wet_.getWritePointer (1);
+        auto* sL = shim_.getWritePointer (0);
+        auto* sR = shim_.getWritePointer (1);
         const float msToSamp = (float) (sr_ / 1000.0);
+        const float d = juce::jmax (1.0f, preMs * msToSamp);
         for (int i = 0; i < n; ++i)
         {
-            pre_.push (L[i] + shimL_, R[i] + shimR_);
-            float d = juce::jmax (1.0f, preMs * msToSamp);
-            wL[i] = pre_.read (0, d);
-            wR[i] = pre_.read (1, d);
+            // the shimmer return from the PREVIOUS block is the feedback
+            const float fbL = shimmer > 0.001f ? sL[i] * shimmer * 0.6f : 0.0f;
+            const float fbR = shimmer > 0.001f ? sR[i] * shimmer * 0.6f : 0.0f;
+            pre_.push (L[i] + fbL, R[i] + fbR);
+            float inL = pre_.read (0, d), inR = pre_.read (1, d);
+            fdn_.process (inL, inR, wL[i], wR[i]);
         }
-        rev_.processStereo (wL, wR, n);
-        // LEVEL COMPENSATION, measured not guessed. juce::Reverb is Freeverb:
-        // its combs feed back at 0.7 + 0.28 * roomSize, and a comb's steady
-        // state gain is 1 / (1 - feedback). From room 0.5 to room 0.99 that is
-        // 6x to 44x - the hall at a long decay came out at +12.8 dB on noise
-        // that peaked at -6, four times over full scale, slamming the master
-        // limiter. Scaling the wet by (1 - fb) relative to a mid room keeps
-        // DECAY a time control rather than a volume control.
+        if (shimmer > 0.001f)
         {
-            const float fb = 0.7f + 0.28f * rp.roomSize;
-            const float comp = juce::jlimit (0.05f, 1.0f, (1.0f - fb) / 0.16f);     // 0.16 == 1 - fb at room 0.5
-            juce::FloatVectorOperations::multiply (wL, comp, n);
-            juce::FloatVectorOperations::multiply (wR, comp, n);
+            // THE SHIMMER LOOP, block-wise: wet -> octave up -> band limit ->
+            // soft ceiling -> next block's input. Band limit (120 Hz..5 kHz on
+            // what recirculates) and the delays' loop guard are what stop the
+            // climb-to-a-whine runaway the client heard; the shifter's own
+            // latency (about a tenth of a second) is just more pre-delay in
+            // the loop, which a shimmer wants anyway.
+            const float* in[2] = { wL, wR };
+            float* out[2] = { sL, sR };
+            shifter_.process (in, n, out, n);
+            for (int i = 0; i < n; ++i)
+            {
+                sL[i] = guard_.shape (shimLp_[0].process (shimHp_[0].process (sL[i])));
+                sR[i] = guard_.shape (shimLp_[1].process (shimHp_[1].process (sR[i])));
+            }
         }
+        else shim_.clear();
         for (int i = 0; i < n; ++i)
         {
-            if (mod > 0.001f)
-            {
-                modDl_.push (wL[i], wR[i]);
-                float dm = (2.0f + modLfo_.tickSin() * 1.6f * mod) * msToSamp;
-                wL[i] = modDl_.read (0, dm);
-                wR[i] = modDl_.read (1, dm * 1.07f);
-            }
-            if (shimmer > 0.001f)
-            {
-                float sl, srr;
-                shifter_.processSample (wL[i], wR[i], sl, srr);
-                // THE SHIMMER RUNAWAY. This is a feedback loop through a
-                // reverb whose room gain can exceed unity, and every pass
-                // through it shifts the signal UP an octave. Unguarded, a
-                // long decay climbed to a whine at the top of the band in a
-                // few seconds, aliased, and went non-finite - "crashes with a
-                // weird frequency". Three things the delays already had and
-                // this did not: a band limit on what recirculates (nothing
-                // above 5 kHz is shifted up again, nothing below 120 Hz piles
-                // up), and the same soft ceiling the delay feedback runs
-                // through, so the loop can sustain but never run away.
-                sl  = guard_.shape (shimLp_[0].process (shimHp_[0].process (sl)));
-                srr = guard_.shape (shimLp_[1].process (shimHp_[1].process (srr)));
-                shimL_ = sl * shimmer * 0.5f;
-                shimR_ = srr * shimmer * 0.5f;
-            }
-            else shimL_ = shimR_ = 0;
             L[i] = L[i] * (1.0f - mix) + wL[i] * mix;
             R[i] = R[i] * (1.0f - mix) + wR[i] * mix;
         }
     }
+    /// For the tests: the FDN's level compensation at the current settings.
+    float levelCompensation() const { return fdn_.compensation(); }
 private:
     bool hall_;
     double sr_ = 48000;
-    juce::Reverb rev_;
+    FdnReverb fdn_;
     ModDelay pre_, modDl_;
-    OctaveUpShifter shifter_;
-    Lfo modLfo_;
-    juce::AudioBuffer<float> wet_;
-    float shimL_ = 0, shimR_ = 0;
+    signalsmith::stretch::SignalsmithStretch<float> shifter_;
+    juce::AudioBuffer<float> wet_, shim_;
     SoftCeiling guard_ = makeLoopGuard();          // the delays' feedback guard, on the shimmer loop
     std::array<OnePoleLP, 2> shimLp_;
     std::array<OnePoleHP, 2> shimHp_;

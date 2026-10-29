@@ -25,6 +25,32 @@ endif()
 # Shared read-only format header (packages/jmi-format/cpp/jmi_format.h)
 set(JMI_FORMAT_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../../packages/jmi-format/cpp")
 
+# ------------------------------------------------ Signalsmith Stretch (MIT)
+# The Hall/Shimmer's pitch shifter (2026-10-29). Header-only; it needs the
+# signalsmith-linear FFT library checked out INSIDE it as `signalsmith-linear`,
+# because it includes "signalsmith-linear/stft.h" relative to itself. Same
+# shape as JUCE above: a pre-cloned copy in external/ is used when present,
+# otherwise both are fetched at pinned commits. Both are MIT; the notices are
+# in each checkout's LICENSE.txt and must ship with the product.
+set(SIGNALSMITH_LOCAL "${CMAKE_CURRENT_SOURCE_DIR}/external/signalsmith-stretch")
+if(EXISTS "${SIGNALSMITH_LOCAL}/signalsmith-stretch.h" AND EXISTS "${SIGNALSMITH_LOCAL}/signalsmith-linear/stft.h")
+    set(SIGNALSMITH_INCLUDE "${SIGNALSMITH_LOCAL}")
+else()
+    include(FetchContent)
+    # Populate, not MakeAvailable: neither repo's own CMakeLists is wanted
+    # (they build demos and a command-line tool), only the headers.
+    FetchContent_Declare(signalsmith_stretch
+        GIT_REPOSITORY https://github.com/Signalsmith-Audio/signalsmith-stretch.git
+        GIT_TAG        88061fd4eda56a2353c5d65c74aa3f4ccf76f9da)
+    FetchContent_Populate(signalsmith_stretch)
+    FetchContent_Declare(signalsmith_linear
+        GIT_REPOSITORY https://github.com/Signalsmith-Audio/linear.git
+        GIT_TAG        7bb1c8f36794d6980080ce817c91f8da8fe56a66
+        SOURCE_DIR     "${signalsmith_stretch_SOURCE_DIR}/signalsmith-linear")
+    FetchContent_Populate(signalsmith_linear)
+    set(SIGNALSMITH_INCLUDE "${signalsmith_stretch_SOURCE_DIR}")
+endif()
+
 # ------------------------------------------- Audio device backends (R6 issue 1)
 # The client could not see his Behringer UMC 404HD outside DirectSound. Two
 # separate things were wrong; this block fixes the build half of both.
@@ -180,7 +206,7 @@ juce_add_binary_data(JMAssets HEADER_NAME JMAssets.h NAMESPACE JMAssets SOURCES
     resources/kit/flourish-gold.png)
 target_link_libraries(Mireku PRIVATE JMAssets)
 
-target_include_directories(Mireku PRIVATE src "${JMI_FORMAT_INCLUDE}")
+target_include_directories(Mireku PRIVATE src "${JMI_FORMAT_INCLUDE}" "${SIGNALSMITH_INCLUDE}")
 
 target_compile_definitions(Mireku PUBLIC
     JM_APP_VERSION="${PROJECT_VERSION}"
@@ -227,7 +253,7 @@ target_link_libraries(Mireku PRIVATE
 juce_add_console_app(MirekuTests PRODUCT_NAME "MirekuTests")
 
 target_sources(MirekuTests PRIVATE tests/EngineTests.cpp)
-target_include_directories(MirekuTests PRIVATE src "${JMI_FORMAT_INCLUDE}")
+target_include_directories(MirekuTests PRIVATE src "${JMI_FORMAT_INCLUDE}" "${SIGNALSMITH_INCLUDE}")
 target_compile_definitions(MirekuTests PRIVATE
     JM_APP_VERSION="${PROJECT_VERSION}"
     JUCE_WEB_BROWSER=0
@@ -248,7 +274,7 @@ target_sources(MirekuSnapshot PRIVATE
     tests/SnapshotCheck.cpp
     src/plugin/PluginProcessor.cpp
     src/plugin/PluginEditor.cpp)
-target_include_directories(MirekuSnapshot PRIVATE src "${JMI_FORMAT_INCLUDE}"
+target_include_directories(MirekuSnapshot PRIVATE src "${JMI_FORMAT_INCLUDE}" "${SIGNALSMITH_INCLUDE}"
     "${CMAKE_CURRENT_BINARY_DIR}/juce_binarydata_JMAssets/JuceLibraryCode")
 target_compile_definitions(MirekuSnapshot PRIVATE
     JM_APP_VERSION="${PROJECT_VERSION}"
@@ -278,7 +304,7 @@ target_sources(MirekuValidation PRIVATE
     tests/ValidationTests.cpp
     src/plugin/PluginProcessor.cpp
     src/plugin/PluginEditor.cpp)
-target_include_directories(MirekuValidation PRIVATE src "${JMI_FORMAT_INCLUDE}"
+target_include_directories(MirekuValidation PRIVATE src "${JMI_FORMAT_INCLUDE}" "${SIGNALSMITH_INCLUDE}"
     "${CMAKE_CURRENT_BINARY_DIR}/juce_binarydata_JMAssets/JuceLibraryCode")
 target_compile_definitions(MirekuValidation PRIVATE
     JM_APP_VERSION="${PROJECT_VERSION}"

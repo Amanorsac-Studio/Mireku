@@ -1626,6 +1626,8 @@ static void testArpStateRoundTrip()
 #include "AnchoredVelocity.inc"
 // HALL/SHIMMER feedback runaway - the client's "crashes with a weird frequency".
 #include "ShimmerRunaway.inc"
+// FDN REVERB - the replacement for juce::Reverb, held to measured figures.
+#include "FdnReverb.inc"
 
 //==============================================================================
 //==============================================================================
@@ -1977,6 +1979,11 @@ int main()
     testMeasurePassWritesAnchoredBundle();
     testMeasureHandlesSamplesShorterThanTheWindow();
     testShimmerFeedbackIsBounded();
+    // FDN REVERB
+    testFdnDecayMeansSeconds();
+    testFdnLevelDoesNotFollowDecay();
+    testFdnKeepsStereo();
+    testShimmerIsAudible();
     // DSP STANDARDS PASS
     testAliasSuppression();
     testToneBeforeAfter();

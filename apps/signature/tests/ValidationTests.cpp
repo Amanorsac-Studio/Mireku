@@ -1380,8 +1380,9 @@ static void testRenameMigration()
 int main (int argc, char* argv[])
 {
     bool doNull = true, doMatrix = true, doRegression = true, doNeutral = true,
-         doMigration = true, rebaseline = false;
+         doMigration = true, rebaseline = false, measureApply = false;
     juce::File neutralLibrary (JM_LIBRARY_TESTDATA);
+    juce::File measureDir;
     for (int i = 1; i < argc; ++i)
     {
         const juce::String a (argv[i]);
@@ -1401,9 +1402,65 @@ int main (int argc, char* argv[])
                 neutralLibrary = juce::File (argv[++i]);
         }
         else if (a == "--rebaseline") rebaseline = true;
+        // `--measure <bundle-or-library>` runs the anchored-playback measurement
+        // pass headlessly. WITHOUT --apply it is a DRY RUN: the samples are read
+        // (read-only) and the edited instrument.json is written to a scratch
+        // copy beside this tool's output, never into the bundle. With --apply
+        // it writes through authoring::writeBundleLevels, i.e. the same guard
+        // (.bak, read back, validated, restored on failure) the app uses.
+        else if (a == "--measure" && i + 1 < argc) { measureDir = juce::File (argv[++i]); }
+        else if (a == "--apply") measureApply = true;
     }
     if (juce::SystemStats::getEnvironmentVariable ("JM_REBASELINE", {}).isNotEmpty())
         rebaseline = true;
+
+    if (measureDir != juce::File())
+    {
+        std::printf ("MIREKU anchored-playback measurement (%s)\n", measureApply ? "APPLY" : "DRY RUN");
+        juce::Array<juce::File> bundles;
+        if (authoring::looksLikeBundle (measureDir)) bundles.add (measureDir);
+        else for (auto& d : measureDir.findChildFiles (juce::File::findDirectories, false, "*.jmi"))
+            if (authoring::looksLikeBundle (d)) bundles.add (d);
+        auto scratch = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("mireku-measure-dryrun");
+        scratch.createDirectory();
+        int okCount = 0;
+        for (auto& b : bundles)
+        {
+            auto m = authoring::measureBundleLevels (b);
+            double lo = 0, hi = -200;
+            for (auto& z : m.zones) if (z.levelDb <= 0.0) { lo = juce::jmin (lo, z.levelDb); hi = juce::jmax (hi, z.levelDb); }
+            std::printf ("  %-28s zones %3d  samples %4d  level %7.2f .. %7.2f dB  %s\n",
+                         b.getFileName().toRawUTF8(), (int) m.zones.size(), m.samplesRead, lo, hi,
+                         m.problems.isEmpty() ? "" : m.problems.joinIntoString ("; ").toRawUTF8());
+            if (m.zones.empty()) { ++failures; continue; }
+            if (measureApply)
+            {
+                auto wr = authoring::writeBundleLevels (m);
+                std::printf ("      %s%s%s\n", wr.ok ? "WRITTEN: " : "REFUSED: ", wr.message.toRawUTF8(),
+                             wr.note.isNotEmpty() ? ("  (" + wr.note + ")").toRawUTF8() : "");
+                if (wr.ok) ++okCount; else ++failures;
+            }
+            else
+            {
+                // Dry run: the SAME writer, against a copy of instrument.json
+                // in the scratch folder, so the guard and the validator run
+                // for real and the bundle is never opened for writing.
+                auto copy = scratch.getChildFile (b.getFileName());
+                copy.deleteRecursively();
+                copy.createDirectory();
+                b.getChildFile ("instrument.json").copyFileTo (copy.getChildFile ("instrument.json"));
+                authoring::MeasuredLevels mc = m;
+                mc.bundleDir = copy;
+                auto wr = authoring::writeBundleLevels (mc);
+                std::printf ("      dry run -> %s%s\n", wr.ok ? "would write: " : "WOULD REFUSE: ", wr.message.toRawUTF8());
+                if (wr.ok) ++okCount; else ++failures;
+            }
+        }
+        std::printf ("\n%d of %d bundle(s) %s. %s\n", okCount, bundles.size(),
+                     measureApply ? "written" : "would be written",
+                     measureApply ? "" : ("Scratch copies: " + scratch.getFullPathName()).toRawUTF8());
+        return failures == 0 ? 0 : 1;
+    }
 
     std::printf ("MIREKU validation suite\n=============================\n");
 

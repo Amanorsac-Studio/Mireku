@@ -1,5 +1,27 @@
-MIREKU 1.0.0 - test build
+MIREKU 1.0.1 - test build
 Amanorsac Studio
+
+
+0. WHAT CHANGED IN 1.0.1
+
+   Installs over 1.0.0. The library, presets, performances and the test key
+   are kept; the key keeps the days it has left.
+
+     - The AMP ENV page was blank. Fixed.
+     - Effect boxes are sized to their controls instead of all one width.
+     - VELOCITY RESPONSE, on the SETTINGS tab of every sound. CURVE is for
+       the whole instrument and is the same five as a Montage keyboard:
+       Normal, Soft, Hard, Wide, Fixed. If the keyboard already has a curve
+       set, leave this on NORMAL. DEPTH and OFFSET are per sound (64 is
+       neutral) and are saved with the preset.
+     - ANCHORED PLAYBACK for recorded sounds. Right-click a sound in the list
+       and select "Measure levels (anchored playback)". MIREKU reads every
+       sample, and from then on that sound plays ONE layer per note instead of
+       blending two recordings, with the level following one smooth curve
+       through the measured layers. It takes a moment on a big piano. The
+       previous instrument.json is kept as a .bak beside it. Sounds not yet
+       measured play exactly as before.
+     - The categories are JM SET, MKS, FM and STRINGS.
 
 
 1. WHAT THIS IS

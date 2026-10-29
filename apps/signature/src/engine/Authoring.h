@@ -872,6 +872,13 @@ inline double measureBodyRmsDb (juce::AudioFormatReader& r, juce::int64& bytesRe
         }
         f += take;
     }
+    // A file SHORTER than the window never reaches f >= bodyWin-1, so the
+    // loudest-window figure is never taken and the sample measures -144 dB -
+    // which then drags its zone's average through the floor. (The TypeScript
+    // this mirrors has the same hole; it is not reachable there because the
+    // capture app refuses sub-200 ms takes. A truncated round robin in a real
+    // bundle is exactly how it was found.) The whole file IS the window then.
+    if (n < bodyWin) bestWinSq = winSq;
     const double bodyFrames = (double) juce::jmin<juce::int64> (n, bodyWin);
     const double rms = std::sqrt (juce::jmax (0.0, bestWinSq) / bodyFrames);
     const double db = rms <= 0.0 ? -144.0 : juce::jmax (-144.0, 20.0 * std::log10 (rms));

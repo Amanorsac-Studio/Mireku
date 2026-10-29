@@ -252,3 +252,48 @@ static void testMeasurePassWritesAnchoredBundle()
     dir.deleteRecursively();
     dir.getSiblingFile ("measure.jmi.bak").deleteRecursively();
 }
+
+/// Found on the client's own Piano.jmi: one round robin of D#7's softest
+/// layer is a 0.19 s truncated take. The loudest-200 ms-window measure never
+/// completes a window on a file shorter than 200 ms, reported -144 dB for it,
+/// and the zone's three-way average came out at -82 dB - a figure that would
+/// have had the engine treating a normal pp note as near-silent.
+static void testMeasureHandlesSamplesShorterThanTheWindow()
+{
+    std::printf ("\n== ANCHORED (4) a sample shorter than 200 ms still measures ==\n");
+    auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("mireku-tests");
+    dir.createDirectory();
+    juce::AudioFormatManager fm;
+    fm.registerBasicFormats();
+
+    // -20 dBFS peak sine: its RMS is -23.01 dBFS whatever the length
+    auto writeSine = [&] (const char* name, double seconds)
+    {
+        auto f = dir.getChildFile (name);
+        f.deleteFile();
+        const int n = (int) (48000.0 * seconds);
+        juce::AudioBuffer<float> b (2, n);
+        for (int i = 0; i < n; ++i)
+        {
+            const float v = 0.1f * std::sin (2.0f * juce::MathConstants<float>::pi * 440.0f * (float) i / 48000.0f);
+            b.setSample (0, i, v); b.setSample (1, i, v);
+        }
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (new juce::FileOutputStream (f), 48000.0, 2, 24, {}, 0));
+        if (w != nullptr) w->writeFromAudioSampleBuffer (b, 0, n);
+        return f;
+    };
+    auto measure = [&] (const juce::File& f)
+    {
+        std::unique_ptr<juce::AudioFormatReader> r (fm.createReaderFor (f));
+        juce::int64 bytes = 0;
+        return r != nullptr ? authoring::measureBodyRmsDb (*r, bytes) : -999.0;
+    };
+    const double longDb = measure (writeSine ("long.wav", 0.5));
+    const double shortDb = measure (writeSine ("short.wav", 0.1));
+    std::printf ("  0.5 s: %.2f dB   0.1 s: %.2f dB\n", longDb, shortDb);
+    CHECK (std::abs (longDb + 23.01) < 0.1, "a 0.5 s tone measures its true -23 dB RMS");
+    CHECK (std::abs (shortDb + 23.01) < 0.1, "a 0.1 s tone - shorter than the window - measures the same, not -144");
+    dir.getChildFile ("long.wav").deleteFile();
+    dir.getChildFile ("short.wav").deleteFile();
+}

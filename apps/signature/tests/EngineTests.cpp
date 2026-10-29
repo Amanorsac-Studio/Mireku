@@ -1973,6 +1973,7 @@ int main()
     testAnchoredPlanMatchesTypeScript();
     testAnchoredPlanProperties();
     testMeasurePassWritesAnchoredBundle();
+    testMeasureHandlesSamplesShorterThanTheWindow();
     // DSP STANDARDS PASS
     testAliasSuppression();
     testToneBeforeAfter();

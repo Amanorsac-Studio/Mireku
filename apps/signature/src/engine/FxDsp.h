@@ -932,6 +932,220 @@ private:
 };
 
 //==============================================================================
+//================================================= 13. Tape Machine + Detune
+// A tape pass - pre-emphasised saturation, wow and flutter on a modulated
+// delay, an "age" high roll-off, hiss - followed by a DETUNER: two copies of
+// the signal, one micro-pitched up and one down by the same number of cents,
+// spread left and right. The detune is Signalsmith Stretch, one mono instance
+// per side, because a delay-line micro-pitch warbles at the window rate and
+// this one does not.
+class TapeMachineFx : public FxUnit
+{
+public:
+    TapeMachineFx() : FxUnit (FxType::tapeMachine) {}
+    void prepare (double sr, int maxBlock) override
+    {
+        sr_ = sr;
+        wowDl_.prepare (sr, 30.0f);
+        for (auto& f : age_) f.setCutoff (12000.0f, sr);
+        for (auto& f : hissHp_) f.setCutoff (2000.0f, sr);
+        for (auto& f : emphasis_) f.setCutoff (3000.0f, sr);
+        wowLfo_.setRate (0.6f, sr);
+        flutterLfo_.setRate (5.3f, sr);
+        for (auto& sh : shift_) { sh.presetCheaper (1, (float) sr); sh.setTransposeSemitones (0.0f); }
+        tapeBuf_.setSize (2, maxBlock);
+        detBuf_.setSize (2, maxBlock);
+        reset();
+    }
+    void reset() override
+    {
+        wowDl_.reset();
+        for (auto& f : age_) f.reset();
+        for (auto& f : hissHp_) f.reset();
+        for (auto& f : emphasis_) f.reset();
+        for (auto& sh : shift_) sh.reset();
+        tapeBuf_.clear();
+        detBuf_.clear();
+        for (auto& sm : smooth_) sm.reset (sr_, 0.02);
+    }
+    void process (juce::AudioBuffer<float>& b, double) override
+    {
+        const float drive = p (0) / 100.0f;
+        const float wow = p (1) / 100.0f;
+        const float age = p (2) / 100.0f;
+        const float hiss = p (3) / 100.0f;
+        const float detuneCents = p (4);
+        const float mix = p (5) / 100.0f;
+
+        const int n = b.getNumSamples();
+        auto* L = b.getWritePointer (0);
+        auto* R = b.getNumChannels() > 1 ? b.getWritePointer (1) : L;
+        auto* tL = tapeBuf_.getWritePointer (0);
+        auto* tR = tapeBuf_.getWritePointer (1);
+
+        // AGE: the top rolls off as the tape ages, 12 kHz down to ~3 kHz.
+        const float ageHz = 12000.0f * std::pow (0.25f, age);
+        for (auto& f : age_) f.setCutoff (juce::jmin (ageHz, (float) (sr_ * 0.45)), sr_);
+        const float msToSamp = (float) (sr_ / 1000.0);
+        // saturation: 1x at drive 0 (clean) up to 6x into tanh, level-matched back
+        const float gainIn = 1.0f + 5.0f * drive * drive;
+        const float gainOut = 1.0f / std::tanh (juce::jmax (0.1f, gainIn * 0.5f)) * 0.5f;
+        const float hissAmp = hiss * hiss * 0.02f;
+
+        for (int i = 0; i < n; ++i)
+        {
+            // WOW (slow, deep) and FLUTTER (fast, shallow) on the read position
+            const float wowS = wowLfo_.tickSin() * 1.8f * wow;
+            const float flS = flutterLfo_.tickSin (0.3) * 0.12f * wow;
+            const float d = (4.0f + wowS + flS) * msToSamp;            // around 4 ms
+            wowDl_.push (L[i], R[i]);
+            float l = wowDl_.read (0, d), r = wowDl_.read (1, d * 1.01f);
+            // pre-emphasis into the saturator, de-emphasis after: tape bites the
+            // top first, which is what separates "tape" from "distortion"
+            for (int c = 0; c < 2; ++c)
+            {
+                float& x = c == 0 ? l : r;
+                const float lows = emphasis_[c].process (x);
+                const float highs = x - lows;
+                const float pre = lows + highs * (1.0f + 1.5f * drive);
+                float y = std::tanh (pre * gainIn) * gainOut;
+                y = age_[c].process (y);
+                if (hissAmp > 0.0f) y += hissHp_[c].process (rng_.nextFloat() * 2.0f - 1.0f) * hissAmp;
+                x = y;
+            }
+            tL[i] = l; tR[i] = r;
+        }
+
+        // DETUNE: +cents on the left copy, -cents on the right. Block-wise,
+        // and NOT in place: Stretch clears its output before overlap-adding
+        // into it, so output == input is silence (the first cut did that).
+        auto* dL = detBuf_.getWritePointer (0);
+        auto* dR = detBuf_.getWritePointer (1);
+        if (detuneCents > 0.01f)
+        {
+            shift_[0].setTransposeSemitones ( detuneCents / 100.0f);
+            shift_[1].setTransposeSemitones (-detuneCents / 100.0f);
+            const float* inL[1] = { tL }; float* outL[1] = { dL };
+            const float* inR[1] = { tR }; float* outR[1] = { dR };
+            shift_[0].process (inL, n, outL, n);
+            shift_[1].process (inR, n, outR, n);
+        }
+        else
+        {
+            juce::FloatVectorOperations::copy (dL, tL, n);
+            juce::FloatVectorOperations::copy (dR, tR, n);
+        }
+        for (int i = 0; i < n; ++i)
+        {
+            L[i] = L[i] * (1.0f - mix) + dL[i] * mix;
+            R[i] = R[i] * (1.0f - mix) + dR[i] * mix;
+        }
+    }
+private:
+    double sr_ = 48000;
+    ModDelay wowDl_;
+    std::array<OnePoleLP, 2> age_, emphasis_;
+    std::array<OnePoleHP, 2> hissHp_;
+    Lfo wowLfo_, flutterLfo_;
+    juce::Random rng_ { 0x7a9e };
+    std::array<signalsmith::stretch::SignalsmithStretch<float>, 2> shift_;
+    juce::AudioBuffer<float> tapeBuf_, detBuf_;
+    std::array<juce::SmoothedValue<float>, 2> smooth_;
+};
+
+//================================================= 14. Modulator (ring / shift)
+// RING: y = x * cos(wt), both sidebands, the carrier itself cancels. SHIFT:
+// single-sideband frequency shifting, y = x_re * cos(wt) - x_im * sin(wt),
+// where x_im is the Hilbert transform of x. The Hilbert pair is two cascades
+// of four first-order allpasses with coefficients chosen so their phase
+// responses stay ~90 degrees apart over 20 Hz..20 kHz (Olli Niemitalo's
+// classic set). An LFO sweeps the carrier up to +-1 octave at full depth.
+class RingModFx : public FxUnit
+{
+public:
+    RingModFx() : FxUnit (FxType::ringMod) {}
+    void prepare (double sr, int maxBlock) override
+    {
+        sr_ = sr; juce::ignoreUnused (maxBlock);
+        lfo_.setRate (0.5f, sr);
+        reset();
+    }
+    void reset() override
+    {
+        phase_ = 0.0;
+        for (auto& ch : ap_) for (auto& st : ch) st = Ap {};
+    }
+    void process (juce::AudioBuffer<float>& b, double) override
+    {
+        const bool shiftMode = p (0) >= 0.5f;
+        const float freq = p (1);
+        const float lfoRate = p (2);
+        const float lfoDepth = p (3) / 100.0f;
+        const float mix = p (4) / 100.0f;
+        lfo_.setRate (lfoRate, sr_);
+
+        const int n = b.getNumSamples();
+        auto* L = b.getWritePointer (0);
+        auto* R = b.getNumChannels() > 1 ? b.getWritePointer (1) : L;
+        for (int i = 0; i < n; ++i)
+        {
+            const float sweep = lfoDepth > 0.0f ? std::pow (2.0f, lfo_.tickSin() * lfoDepth) : (lfo_.advance(), 1.0f);
+            phase_ += (double) (freq * sweep) / sr_;
+            if (phase_ >= 1.0) phase_ -= 1.0;
+            const float c = (float) std::cos (juce::MathConstants<double>::twoPi * phase_);
+            const float sn = (float) std::sin (juce::MathConstants<double>::twoPi * phase_);
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                float& x = ch == 0 ? L[i] : R[i];
+                float y;
+                if (shiftMode)
+                {
+                    const float re = allpassChain (ap_[ch], 0, x);   // 0-degree branch
+                    const float im = allpassChain (ap_[ch], 1, x);   // 90-degree branch
+                    // '+' gives the UPPER sideband with this Hilbert pair's
+                    // sign convention; '-' measured as the lower one.
+                    y = re * c + im * sn;
+                }
+                else y = x * c;
+                x = x * (1.0f - mix) + y * mix;
+            }
+        }
+    }
+private:
+    // Each section is an allpass in z^-2:  y[n] = c * (x[n] + y[n-2]) - x[n-2].
+    // Four per branch; the 0-degree branch's output is delayed one sample.
+    // The c values are Niemitalo's a^2 set, which keeps the two branches
+    // 90 degrees apart (within ~0.1 degree) from about 20 Hz to 20 kHz at 44.1
+    // and 48 kHz.
+    struct Ap { float x1 = 0.0f, x2 = 0.0f, y1 = 0.0f, y2 = 0.0f; };
+    static constexpr float kA[2][4] = {
+        { 0.6923878f, 0.9360654f, 0.9882295f, 0.9987488f },    // branch 0 (+ one sample delay)
+        { 0.4021921f, 0.8561711f, 0.9722910f, 0.9952885f } };  // branch 1 (the 90-degree one)
+    float allpassChain (std::array<Ap, 9>& st, int branch, float x)
+    {
+        float v = x;
+        for (int k = 0; k < 4; ++k)
+        {
+            auto& a = st[(size_t) (branch * 4 + k)];
+            const float y = kA[branch][k] * (v + a.y2) - a.x2;
+            a.x2 = a.x1; a.x1 = v;
+            a.y2 = a.y1; a.y1 = y;
+            v = y;
+        }
+        if (branch == 0)                     // the unit delay that aligns the pair
+        {
+            auto& dly = st[8];
+            const float out = dly.x1;
+            dly.x1 = v;
+            v = out;
+        }
+        return v;
+    }
+    double sr_ = 48000, phase_ = 0.0;
+    Lfo lfo_;
+    std::array<std::array<Ap, 9>, 2> ap_;
+};
+
 inline std::unique_ptr<FxUnit> createFxUnit (FxType t)
 {
     switch (t)
@@ -948,6 +1162,8 @@ inline std::unique_ptr<FxUnit> createFxUnit (FxType t)
         case FxType::plateReverb:   return std::make_unique<PlateReverbFx>();
         case FxType::hallShimmer:   return std::make_unique<HallShimmerFx>();
         case FxType::widener:       return std::make_unique<WidenerFx>();
+        case FxType::tapeMachine:   return std::make_unique<TapeMachineFx>();
+        case FxType::ringMod:       return std::make_unique<RingModFx>();
         default:                    return nullptr;
     }
 }

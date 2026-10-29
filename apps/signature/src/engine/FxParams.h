@@ -15,6 +15,9 @@ namespace jm {
 enum class FxType : int {
     jmChorus = 0, tremoloAutoPan, phaser, flanger, epPreamp, vintageEq,
     compressor, tapeDelay, digitalDelay, plateReverb, hallShimmer, widener,
+    // Added 2026-10-29 at the client's request. APPEND ONLY: the integer value
+    // is what a saved rack's unit index means.
+    tapeMachine, ringMod,
     Count
 };
 constexpr int kNumFxTypes = (int) FxType::Count;
@@ -190,6 +193,25 @@ inline const std::array<FxSpec, kNumFxTypes>& fxRegistry()
         { FxType::widener, "widener", "Widener/Ensemble", {
             { "width", "Width", ParamKind::Float, 0, 200, 120 },
             { "ensemble", "Ensemble", ParamKind::Float, 0, 100, 0 } } },
+        // TAPE MACHINE WITH A DETUNER (client, 2026-10-29). Saturation, wow and
+        // flutter, an "age" high roll-off, hiss, and two copies micro-pitched
+        // up and down by DETUNE cents and spread left/right - the Eventide /
+        // Ensoniq detune on top of a tape pass.
+        { FxType::tapeMachine, "tapeMachine", "Tape Machine", {
+            { "drive", "Drive", ParamKind::Float, 0, 100, 30 },
+            { "wow", "Wow/Flutter", ParamKind::Float, 0, 100, 25 },
+            { "age", "Age", ParamKind::Float, 0, 100, 30 },
+            { "hiss", "Hiss", ParamKind::Float, 0, 100, 10 },
+            { "detune", "Detune", ParamKind::Float, 0, 30, 8, {}, "ct" },
+            { "mix", "Mix", ParamKind::Float, 0, 100, 100 } } },
+        // MODULATOR: ring modulation or single-sideband frequency shifting,
+        // with an LFO on the carrier.
+        { FxType::ringMod, "ringMod", "Modulator", {
+            { "mode", "Mode", ParamKind::Enum, 0, 1, 0, { "Ring", "Shift" } },
+            { "freq", "Freq", ParamKind::Float, 0.5f, 5000.0f, 100.0f, {}, "Hz", false, true },
+            { "lfoRate", "LFO Rate", ParamKind::Float, 0.05f, 10.0f, 0.5f, {}, "Hz", false, true },
+            { "lfoDepth", "LFO Depth", ParamKind::Float, 0, 100, 0 },
+            { "mix", "Mix", ParamKind::Float, 0, 100, 50 } } },
     } };
     return reg;
 }

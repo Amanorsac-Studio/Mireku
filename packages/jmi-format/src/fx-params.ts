@@ -175,6 +175,33 @@ export const FX_REGISTRY: Record<FxType, FxSpec> = {
       { id: 'ensemble', label: 'Ensemble', kind: 'float', min: 0, max: 100, default: 0 },
     ],
   },
+  // Tape machine with a detuner (client, 2026-10-29): saturation, wow/flutter,
+  // an "age" high roll-off, hiss, and two micro-pitched copies spread L/R.
+  // Mirrors FxParams.h; the plugin is the reference implementation.
+  tapeMachine: {
+    type: 'tapeMachine',
+    name: 'Tape Machine',
+    params: [
+      { id: 'drive', label: 'Drive', kind: 'float', min: 0, max: 100, default: 30 },
+      { id: 'wow', label: 'Wow/Flutter', kind: 'float', min: 0, max: 100, default: 25 },
+      { id: 'age', label: 'Age', kind: 'float', min: 0, max: 100, default: 30 },
+      { id: 'hiss', label: 'Hiss', kind: 'float', min: 0, max: 100, default: 10 },
+      { id: 'detune', label: 'Detune', kind: 'float', min: 0, max: 30, default: 8, unit: 'ct' },
+      { id: 'mix', label: 'Mix', kind: 'float', min: 0, max: 100, default: 100 },
+    ],
+  },
+  // Modulator: ring modulation or single-sideband frequency shifting, LFO on the carrier.
+  ringMod: {
+    type: 'ringMod',
+    name: 'Modulator',
+    params: [
+      { id: 'mode', label: 'Mode', kind: 'enum', choices: ['Ring', 'Shift'], default: 'Ring' },
+      { id: 'freq', label: 'Freq', kind: 'float', min: 0.5, max: 5000, default: 100, unit: 'Hz', log: true },
+      { id: 'lfoRate', label: 'LFO Rate', kind: 'float', min: 0.05, max: 10, default: 0.5, unit: 'Hz', log: true },
+      { id: 'lfoDepth', label: 'LFO Depth', kind: 'float', min: 0, max: 100, default: 0 },
+      { id: 'mix', label: 'Mix', kind: 'float', min: 0, max: 100, default: 50 },
+    ],
+  },
   // Amanorsac sound designer: resonant state-variable filter with a drive stage in front.
   svFilter: {
     type: 'svFilter',

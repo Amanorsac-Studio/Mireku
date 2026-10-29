@@ -30,7 +30,7 @@ static juce::File testdataDir()
 static void testFxRegistry()
 {
     std::printf ("\n== FX parameter registry (mirrors fx-params.ts) ==\n");
-    CHECK ((int) fxRegistry().size() == 12, "12 FX units registered");
+    CHECK ((int) fxRegistry().size() == 14, "14 FX units registered (12 + Tape Machine + Modulator)");
     auto& tape = fxSpec (FxType::tapeDelay);
     CHECK (findParam (tape, "wowFlutter") != nullptr, "tapeDelay has wowFlutter");
     CHECK (findParam (tape, "time")->def == 375.0f, "tapeDelay time default 375 ms (3/16 @ 120)");
@@ -1628,6 +1628,8 @@ static void testArpStateRoundTrip()
 #include "ShimmerRunaway.inc"
 // FDN REVERB - the replacement for juce::Reverb, held to measured figures.
 #include "FdnReverb.inc"
+// TAPE MACHINE + MODULATOR - the two units added 2026-10-29.
+#include "TapeAndModulator.inc"
 
 //==============================================================================
 //==============================================================================
@@ -1984,6 +1986,9 @@ int main()
     testFdnLevelDoesNotFollowDecay();
     testFdnKeepsStereo();
     testShimmerIsAudible();
+    // TAPE MACHINE + MODULATOR
+    testTapeMachineDetunes();
+    testModulatorSidebands();
     // DSP STANDARDS PASS
     testAliasSuppression();
     testToneBeforeAfter();

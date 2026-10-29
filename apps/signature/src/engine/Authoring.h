@@ -129,7 +129,7 @@ inline const juce::StringArray& allowedFxTypeIds()
     static const juce::StringArray ids { "jmChorus", "tremoloAutoPan", "phaser", "flanger",
                                          "epPreamp", "vintageEq", "compressor", "tapeDelay",
                                          "digitalDelay", "plateReverb", "hallShimmer", "widener",
-                                         "svFilter" };
+                                         "svFilter", "tapeMachine", "ringMod" };
     return ids;
 }
 

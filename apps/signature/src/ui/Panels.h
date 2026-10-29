@@ -916,6 +916,8 @@ public:
             case FxType::digitalDelay:   return 3;
             case FxType::compressor:     return 4;
             case FxType::plateReverb:    return 5;
+            case FxType::tapeMachine:    return 1;   // orange, beside the tape delay
+            case FxType::ringMod:        return 2;   // purple, with the modulations
             default:                     return 5;   // widener
         }
     }

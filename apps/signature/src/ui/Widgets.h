@@ -723,7 +723,14 @@ public:
         slider_.setRange (0.0, 1.0, 0.0);
         slider_.setDoubleClickReturnValue (true, (double) proc_.getParamNormalized (path_));
         slider_.setPopupMenuEnabled (false);
-        slider_.onValueChange = [this] { proc_.setParamNormalized (path_, (float) slider_.getValue()); updateValueText(); };
+        slider_.onValueChange = [this]
+        {
+            proc_.setParamNormalized (path_, (float) slider_.getValue());
+            updateValueText();
+            // For a panel that DRAWS something derived from this value - the
+            // velocity curve graph - rather than only showing the knob.
+            if (onEdit) onEdit();
+        };
         slider_.onSpecialMouseDown = [this] (const juce::MouseEvent& e)
         {
             // (macro knobs own their right-click: it opens the macro editor)
@@ -856,6 +863,11 @@ public:
         slider_.setValue ((double) proc_.getParamNormalized (path_), juce::dontSendNotification);
         updateValueText();
     }
+
+    /// Called after a drag has pushed the new value, for owners that draw
+    /// something derived from it. Not a parameter listener: it fires only for
+    /// edits made on THIS knob.
+    std::function<void()> onEdit;
 
     /// Index of the first macro this parameter is linked to, or -1.
     int macroIndex() const

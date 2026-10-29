@@ -17,7 +17,7 @@
  *   C++         jm::worldName() in apps/signature/src/engine/FxParams.h
  *
  * A future rename is one edit here and one there. Nothing else hardcodes a
- * category name; if you are about to type "JM Pianos" anywhere, import it.
+ * category name; if you are about to type "JM Set" anywhere, import it.
  */
 import type { World } from './types.js';
 
@@ -31,9 +31,9 @@ export const WORLDS: readonly World[] = ['rhodes-ep', 'mks', 'fm', 'strings'] as
  * `drawTabCell` in apps/signature/src/ui/Hardware.h, which already does.
  */
 export const WORLD_DISPLAY_NAMES: Readonly<Record<World, string>> = {
-  'rhodes-ep': 'JM Pianos',
+  'rhodes-ep': 'JM Set',
   mks: 'MKS',
-  fm: 'FM Keys',
+  fm: 'FM',
   strings: 'Strings',
 };
 

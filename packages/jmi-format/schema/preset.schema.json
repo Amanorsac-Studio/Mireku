@@ -37,6 +37,16 @@
         }
       }
     },
+    "velocity": {
+      "description": "Per-slot velocity response: level only, applied after layer selection. 64/64 is neutral. OPTIONAL - a preset written before this existed is still valid and loads neutral.",
+      "type": "object",
+      "required": ["depth", "offset"],
+      "additionalProperties": false,
+      "properties": {
+        "depth": { "type": "integer", "minimum": 0, "maximum": 127 },
+        "offset": { "type": "integer", "minimum": 0, "maximum": 127 }
+      }
+    },
     "ampEnvelope": {
       "type": "object",
       "required": ["attackMs", "decayMs", "sustain", "releaseMs"],

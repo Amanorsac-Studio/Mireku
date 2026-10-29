@@ -147,6 +147,13 @@ inline ParamValues engineParamsFromJmiPreset (const jmi::Preset& p, int world)
 //==============================================================================
 struct AmpEnvState { float attackMs = 2, decayMs = 0, sustain = 100, releaseMs = 250; };
 
+/// Per-slot half of the velocity response: level only, applied after the
+/// sample layer has already been chosen. 64/64 is neutral, so a slot that has
+/// never been touched behaves exactly as it did before this existed. The other
+/// half - the CURVE - is global and lives in settings.json, because it
+/// describes the player's keyboard rather than the sound.
+struct VelocityState { int depth = 64, offset = 64; };
+
 struct SlotState
 {
     int world = 0;
@@ -156,6 +163,7 @@ struct SlotState
     ParamValues engineParams;       // authoritative persisted copy
     FxRackState rack;
     AmpEnvState ampEnv;
+    VelocityState vel;
 };
 
 //==============================================================================
@@ -519,6 +527,10 @@ struct AppState
         env->setProperty ("sustain", s.ampEnv.sustain);
         env->setProperty ("releaseMs", s.ampEnv.releaseMs);
         o->setProperty ("ampEnvelope", juce::var (env));
+        auto* vel = new juce::DynamicObject();
+        vel->setProperty ("depth", s.vel.depth);
+        vel->setProperty ("offset", s.vel.offset);
+        o->setProperty ("velocity", juce::var (vel));
         return juce::var (o);
     }
     void slotFromVar (int i, const juce::var& v)
@@ -537,6 +549,12 @@ struct AppState
         s.ampEnv.decayMs = (float) (double) env.getProperty ("decayMs", 0.0);
         s.ampEnv.sustain = (float) (double) env.getProperty ("sustain", 100.0);
         s.ampEnv.releaseMs = (float) (double) env.getProperty ("releaseMs", 250.0);
+        // A state saved before velocity response existed has no "velocity"
+        // object at all, and falls through to the neutral 64/64 - i.e. to
+        // exactly what it sounded like when it was saved.
+        auto vel = v.getProperty ("velocity", juce::var());
+        s.vel.depth = (int) vel.getProperty ("depth", 64);
+        s.vel.offset = (int) vel.getProperty ("offset", 64);
     }
 };
 

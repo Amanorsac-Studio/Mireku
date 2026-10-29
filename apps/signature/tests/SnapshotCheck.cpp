@@ -334,6 +334,26 @@ int main (int argc, char** argv)
                 std::snprintf (m, sizeof (m), "%s / %s: %d control(s), %d with no bounds",
                                worlds[w], subNames[juce::jmin (t, 4)], (int) widgets.size(), unplaced);
                 CHECK (unplaced == 0, m);
+                // VELOCITY RESPONSE lives on SETTINGS and is mostly a drawn
+                // graph, which no bounds check can judge. Keep a picture.
+                if (w == 0 && t == 3)
+                {
+                    savePng (page, "velocity-settings.png");
+                    // ...and again off the neutral 64/64, which is the only
+                    // state in which the two lines are distinguishable at all.
+                    // DEPTH/OFFSET are plain AppState, so this writes nothing
+                    // to disk and nothing to the player's settings.json.
+                    proc.setParamNormalized ("slot0.vel.depth", 100.0f / 127.0f);
+                    proc.setParamNormalized ("slot0.vel.offset", 40.0f / 127.0f);
+                    // What a preset load does, and what makes the knobs show
+                    // the values the graph is already drawing.
+                    proc.stateChanged.sendSynchronousChangeMessage();
+                    page.resized();
+                    savePng (page, "velocity-settings-shaped.png");
+                    proc.setParamNormalized ("slot0.vel.depth", 64.0f / 127.0f);
+                    proc.setParamNormalized ("slot0.vel.offset", 64.0f / 127.0f);
+                    proc.stateChanged.sendSynchronousChangeMessage();
+                }
             }
             if (! subTabs.empty())
             {
@@ -732,7 +752,12 @@ int main (int argc, char** argv)
         // was meant to be the single source. These two checks are what stops
         // that recurring — the labels must BE worldName()'s, and they must fit.
         {
-            const char* expect[5] = { "JM Pianos", "MKS", "FM Keys", "Strings", "PERFORM" };
+            // Renamed 2026-10-29 at the client's request: JM Pianos -> JM Set,
+            // FM Keys -> FM. The literals are duplicated here ON PURPOSE - a
+            // test that read worldName() for both sides would pass whatever it
+            // happened to say, which is the exact failure this pair exists to
+            // catch.
+            const char* expect[5] = { "JM Set", "MKS", "FM", "Strings", "PERFORM" };
             for (int i = 0; i < (int) tabs.size(); ++i)
             {
                 std::printf ("  nav cell %d: \"%s\"\n", i, tabs[(size_t) i]->getButtonText().toRawUTF8());

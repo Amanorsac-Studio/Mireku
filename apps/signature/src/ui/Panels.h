@@ -1551,6 +1551,174 @@ private:
 };
 
 //==============================================================================
+// VELOCITY RESPONSE — the SETTINGS block.
+//
+// Two stages, drawn as two lines over the same graph, because the whole design
+// only makes sense if you can see that they are different things:
+//
+//   GOLD  the CURVE. Global. It reshapes the velocity number BEFORE the engine
+//         picks a sample layer, so it changes which sample you hit.
+//   BLUE  DEPTH and OFFSET. Per world. Level only, applied after the layer is
+//         already chosen, so a world can be tamed without losing its character.
+//
+// The dashed diagonal is the behaviour the plugin had before any of this, so
+// "how far am I from normal" is readable at a glance rather than by arithmetic.
+class VelocityPanel : public juce::Component,
+                      private juce::ChangeListener
+{
+public:
+    VelocityPanel (JMSignatureProcessor& p, int slot) : proc_ (p), slot_ (slot)
+    {
+        head_.setText ("VELOCITY RESPONSE", juce::dontSendNotification);
+        head_.setFont (Theme::display (13.0f));
+        head_.setColour (juce::Label::textColourId, Theme::muted);
+        addAndMakeVisible (head_);
+
+        for (int i = 0; i < kVelCurveCount; ++i)
+        {
+            auto* b = new ux::PlateButton (velCurveName ((VelCurve) i));
+            b->setFontHeight (10.0f);
+            b->onClick = [this, i]
+            {
+                proc_.setVelocityCurve ((VelCurve) i, proc_.state.library.fixedVelocity());
+                refresh();
+            };
+            addAndMakeVisible (b);
+            chips_.add (b);
+        }
+
+        const auto s = "slot" + juce::String (slot_) + ".vel.";
+        fixed_ = std::make_unique<ParamKnob> (proc_, "velocity.fixed", "FIXED", &fixedSpec());
+        depth_ = std::make_unique<ParamKnob> (proc_, s + "depth", "DEPTH", &depthSpec());
+        offset_ = std::make_unique<ParamKnob> (proc_, s + "offset", "OFFSET", &depthSpec());
+        for (auto* k : { fixed_.get(), depth_.get(), offset_.get() })
+        {
+            k->onEdit = [this] { repaint(); };
+            addAndMakeVisible (k);
+        }
+
+        proc_.stateChanged.addChangeListener (this);
+        refresh();
+    }
+    ~VelocityPanel() override { proc_.stateChanged.removeChangeListener (this); }
+
+    /// The two knob specs are static because ParamKnob keeps a POINTER to the
+    /// spec it was handed and reads it for every value redraw.
+    static const ParamSpec& depthSpec()
+    {
+        static const ParamSpec s { "depth", "DEPTH", ParamKind::Float, 0.0f, 127.0f, 64.0f, {}, "" };
+        return s;
+    }
+    static const ParamSpec& fixedSpec()
+    {
+        static const ParamSpec s { "fixed", "FIXED", ParamKind::Float, 1.0f, 127.0f, 100.0f, {}, "" };
+        return s;
+    }
+
+    void refresh()
+    {
+        const auto cur = velCurveFromId (proc_.state.library.velocityCurveId());
+        for (int i = 0; i < chips_.size(); ++i)
+            chips_[i]->setToggleState (i == (int) cur, juce::dontSendNotification);
+        // FIXED means nothing unless the curve is Fixed, so it is disabled
+        // rather than merely ignored - a live knob that does nothing is worse
+        // than one that says it does nothing.
+        fixed_->setEnabled (cur == VelCurve::fixed);
+        fixed_->setAlpha (cur == VelCurve::fixed ? 1.0f : 0.35f);
+        for (auto* k : { fixed_.get(), depth_.get(), offset_.get() }) k->refresh();
+        repaint();
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto r = graphBounds().toFloat();
+        g.setColour (Theme::black.withAlpha (0.55f));
+        g.fillRoundedRectangle (r, 4.0f);
+        g.setColour (Theme::line.withAlpha (0.8f));
+        g.drawRoundedRectangle (r.reduced (0.5f), 4.0f, 1.0f);
+
+        for (int i = 1; i < 4; ++i)
+        {
+            const float fx = r.getX() + r.getWidth() * (float) i / 4.0f;
+            const float fy = r.getY() + r.getHeight() * (float) i / 4.0f;
+            g.setColour (Theme::line.withAlpha (0.35f));
+            g.drawLine (fx, r.getY(), fx, r.getBottom());
+            g.drawLine (r.getX(), fy, r.getRight(), fy);
+        }
+
+        // what it did before any of this
+        g.setColour (Theme::muted.withAlpha (0.35f));
+        g.drawLine (r.getX(), r.getBottom(), r.getRight(), r.getY(), 1.0f);
+
+        const auto curve = velCurveFromId (proc_.state.library.velocityCurveId());
+        const int fixedV = proc_.state.library.fixedVelocity();
+        auto& vs = proc_.state.slots[(size_t) slot_].vel;
+
+        auto plot = [&] (bool levelled)
+        {
+            juce::Path p;
+            for (int v = 1; v <= 127; ++v)
+            {
+                const int sv = engine_math::shapeVelocity (v, curve, fixedV);
+                const int y = levelled ? engine_math::levelVelocity (sv, vs.depth, vs.offset) : sv;
+                const float px = r.getX() + r.getWidth() * (float) (v - 1) / 126.0f;
+                const float py = r.getBottom() - r.getHeight() * (float) y / 127.0f;
+                if (v == 1) p.startNewSubPath (px, py); else p.lineTo (px, py);
+            }
+            return p;
+        };
+        // The level line is drawn FIRST and thicker: at the neutral 64/64 the
+        // two coincide exactly, and the one worth looking at then is the curve.
+        g.setColour (Theme::fmAccent.withAlpha (0.9f));
+        g.strokePath (plot (true), juce::PathStrokeType (3.0f));
+        g.setColour (Theme::gold);
+        g.strokePath (plot (false), juce::PathStrokeType (2.0f));
+
+        g.setFont (Theme::ui (10.0f));
+        g.setColour (Theme::muted);
+        g.drawText ("PLAYED  1", r.getX(), r.getBottom() + 2, 70, 12, juce::Justification::left);
+        g.drawText ("127", r.getRight() - 40, r.getBottom() + 2, 40, 12, juce::Justification::right);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds();
+        head_.setBounds (r.removeFromTop (18));
+        r.removeFromTop (6);
+
+        auto right = r.withTrimmedLeft (graphBounds().getWidth() + 20);
+        auto chipRow = right.removeFromTop (26);
+        const int cw = juce::jmin (62, chipRow.getWidth() / 4 - 5);
+        for (int i = 0; i < chips_.size(); ++i)
+        {
+            if (i == 4) { right.removeFromTop (5); chipRow = right.removeFromTop (26); }
+            chips_[i]->setBounds (chipRow.removeFromLeft (cw));
+            chipRow.removeFromLeft (5);
+        }
+        right.removeFromTop (14);
+        auto knobRow = right.removeFromTop (juce::jmin (96, right.getHeight()));
+        const int kw = juce::jmin (84, knobRow.getWidth() / 3);
+        fixed_->setBounds (knobRow.removeFromLeft (kw));
+        depth_->setBounds (knobRow.removeFromLeft (kw));
+        offset_->setBounds (knobRow.removeFromLeft (kw));
+    }
+
+private:
+    juce::Rectangle<int> graphBounds() const
+    {
+        const int side = juce::jmax (60, juce::jmin (getHeight() - 42, 170));
+        return { 0, 24, side, side };
+    }
+    void changeListenerCallback (juce::ChangeBroadcaster*) override { refresh(); }
+
+    JMSignatureProcessor& proc_;
+    int slot_;
+    juce::Label head_;
+    juce::OwnedArray<ux::PlateButton> chips_;
+    std::unique_ptr<ParamKnob> fixed_, depth_, offset_;
+};
+
+//==============================================================================
 // Centre model panel — kente surround, title + patch name with prev/next and a
 // favourite heart, the hero knobs on a recessed control surface, the OUTPUT
 // meter along the right edge and the mature sub-tab strip along the bottom.
@@ -1768,6 +1936,12 @@ public:
                 import->onClick = [this] { chooseX7lFiles(); };
                 addAndMakeVisible (import);
                 settingsWidgets_.add (import);
+
+                // Velocity response lives below the library row, as index 5.
+                // resized() keys off that index, so it must stay last.
+                auto* vel = new VelocityPanel (proc_, slot_);
+                addAndMakeVisible (vel);
+                settingsWidgets_.add (vel);
             }
             else                // INFO — bundle meta (incl. sound type: metadata only)
             {
@@ -1957,6 +2131,11 @@ public:
             {
                 row.removeFromLeft (12);
                 settingsWidgets_[4]->setBounds (row.removeFromLeft (180));
+            }
+            if (settingsWidgets_.size() > 5)
+            {
+                r.removeFromTop (18);
+                settingsWidgets_[5]->setBounds (r);
             }
             return;
         }

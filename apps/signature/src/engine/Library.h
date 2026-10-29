@@ -662,6 +662,13 @@ public:
                 if (auto* favs = o->getProperty ("favorites").getArray())
                     for (auto& fv : *favs) favorites_.addIfNotAlreadyThere (fv.toString());
                 licenseKey_ = o->getProperty ("licenseKey").toString();
+                // VELOCITY CURVE is global and belongs to the PLAYER's keyboard,
+                // not to any patch, so it lives here beside the library path and
+                // never travels in a preset. Absent key -> "normal", i.e. the
+                // straight-through behaviour every existing install has.
+                velCurve_ = o->getProperty ("velocityCurve").toString();
+                if (o->hasProperty ("fixedVelocity"))
+                    velFixed_ = juce::jlimit (1, 127, (int) o->getProperty ("fixedVelocity"));
             }
         }
         settingsLibraryDir_ = libraryDir_;
@@ -690,8 +697,20 @@ public:
         o->setProperty ("favorites", favs);
         o->setProperty ("licenseKey", licenseKey_);
         o->setProperty ("mode", authoring::modeId (settingsMode_));
+        o->setProperty ("velocityCurve", velCurve_.isEmpty() ? "normal" : velCurve_);
+        o->setProperty ("fixedVelocity", velFixed_);
         appDataDir().createDirectory();
         settingsFile().replaceWithText (juce::JSON::toString (juce::var (o)));
+    }
+
+    // ------------------------------------------------------- velocity curve
+    juce::String velocityCurveId() const { return velCurve_.isEmpty() ? "normal" : velCurve_; }
+    int fixedVelocity() const { return juce::jlimit (1, 127, velFixed_); }
+    void setVelocityCurve (const juce::String& id, int fixedVel)
+    {
+        velCurve_ = id;
+        velFixed_ = juce::jlimit (1, 127, fixedVel);
+        saveSettings();
     }
 
     // ---------------------------------------------------------- licence (UI shell)
@@ -849,6 +868,8 @@ private:
     std::vector<BundleInfo> bundles_;
     juce::StringArray favorites_;
     juce::String licenseKey_;
+    juce::String velCurve_;                 // empty == "normal"
+    int velFixed_ = 100;
     bool usedFallback_ = false;
 };
 

@@ -261,9 +261,9 @@ export function commonInstrumentName(names: string[]): string {
 /**
  * The client's four agreed categories, in the order they are tested:
  *
- *   JM Pianos (rhodes-ep)  uprights, full grands, warm Rhodes, bell-like EPs
+ *   JM Set    (rhodes-ep)  uprights, full grands, warm Rhodes, bell-like EPs
  *   MKS       (mks)        MKS sounds, rich stage keys, classic keyboards
- *   FM Keys   (fm)         clear digital EPs, crystalline bells, percussive keys
+ *   FM        (fm)         clear digital EPs, crystalline bells, percussive keys
  *   Strings   (strings)    EVERYTHING ELSE -- organs, bells, pads, choirs, brass
  *
  * Strings is the deliberate catch-all, per the client: "anything that does not
@@ -271,7 +271,7 @@ export function commonInstrumentName(names: string[]): string {
  * pads." The old fallback was `mks`, which silently filed 18 of his 25 bundles
  * -- grand pianos, an organ, two pads, a choir and brass -- under MKS.
  *
- * A bare "bell" is NOT treated as a piano: his JM Pianos category means an EP
+ * A bare "bell" is NOT treated as a piano: his JM Set category means an EP
  * that happens to sound bell-like, which the ep/rhodes patterns already catch,
  * while a standalone bell or pad belongs to the catch-all.
  */

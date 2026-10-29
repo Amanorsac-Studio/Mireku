@@ -994,6 +994,27 @@ bool JMSignatureProcessor::setParamNormalized (const juce::String& path, float n
         }
         return false;
     }
+    // GLOBAL velocity response. Not under "slot" because it is not per slot:
+    // the curve describes the player's keyboard and is written to
+    // settings.json, not to a preset.
+    if (path.startsWith ("velocity."))
+    {
+        const auto id = path.fromFirstOccurrenceOf ("velocity.", false, false);
+        if (id == "curve")
+        {
+            const int i = juce::jlimit (0, kVelCurveCount - 1,
+                                        (int) std::lround (nv * (float) (kVelCurveCount - 1)));
+            setVelocityCurve ((VelCurve) i, state.library.fixedVelocity());
+            return true;
+        }
+        if (id == "fixed")
+        {
+            setVelocityCurve (velCurveFromId (state.library.velocityCurveId()),
+                              juce::jlimit (1, 127, (int) std::lround (1.0f + nv * 126.0f)));
+            return true;
+        }
+        return false;
+    }
 
     FxRackState* rack = nullptr;
     FxRackDsp* rackDsp = nullptr;
@@ -1027,6 +1048,20 @@ bool JMSignatureProcessor::setParamNormalized (const juce::String& path, float n
                 return true;
             }
         return false;
+    }
+    if (rest.startsWith ("vel.") && slot >= 0)
+    {
+        // DEPTH and OFFSET are integers 0..127 with 64 neutral, not continuous
+        // floats, because that is the vocabulary a Yamaha player already has
+        // for them and because the knob should land exactly on 64.
+        auto id = rest.fromFirstOccurrenceOf ("vel.", false, false);
+        auto& vel = state.slots[(size_t) slot].vel;
+        const int v = juce::jlimit (0, 127, (int) std::lround (nv * 127.0f));
+        if (id == "depth") vel.depth = v;
+        else if (id == "offset") vel.offset = v;
+        else return false;
+        engines[(size_t) slot].setVelDepthOffset (vel.depth, vel.offset);
+        return true;
     }
     if (rest.startsWith ("ampenv.") && slot >= 0)
     {
@@ -1069,6 +1104,15 @@ float JMSignatureProcessor::getParamNormalized (const juce::String& path) const
     if (path.startsWith ("host."))
         if (auto* p = apvts.getParameter (path.fromFirstOccurrenceOf ("host.", false, false)))
             return p->getValue();
+    if (path.startsWith ("velocity."))
+    {
+        const auto id = path.fromFirstOccurrenceOf ("velocity.", false, false);
+        if (id == "curve")
+            return (float) (int) velCurveFromId (state.library.velocityCurveId())
+                 / (float) (kVelCurveCount - 1);
+        if (id == "fixed") return ((float) state.library.fixedVelocity() - 1.0f) / 126.0f;
+        return 0;
+    }
 
     int slot = -1;
     const FxRackState* rack = nullptr;
@@ -1096,6 +1140,14 @@ float JMSignatureProcessor::getParamNormalized (const juce::String& path) const
                 auto it = state.slots[(size_t) slot].engineParams.find (id);
                 return norm (s, it != state.slots[(size_t) slot].engineParams.end() ? it->second : s.def);
             }
+    }
+    if (rest.startsWith ("vel.") && slot >= 0)
+    {
+        auto id = rest.fromFirstOccurrenceOf ("vel.", false, false);
+        auto& vel = state.slots[(size_t) slot].vel;
+        if (id == "depth") return (float) vel.depth / 127.0f;
+        if (id == "offset") return (float) vel.offset / 127.0f;
+        return 0;
     }
     if (rest.startsWith ("ampenv.") && slot >= 0)
     {
@@ -1178,6 +1230,8 @@ juce::String JMSignatureProcessor::paramDisplayName (const juce::String& path) c
     }
     if (rest.startsWith ("ampenv."))
         return prefix + "  -  AMP ENV  -  " + pretty (rest.fromFirstOccurrenceOf ("ampenv.", false, false));
+    if (rest.startsWith ("vel."))
+        return prefix + "  -  VELOCITY  -  " + pretty (rest.fromFirstOccurrenceOf ("vel.", false, false));
     if (rest.startsWith ("fx") && rack != nullptr)
     {
         const int u = rest.substring (2).getIntValue();
@@ -1195,6 +1249,10 @@ juce::String JMSignatureProcessor::paramDisplayName (const juce::String& path) c
 
 bool JMSignatureProcessor::handleLearnClick (const juce::String& path)
 {
+    // The global velocity curve is not automatable and not a macro target: it
+    // is a property of the keyboard in front of the player. Linking it would
+    // create a target that resolveDest cannot resolve, i.e. a dead macro.
+    if (path.startsWith ("velocity.")) return false;
     const int mi = state.learn.macroLearnArmed.load();
     if (mi >= 0)
     {
@@ -1331,6 +1389,9 @@ bool JMSignatureProcessor::applyUserPresetToSlot (int slot, const juce::File& f)
     s.ampEnv.decayMs = (float) (double) env.getProperty ("decayMs", s.ampEnv.decayMs);
     s.ampEnv.sustain = (float) (double) env.getProperty ("sustain", s.ampEnv.sustain);
     s.ampEnv.releaseMs = (float) (double) env.getProperty ("releaseMs", s.ampEnv.releaseMs);
+    auto vel = v.getProperty ("velocity", juce::var());
+    s.vel.depth = juce::jlimit (0, 127, (int) vel.getProperty ("depth", s.vel.depth));
+    s.vel.offset = juce::jlimit (0, 127, (int) vel.getProperty ("offset", s.vel.offset));
     syncSlotToDsp (slot);
     stateChanged.sendChangeMessage();
     return true;
@@ -1355,6 +1416,13 @@ juce::var JMSignatureProcessor::slotPresetToVar (int slot, const juce::String& n
     env->setProperty ("sustain", s.ampEnv.sustain);
     env->setProperty ("releaseMs", s.ampEnv.releaseMs);
     o->setProperty ("ampEnvelope", juce::var (env));
+    // Velocity DEPTH/OFFSET is part of the sound, so it travels with a preset.
+    // The CURVE deliberately does not: it describes the player's keyboard, and
+    // a preset that silently re-tuned the feel of his action would be a bug.
+    auto* vel = new juce::DynamicObject();
+    vel->setProperty ("depth", s.vel.depth);
+    vel->setProperty ("offset", s.vel.offset);
+    o->setProperty ("velocity", juce::var (vel));
     return juce::var (o);
 }
 
@@ -2103,6 +2171,13 @@ bool JMSignatureProcessor::loadPerformancePreset (const juce::File& f)
 }
 
 //==============================================================================
+void JMSignatureProcessor::setVelocityCurve (VelCurve c, int fixedVel)
+{
+    state.library.setVelocityCurve (velCurveId (c), fixedVel);
+    for (auto& e : engines) e.setVelCurve (c, fixedVel);
+    stateChanged.sendChangeMessage();
+}
+
 void JMSignatureProcessor::syncSlotToDsp (int i)
 {
     auto& s = state.slots[(size_t) i];
@@ -2113,6 +2188,8 @@ void JMSignatureProcessor::syncSlotToDsp (int i)
     eng.ampEnv().decayMs = s.ampEnv.decayMs;
     eng.ampEnv().sustain = s.ampEnv.sustain;
     eng.ampEnv().releaseMs = s.ampEnv.releaseMs;
+    eng.setVelDepthOffset (s.vel.depth, s.vel.offset);
+    eng.setVelCurve (velCurveFromId (state.library.velocityCurveId()), state.library.fixedVelocity());
     slotRacks[(size_t) i].setState (s.rack);
 
     // (re)load bundle if the state references one the engine doesn't have

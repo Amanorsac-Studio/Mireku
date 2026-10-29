@@ -300,9 +300,9 @@ inline ParamValues defaultEngineParams (int world)
 // he reported "I don't see the name category changes".
 //
 //   world id (NEVER changes)   display name
-//   rhodes-ep                  JM Pianos
+//   rhodes-ep                  JM Set
 //   mks                        MKS
-//   fm                         FM Keys
+//   fm                         FM
 //   strings                    Strings      (the catch-all)
 //
 // The ids stay `rhodes-ep | mks | fm | strings`: they are in
@@ -322,7 +322,7 @@ inline ParamValues defaultEngineParams (int world)
 // cells do it inside drawTabCell; titles call .toUpperCase()).
 inline const char* worldName (int w)
 {
-    switch (w) { case 0: return "JM Pianos"; case 1: return "MKS"; case 2: return "FM Keys"; case 3: return "Strings"; }
+    switch (w) { case 0: return "JM Set"; case 1: return "MKS"; case 2: return "FM"; case 3: return "Strings"; }
     return "PERFORM";
 }
 

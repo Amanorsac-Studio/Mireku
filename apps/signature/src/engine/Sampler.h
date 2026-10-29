@@ -11,8 +11,97 @@
 namespace jm {
 
 //==============================================================================
-// Pure helpers (unit-tested in tests/EngineTests.cpp).
+// VELOCITY RESPONSE — the Yamaha split, in two stages.
+//
+// Yamaha separates "how my keyboard reports effort" from "how loud this sound
+// gets for a given effort", and we copy that because our velocity layers are
+// real recordings: one stage has to run BEFORE layer selection and the other
+// AFTER it.
+//
+//   CURVE   reshapes the velocity NUMBER, globally, before anything looks at
+//           it. A soft curve therefore genuinely reaches the loud sample
+//           layers sooner - it changes WHICH SAMPLE YOU HIT.
+//   DEPTH   per slot, applied after the layer is chosen. Level only, so a
+//   OFFSET  world can be tamed without changing its character.
+//
+// Yamaha does not publish the equation behind Depth/Offset. This one is read
+// off the behaviour their own worked examples describe, and it reproduces all
+// five of them - including the awkward Depth 127 / Offset 0, which is meant to
+// be silent until velocity 64. The constants are all here, so tuning by ear
+// against a specific instrument is a local edit.
+enum class VelCurve { normal = 0, soft1, soft2, hard1, hard2, wide, fixed };
+inline constexpr int kVelCurveCount = 7;
+
+inline const char* velCurveId (VelCurve c)
+{
+    switch (c)
+    {
+        case VelCurve::soft1: return "soft1";   case VelCurve::soft2: return "soft2";
+        case VelCurve::hard1: return "hard1";   case VelCurve::hard2: return "hard2";
+        case VelCurve::wide:  return "wide";    case VelCurve::fixed: return "fixed";
+        case VelCurve::normal: default: return "normal";
+    }
+}
+inline const char* velCurveName (VelCurve c)
+{
+    switch (c)
+    {
+        case VelCurve::soft1: return "SOFT 1";  case VelCurve::soft2: return "SOFT 2";
+        case VelCurve::hard1: return "HARD 1";  case VelCurve::hard2: return "HARD 2";
+        case VelCurve::wide:  return "WIDE";    case VelCurve::fixed: return "FIXED";
+        case VelCurve::normal: default: return "NORMAL";
+    }
+}
+inline VelCurve velCurveFromId (const juce::String& id)
+{
+    for (int i = 0; i < kVelCurveCount; ++i)
+        if (id == velCurveId ((VelCurve) i)) return (VelCurve) i;
+    return VelCurve::normal;
+}
+
 namespace engine_math {
+
+/// Stage one. `fixedVel` is used only by VelCurve::fixed. Always 1..127, so a
+/// shaped velocity is still a legal MIDI velocity and still selects a layer.
+inline int shapeVelocity (int vel, VelCurve curve, int fixedVel = 100)
+{
+    vel = juce::jlimit (1, 127, vel);
+    if (curve == VelCurve::fixed) return juce::jlimit (1, 127, fixedVel);
+
+    const float t = (float) vel / 127.0f;
+    float y;
+    if (curve == VelCurve::wide)
+    {
+        // Mirrored about the middle: soft playing pushed softer, hard playing
+        // pushed harder. This is the one curve that is NOT a single exponent,
+        // because an exponent can only bend one way.
+        y = t < 0.5f ? 0.5f * std::pow (2.0f * t, 1.7f)
+                     : 1.0f - 0.5f * std::pow (2.0f - 2.0f * t, 1.7f);
+    }
+    else
+    {
+        const float g = curve == VelCurve::soft1 ? 0.55f
+                      : curve == VelCurve::soft2 ? 0.75f
+                      : curve == VelCurve::hard2 ? 1.35f
+                      : curve == VelCurve::hard1 ? 1.80f : 1.0f;
+        y = std::pow (t, g);
+    }
+    return juce::jlimit (1, 127, (int) std::lround (127.0f * y));
+}
+
+/// Stage two. 64/64 is neutral and returns `vel` unchanged, so every preset
+/// saved before this existed sounds exactly as it did.
+inline int levelVelocity (int vel, int depth, int offset)
+{
+    // OFFSET is scaled by two. That is not a flourish: with a 1:1 offset the
+    // formula reproduces three of Yamaha's five published examples and misses
+    // the crossfade one (Depth 127 / Offset 0 is meant to be silent until
+    // velocity 64, and comes out silent only until 32). Doubling it satisfies
+    // all five. The test holds every one of them.
+    const float v = (float) vel * (float) depth / 64.0f + (float) (offset - 64) * 2.0f;
+    return juce::jlimit (0, 127, (int) std::lround (v));
+}
+
 
 /// Equal-power velocity-layer crossfade over a ±8-velocity overlap around each
 /// layer boundary (spec §5.1). Returns (layerIndex, gain) pairs, gains²-sum 1.
@@ -133,6 +222,21 @@ public:
 
     AmpEnvParams& ampEnv() { return ampEnv_; }
 
+    // --------------------------------------------------- velocity response
+    // Plain atomics rather than anything under lock_: these are read once per
+    // note on, written from the message thread, and a note that lands during
+    // the write is entitled to either value.
+    void setVelCurve (VelCurve c, int fixedVel)
+    {
+        velCurve_.store ((int) c, std::memory_order_relaxed);
+        velFixed_.store (juce::jlimit (1, 127, fixedVel), std::memory_order_relaxed);
+    }
+    void setVelDepthOffset (int depth, int offset)
+    {
+        velDepth_.store (juce::jlimit (0, 127, depth), std::memory_order_relaxed);
+        velOffset_.store (juce::jlimit (0, 127, offset), std::memory_order_relaxed);
+    }
+
     // ------------------------------------------------------- engine controls
     int numEngineParams() const { return (int) worldEngineControls (world_).size(); }
     void setEngineParam (int idx, float v)
@@ -162,6 +266,14 @@ public:
         const juce::SpinLock::ScopedLockType sl (lock_);
         if (bundle_ == nullptr) return;
         auto& inst = bundle_->inst;
+
+        // STAGE ONE, before anything looks at the velocity. Everything
+        // downstream - layer crossfade, zone choice, level - sees the shaped
+        // number, which is the entire point: the curve decides WHICH SAMPLE
+        // plays, not just how loud it is.
+        vel = engine_math::shapeVelocity (vel, (VelCurve) velCurve_.load (std::memory_order_relaxed),
+                                          velFixed_.load (std::memory_order_relaxed));
+
         int selVel = vel;
         if (world_ == 0)                                   // Rhodes Bark: crossfade bias
             selVel = juce::jlimit (1, 127, vel + (int) (engineParams_[0] * 0.30f));
@@ -387,8 +499,14 @@ private:
         v->sample = rrList[(size_t) rrIdx];
         v->pos = 0;
         v->ratio = std::pow (2.0, (note - zone.rootNote) / 12.0) * (v->sample->fileSampleRate / sr_);
-        const float velCurve = (float) vel / 127.0f;
-        v->gain = gain * (0.35f + 0.65f * velCurve);
+        // STAGE TWO: level only, after the layer and zone are already settled.
+        // At the neutral 64/64 this returns `vel` unchanged, so nothing saved
+        // before velocity response existed sounds any different.
+        const int lvlVel = engine_math::levelVelocity (vel, velDepth_.load (std::memory_order_relaxed),
+                                                            velOffset_.load (std::memory_order_relaxed));
+        const float lvlNorm = (float) lvlVel / 127.0f;
+        const float velNorm = (float) vel / 127.0f;   // SHAPED velocity, stage one
+        v->gain = gain * (0.35f + 0.65f * lvlNorm);
         v->startStamp = ++stampCounter_;
         v->env = 0; v->phase = 0;
         v->starveGain = 1.0f; v->starveSamples = 0;
@@ -409,7 +527,10 @@ private:
         if (v->useLp)
         {
             const float bright = engineParams_[0] / 100.0f;
-            const float cutoff = 900.0f * std::pow (2.0f, 2.0f + 2.6f * (bright * velCurve + (1.0f - bright) * 0.75f));
+            // FM brightness tracks the SHAPED velocity, not the levelled one:
+            // DEPTH and OFFSET are a level control, and letting them open
+            // the filter too would make them change the tone as well.
+            const float cutoff = 900.0f * std::pow (2.0f, 2.0f + 2.6f * (bright * velNorm + (1.0f - bright) * 0.75f));
             for (auto& f : v->lp) { f.setCutoff (juce::jmin (cutoff, 18000.0f), sr_); f.reset(); }
         }
 
@@ -652,6 +773,9 @@ private:
     std::array<Voice, kMaxVoices> voices_;
     std::array<std::atomic<float>, 8> engineParams_ {};
     AmpEnvParams ampEnv_;
+    std::atomic<int> velCurve_ { (int) VelCurve::normal };
+    std::atomic<int> velFixed_ { 100 };
+    std::atomic<int> velDepth_ { 64 }, velOffset_ { 64 };
     bool sustainDown_ = false;
     std::atomic<float> bendSemis_ { 0.0f };      // round 4 (item 2)
     double bendCur_ = 1.0;                       // smoothed rate multiplier

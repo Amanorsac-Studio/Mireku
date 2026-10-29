@@ -289,6 +289,12 @@ public:
         return Library::userPresetDir().getChildFile (juce::String (worldJsonId (world)));
     }
 
+    /// The global half of velocity response. Written to settings.json (it
+    /// belongs to the player's keyboard, not to any patch) and pushed to all
+    /// four engines, since a curve that applied to one slot and not another
+    /// would make a split feel broken.
+    void setVelocityCurve (VelCurve c, int fixedVel);
+
     /// Push every piece of AppState into the DSP objects (after state load).
     void syncAllToDsp();
     void syncSlotToDsp (int slot);
@@ -296,6 +302,7 @@ public:
     // -------------------------------------------------- parameter router
     // Paths: "slot{i}.engine.{id}" | "slot{i}.fx{j}.{id}" | "slot{i}.fx{j}.bypass"
     //        | "slot{i}.ampenv.{attackMs|decayMs|sustain|releaseMs}"
+    //        | "slot{i}.vel.{depth|offset}"
     //        | "master.fx{j}.{id}" | "host.{apvtsParamId}"
     bool setParamNormalized (const juce::String& path, float norm, bool fromMacro = false);
     float getParamNormalized (const juce::String& path) const;

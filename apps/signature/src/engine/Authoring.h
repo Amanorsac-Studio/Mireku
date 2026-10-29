@@ -147,7 +147,7 @@ inline SchemaCheck checkBundlePresetVar (const juce::var& v)
     if (o == nullptr) { r.errors.add ("preset is not a JSON object"); return r; }
 
     static const juce::StringArray allowedTop { "formatVersion", "name", "tags", "engine",
-                                                "fxRack", "ampEnvelope" };
+                                                "fxRack", "ampEnvelope", "velocity" };
     for (auto& prop : o->getProperties())
         if (! allowedTop.contains (prop.name.toString()))
             r.errors.add ("additional property not allowed: " + prop.name.toString());
@@ -230,6 +230,29 @@ inline SchemaCheck checkBundlePresetVar (const juce::var& v)
                 r.errors.add ("ampEnvelope: additional property " + prop.name.toString());
     }
     else if (o->hasProperty ("ampEnvelope")) r.errors.add ("ampEnvelope must be an object");
+
+    // VELOCITY is OPTIONAL and stays optional: every preset the artist has
+    // already saved was written without it, and all of them must keep
+    // validating. Present-but-wrong is still an error, though - a malformed
+    // block would load as a silent slot.
+    if (auto* vel = o->getProperty ("velocity").getDynamicObject())
+    {
+        static const juce::StringArray allowedVel { "depth", "offset" };
+        for (auto& prop : vel->getProperties())
+            if (! allowedVel.contains (prop.name.toString()))
+                r.errors.add ("velocity: additional property " + prop.name.toString());
+        for (auto* id : { "depth", "offset" })
+        {
+            if (! vel->hasProperty (id)) { r.errors.add (juce::String ("velocity: missing ") + id); continue; }
+            auto pv = vel->getProperty (id);
+            if (! (pv.isInt() || pv.isInt64() || pv.isDouble()))
+            { r.errors.add (juce::String ("velocity.") + id + " must be a number"); continue; }
+            const double d = (double) pv;
+            if (d < 0.0 || d > 127.0)
+                r.errors.add (juce::String ("velocity.") + id + " " + juce::String (d, 0) + " outside 0..127");
+        }
+    }
+    else if (o->hasProperty ("velocity")) r.errors.add ("velocity must be an object");
 
     r.ok = r.errors.isEmpty();
     return r;

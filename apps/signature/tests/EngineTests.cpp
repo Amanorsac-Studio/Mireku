@@ -1630,6 +1630,8 @@ static void testArpStateRoundTrip()
 #include "FdnReverb.inc"
 // TAPE MACHINE + MODULATOR - the two units added 2026-10-29.
 #include "TapeAndModulator.inc"
+// WORLD VOICING - the per-world tone controls, measured.
+#include "WorldVoicing.inc"
 
 //==============================================================================
 //==============================================================================
@@ -1991,6 +1993,8 @@ int main()
     testModulatorSidebands();
     testTapeMachineLatencyIsSmall();
     testFdnEchoDensity();
+    // WORLD VOICING
+    testWorldVoicingControls();
     // DSP STANDARDS PASS
     testAliasSuppression();
     testToneBeforeAfter();

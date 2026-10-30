@@ -70,12 +70,77 @@ inline juce::String refusalFor (const ReadError& e)
     }
 }
 
+//==============================================================================
+// PREVIEW. What an import WOULD produce, so the artist can say where each
+// instrument goes before a byte is written. The world (JM Set / MKS / FM /
+// Strings) is otherwise inferred from the waveform's name, which is a guess
+// about his own sounds that he is better placed to make.
+struct PlannedInstrumentInfo
+{
+    int index = 0;                 ///< the plan's instrument index; the key for a world override
+    juce::String name, bundleName;
+    int world = 0;                 ///< the world the name suggested
+    int sampleCount = 0;
+    juce::int64 bytes = 0;
+};
+
+struct LibraryPreview
+{
+    juce::File file;
+    bool ok = false;
+    juce::String refusal;
+    std::vector<PlannedInstrumentInfo> instruments;
+    std::vector<SkippedInstrument> skipped;
+};
+
+/// Read and plan every file without writing anything. `shouldAbort` is polled
+/// between files; `onProgress` reports the file being read.
+inline std::vector<LibraryPreview> previewLibraries (const juce::Array<juce::File>& files,
+                                                     std::function<bool()> shouldAbort = {},
+                                                     std::function<void (const juce::String&, double)> onProgress = {})
+{
+    std::vector<LibraryPreview> out;
+    for (int i = 0; i < files.size(); ++i)
+    {
+        if (shouldAbort && shouldAbort()) break;
+        const auto& f = files[i];
+        if (onProgress) onProgress (f.getFileName(), (double) i / (double) juce::jmax (1, files.size()));
+        LibraryPreview p;
+        p.file = f;
+        juce::MemoryBlock mb;
+        if (! f.loadFileAsData (mb)) { p.refusal = "the file could not be read."; out.push_back (p); continue; }
+        const auto* raw = static_cast<const juce::uint8*> (mb.getData());
+        try
+        {
+            const auto lib = parse (mb);
+            const auto dp = decodeDpfm (raw, (juce::int64) mb.getSize(), lib);
+            std::vector<double> levels;
+            for (auto& wf : lib.waveforms)
+                levels.push_back (measureKeyzone (raw, representativeKeyzone (wf)).peakDb);
+            const auto plan = planImport (lib, dp, levels);
+            for (auto& in : plan.instruments)
+                p.instruments.push_back ({ in.index, in.name, in.bundleName, in.world, in.sampleCount, in.totalPcmBytes });
+            p.skipped = plan.skipped;
+            p.ok = ! p.instruments.empty();
+            if (! p.ok) p.refusal = "no instrument in it could be laid out.";
+        }
+        catch (const ReadError& e) { p.refusal = refusalFor (e); }
+        catch (const std::exception& e) { p.refusal = juce::String (e.what()); }
+        out.push_back (std::move (p));
+    }
+    return out;
+}
+
 /// Import every file into `destDir`. `shouldAbort` is polled between samples and
 /// `onProgress` reports the file being worked on and overall position.
+/// `worldFor (file, instrumentIndex)` may return 0..3 to put that instrument in
+/// a world of the artist's choosing (see previewLibraries); anything else keeps
+/// the world the name suggested.
 inline ImportReport importLibraries (const juce::Array<juce::File>& files, const juce::File& destDir,
                                      const juce::String& author,
                                      std::function<bool()> shouldAbort = {},
-                                     std::function<void (const juce::String&, double)> onProgress = {})
+                                     std::function<void (const juce::String&, double)> onProgress = {},
+                                     std::function<int (const juce::File&, int)> worldFor = {})
 {
     ImportReport report;
     if (! destDir.createDirectory().wasOk()) return report;
@@ -124,6 +189,16 @@ inline ImportReport importLibraries (const juce::Array<juce::File>& files, const
                 if (shouldAbort && shouldAbort()) break;
                 auto copy = inst;
                 copy.bundleName = freeBundleName (destDir, inst.bundleName, taken);
+                if (worldFor)
+                {
+                    const int w = worldFor (f, inst.index);
+                    if (w >= 0 && w <= 3 && w != inst.world)
+                    {
+                        copy.world = w;
+                        copy.notes.add ("Filed under " + juce::String (worldName (w)) + " at import, by choice; the name "
+                                        "suggested " + juce::String (worldName (inst.world)) + ".");
+                    }
+                }
                 // A single instrument that cannot be laid out does not sink the
                 // library: it is reported and the rest still import.
                 try

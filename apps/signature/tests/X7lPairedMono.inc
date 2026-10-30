@@ -354,3 +354,51 @@ static void testX7lNamedWindowsAndSkips()
                "the gappy one is skipped with its reason: " + (plan.skipped.empty() ? juce::String ("-") : plan.skipped[0].reason));
     }
 }
+
+// The import can be told where each instrument goes. previewLibraries() says
+// what an import would make and which world the name suggests; importLibraries
+// takes a worldFor() override and writes that world into the bundle.
+static void testX7lImportWorldChoice()
+{
+    using namespace pairedmono;
+    std::printf ("\n== X7L: choosing the world at import ==\n");
+    auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("mireku-tests").getChildFile ("world-choice");
+    dir.deleteRecursively();
+    dir.createDirectory();
+    const auto x7l = dir.getChildFile ("Two.X7L");
+    const auto mb = build ({ { "1:Gospel Grand v3", kZones, 8000 }, { "2:Hugo Saw", kZones, 8000 } });
+    CHECK (x7l.replaceWithData (mb.getData(), mb.getSize()), "a two-instrument library is written to disk");
+
+    const auto previews = jm::x7l::previewLibraries ({ x7l });
+    CHECK (previews.size() == 1 && previews[0].ok && previews[0].instruments.size() == 2,
+           "preview lists both instruments without writing anything");
+    CHECK (dir.findChildFiles (juce::File::findDirectories, false, "*.jmi").isEmpty(), "and no bundle exists yet");
+    int grandIdx = -1, grandWorld = -1;
+    for (auto& in : previews[0].instruments)
+        if (in.name.startsWith ("Gospel")) { grandIdx = in.index; grandWorld = in.world; }
+    CHECK (grandIdx >= 0, "the preview names the instrument the name heuristic would file as "
+                          + juce::String (grandWorld >= 0 ? worldName (grandWorld) : "?"));
+
+    const int chosen = grandWorld == 1 ? 2 : 1;      // anything but the guess
+    auto dest = dir.getChildFile ("out");
+    const auto report = jm::x7l::importLibraries ({ x7l }, dest, "test", {}, {},
+        [&] (const juce::File&, int idx) { return idx == grandIdx ? chosen : -1; });
+    CHECK (report.imported == 1 && report.bundles == 2, "the import writes both bundles");
+    int found = 0;
+    bool grandOk = false, otherOk = false;
+    for (auto& b : dest.findChildFiles (juce::File::findDirectories, false, "*.jmi"))
+    {
+        jmi::Instrument inst;
+        std::string err;
+        if (! jmi::parseInstrumentJson (b.getChildFile ("instrument.json").loadFileAsString().toStdString(), inst, err)) continue;
+        ++found;
+        const juce::String wid (jmi::worldId (inst.meta.world));
+        if (b.getFileName().startsWith ("Gospel"))
+            grandOk = wid == worldJsonId (chosen) && inst.meta.notes.find ("Filed under") != std::string::npos;
+        else
+            otherOk = inst.meta.notes.find ("Filed under") == std::string::npos;
+    }
+    CHECK (found == 2 && grandOk, "the chosen instrument carries the chosen world and says so in its notes");
+    CHECK (otherOk, "the instrument left alone keeps the world its name suggested");
+    dir.deleteRecursively();
+}

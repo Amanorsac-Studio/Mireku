@@ -2054,13 +2054,16 @@ public:
     // threadComplete on the message thread when it finishes or is cancelled, and
     // deletes itself afterwards - so the completion handler is a callback rather
     // than code after a blocking call.
+    /// (file path, plan instrument index) -> world 0..3 the artist chose.
+    using WorldChoices = std::map<std::pair<juce::String, int>, int>;
+
     struct ImportTask : public juce::ThreadWithProgressWindow
     {
-        ImportTask (juce::Array<juce::File> f, juce::File dest, juce::String who,
+        ImportTask (juce::Array<juce::File> f, juce::File dest, juce::String who, WorldChoices worlds,
                     std::function<void (bool, x7l::ImportReport)> done)
             : juce::ThreadWithProgressWindow ("Importing libraries", true, true),
               files (std::move (f)), destDir (std::move (dest)), author (std::move (who)),
-              onDone (std::move (done))
+              choices (std::move (worlds)), onDone (std::move (done))
         {
             setStatusMessage ("Reading...");
         }
@@ -2074,6 +2077,11 @@ public:
                 {
                     setProgress (p);
                     setStatusMessage (what);
+                },
+                [this] (const juce::File& f, int idx)
+                {
+                    auto it = choices.find ({ f.getFullPathName(), idx });
+                    return it == choices.end() ? -1 : it->second;
                 });
         }
 
@@ -2086,8 +2094,173 @@ public:
         juce::Array<juce::File> files;
         juce::File destDir;
         juce::String author;
+        WorldChoices choices;
         std::function<void (bool, x7l::ImportReport)> onDone;
         x7l::ImportReport report;
+    };
+
+    /// The read-and-plan pass that runs before the chooser: same shape as
+    /// ImportTask, writes nothing.
+    struct PreviewTask : public juce::ThreadWithProgressWindow
+    {
+        PreviewTask (juce::Array<juce::File> f, std::function<void (bool, std::vector<x7l::LibraryPreview>)> done)
+            : juce::ThreadWithProgressWindow ("Reading libraries", true, true),
+              files (std::move (f)), onDone (std::move (done))
+        {
+            setStatusMessage ("Reading...");
+        }
+        void run() override
+        {
+            previews = x7l::previewLibraries (files,
+                [this] { return threadShouldExit(); },
+                [this] (const juce::String& what, double p) { setProgress (p); setStatusMessage (what); });
+        }
+        void threadComplete (bool userCancelled) override
+        {
+            if (onDone) onDone (! userCancelled, previews);
+            delete this;
+        }
+        juce::Array<juce::File> files;
+        std::function<void (bool, std::vector<x7l::LibraryPreview>)> onDone;
+        std::vector<x7l::LibraryPreview> previews;
+    };
+
+    //================================================ WHERE SHOULD THESE GO?
+    // Between reading and writing: one row per instrument the import would make,
+    // each with a world menu defaulting to the importer's guess from the name.
+    // The artist asked for this after the Full Expansion import filed his
+    // sounds by their waveform names - he knows where his own pianos belong.
+    struct WorldChooser : public juce::Component
+    {
+        WorldChooser (std::vector<x7l::LibraryPreview> p, std::function<void (WorldChoices)> onImport)
+            : previews (std::move (p)), go (std::move (onImport))
+        {
+            title.setText ("Where should these go?", juce::dontSendNotification);
+            title.setFont (Theme::display (17.0f));
+            title.setColour (juce::Label::textColourId, Theme::gold);
+            addAndMakeVisible (title);
+
+            hint.setText ("Each instrument is filed under the world the importer guessed from its name. "
+                          "Change any of them, or set them all at once.", juce::dontSendNotification);
+            hint.setFont (Theme::ui (12.0f));
+            hint.setColour (juce::Label::textColourId, Theme::muted);
+            addAndMakeVisible (hint);
+
+            allLabel.setText ("ALL", juce::dontSendNotification);
+            allLabel.setFont (Theme::ui (11.0f));
+            allLabel.setColour (juce::Label::textColourId, Theme::cream);
+            addAndMakeVisible (allLabel);
+            all.addItem ("Each its own", 1);
+            for (int w = 0; w < 4; ++w) all.addItem (worldName (w), w + 2);
+            all.setSelectedId (1, juce::dontSendNotification);
+            all.onChange = [this]
+            {
+                const int id = all.getSelectedId();
+                if (id < 2) return;
+                for (auto& r : rows) r->box.setSelectedId (id - 1, juce::dontSendNotification);
+            };
+            addAndMakeVisible (all);
+
+            for (auto& lp : previews)
+            {
+                if (! lp.ok) continue;
+                for (auto& in : lp.instruments)
+                {
+                    auto* r = rows.add (new Row());
+                    r->key = { lp.file.getFullPathName(), in.index };
+                    r->name.setText (in.name, juce::dontSendNotification);
+                    r->name.setFont (Theme::ui (13.0f));
+                    r->name.setColour (juce::Label::textColourId, Theme::cream);
+                    r->detail.setText (juce::String (in.sampleCount) + " samples, "
+                                       + juce::String ((double) in.bytes / 1048576.0, 0) + " MB"
+                                       + (previews.size() > 1 ? " - " + lp.file.getFileName() : juce::String()),
+                                       juce::dontSendNotification);
+                    r->detail.setFont (Theme::ui (11.0f));
+                    r->detail.setColour (juce::Label::textColourId, Theme::muted);
+                    for (int w = 0; w < 4; ++w) r->box.addItem (worldName (w), w + 1);
+                    r->box.setSelectedId (juce::jlimit (0, 3, in.world) + 1, juce::dontSendNotification);
+                    r->box.onChange = [this] { all.setSelectedId (1, juce::dontSendNotification); };
+                    r->addAndMakeVisible (r->name);
+                    r->addAndMakeVisible (r->detail);
+                    r->addAndMakeVisible (r->box);
+                    list.addAndMakeVisible (r);
+                }
+            }
+            view.setViewedComponent (&list, false);
+            view.setScrollBarsShown (true, false);
+            addAndMakeVisible (view);
+
+            importBtn.onClick = [this]
+            {
+                WorldChoices out;
+                for (auto* r : rows) out[r->key] = r->box.getSelectedId() - 1;
+                auto fn = go;
+                dismiss();
+                if (fn) fn (std::move (out));
+            };
+            cancelBtn.onClick = [this] { dismiss(); };
+            addAndMakeVisible (importBtn);
+            addAndMakeVisible (cancelBtn);
+
+            setSize (560, juce::jlimit (260, 620, 150 + rows.size() * kRowH + 56));
+        }
+
+        void dismiss()
+        {
+            if (auto* dw = findParentComponentOfClass<juce::DialogWindow>()) dw->exitModalState (0);
+        }
+
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (juce::Colour (0xff0B0A09));
+            g.setColour (Theme::gold.withAlpha (0.25f));
+            g.drawRect (getLocalBounds(), 1);
+        }
+
+        void resized() override
+        {
+            auto b = getLocalBounds().reduced (18);
+            title.setBounds (b.removeFromTop (26));
+            hint.setBounds (b.removeFromTop (34));
+            auto allRow = b.removeFromTop (28);
+            allLabel.setBounds (allRow.removeFromLeft (40));
+            all.setBounds (allRow.removeFromLeft (170));
+            b.removeFromTop (8);
+            auto buttons = b.removeFromBottom (36);
+            cancelBtn.setBounds (buttons.removeFromRight (120).reduced (0, 4));
+            buttons.removeFromRight (10);
+            importBtn.setBounds (buttons.removeFromRight (120).reduced (0, 4));
+            b.removeFromBottom (10);
+            view.setBounds (b);
+            list.setSize (b.getWidth() - 10, rows.size() * kRowH);
+            int y = 0;
+            for (auto* r : rows)
+            {
+                r->setBounds (0, y, list.getWidth(), kRowH);
+                auto rb = r->getLocalBounds().reduced (0, 4);
+                r->box.setBounds (rb.removeFromRight (150));
+                rb.removeFromRight (10);
+                r->name.setBounds (rb.removeFromTop (rb.getHeight() / 2));
+                r->detail.setBounds (rb);
+                y += kRowH;
+            }
+        }
+
+        static constexpr int kRowH = 44;
+        struct Row : public juce::Component
+        {
+            std::pair<juce::String, int> key;
+            juce::Label name, detail;
+            juce::ComboBox box;
+        };
+        std::vector<x7l::LibraryPreview> previews;
+        std::function<void (WorldChoices)> go;
+        juce::Label title, hint, allLabel;
+        juce::ComboBox all;
+        juce::Viewport view;
+        juce::Component list;
+        juce::OwnedArray<Row> rows;
+        ux::PlateButton importBtn { "IMPORT" }, cancelBtn { "CANCEL" };
     };
 
     void chooseX7lFiles()
@@ -2118,9 +2291,44 @@ public:
             return;
         }
         // The panel can be rebuilt or destroyed while the import runs, so the
-        // completion handler holds a SafePointer and checks it.
+        // completion handlers hold a SafePointer and check it.
         juce::Component::SafePointer<ModelPagePanel> safe (this);
-        auto* task = new ImportTask (files, dest, "James Mireku",
+
+        // 1. read and plan; 2. ask where each instrument goes; 3. write.
+        auto* preview = new PreviewTask (files,
+            [safe, files, dest] (bool finished, std::vector<x7l::LibraryPreview> previews)
+            {
+                auto* self = safe.getComponent();
+                if (self == nullptr || ! finished) return;
+                int instruments = 0;
+                for (auto& p : previews) instruments += (int) p.instruments.size();
+                if (instruments == 0)
+                {
+                    // Nothing to place: run the import anyway so its report
+                    // says exactly why each file was refused.
+                    self->launchX7lImport (files, dest, {});
+                    return;
+                }
+                juce::DialogWindow::LaunchOptions o;
+                o.dialogTitle = "Import libraries";
+                o.dialogBackgroundColour = juce::Colour (0xff0B0A09);
+                o.escapeKeyTriggersCloseButton = true;
+                o.useNativeTitleBar = false;
+                o.resizable = false;
+                o.content.setOwned (new WorldChooser (std::move (previews),
+                    [safe, files, dest] (WorldChoices choices)
+                    {
+                        if (auto* s = safe.getComponent()) s->launchX7lImport (files, dest, std::move (choices));
+                    }));
+                o.launchAsync();
+            });
+        preview->launchThread();
+    }
+
+    void launchX7lImport (const juce::Array<juce::File>& files, const juce::File& dest, WorldChoices choices)
+    {
+        juce::Component::SafePointer<ModelPagePanel> safe (this);
+        auto* task = new ImportTask (files, dest, "James Mireku", std::move (choices),
             [safe] (bool finished, x7l::ImportReport report) mutable
             {
                 auto lines = report.summaryLines();

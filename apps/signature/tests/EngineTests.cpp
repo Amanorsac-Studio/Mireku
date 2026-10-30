@@ -1976,6 +1976,7 @@ int main()
     testX7lImportGuards();
     testX7lHardPannedPairs();
     testX7lNamedWindowsAndSkips();
+    testX7lImportWorldChoice();
     // VELOCITY RESPONSE
     testVelocityCurveShapes();
     testVelocityDepthAndOffset();

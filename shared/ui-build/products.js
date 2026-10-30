@@ -35,7 +35,7 @@ const low = {
     {name:'Flip Top',     sub:'TUBE COMBO · ROUND',    p:'linear-gradient(#d7dce4,#b9c0cc)', pp:'#4a6a9a', k:'#18202c', g:W('#2a3a55','#1b283b'), ink:'#18202c', logo:'#1b283b', subc:'#4a5a72', onbg:'#18202c', onfg:'#d7dce4'},
     {name:'Monolith',     sub:'MODERN STACK · 300 W',  p:'linear-gradient(#2a2d33,#17191d)', pp:'#9aa0aa', k:'#d9dde5', g:W('#2a2a2a','#151515'), ink:'#d9dde5', logo:'#f43f5e', subc:'#9aa0aa', onbg:'#d9dde5', onfg:'#17191d'}],
   cabs:[{name:'1×15',sub:'Round, deep'},{name:'2×10',sub:'Punchy mids'},{name:'4×10',sub:'The stage cab'},
-        {name:'8×10',sub:'Big and slow'},{name:'DI',sub:'No cabinet'},{name:'Your IR',sub:'An impulse file'}] }; })();`,
+        {name:'8×10',sub:'Big and slow'},{name:'No cab',sub:'The amp, no speaker'},{name:'Your IR',sub:'An impulse file'}] }; })();`,
   // Brand and instrument wording. Applied to the whole page, in order.
   text: [
     ['Guitar amp, pedalboard, looper and music tutor.', 'Bass amp, pedalboard, looper and music tutor.'],

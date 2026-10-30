@@ -271,6 +271,10 @@ body.dragging,body.dragging *{cursor:grabbing!important}
 .flip i{width:16px;height:26px;border-radius:5px;background:#1b1714;box-shadow:inset 0 0 0 1px rgba(255,255,255,.12);position:relative}
 .flip i::after{content:"";position:absolute;left:3px;right:3px;height:10px;border-radius:3px;background:linear-gradient(#d9d2c4,#8e877b);top:13px;transition:top .15s}
 .flip.on i::after{top:3px}
+/* the amp switched off: the lamp goes dark and the panel fades; the cab off: an empty baffle */
+.amp.ampoff .lamp{animation:none;background:radial-gradient(circle at 40% 35%,#5a4a3a,#2b241e 55%)}
+.amp.ampoff .knobrow,.amp.ampoff .badge{opacity:.5}
+.amp.caboff .plate{opacity:.35}
 .grille{position:relative;border-radius:10px;overflow:hidden;min-height:110px;background:var(--g);box-shadow:inset 0 0 0 2px #2b1f17,inset 0 0 40px rgba(0,0,0,.65)}
 .grille::before{content:"";position:absolute;inset:0;background:radial-gradient(120% 140% at 50% 0%,rgba(255,220,170,.08),transparent 60%)}
 .plate{position:absolute;left:50%;top:12px;transform:translateX(-50%);padding:3px 14px;border-radius:5px;background:linear-gradient(180deg,#e8dcc0,#b9a57d);
@@ -344,6 +348,21 @@ body.dragging,body.dragging *{cursor:grabbing!important}
 .beatdots i.one{width:15px;border-radius:5px}
 .beatdots i.now{background:var(--amber)}
 .beatdots.count i.now{background:var(--good)}
+.outhead{flex-wrap:wrap}
+.outhead .tag{order:3}
+/* small, in the title row: a 30 px dial with its value, and a short toggle */
+.outctl{display:flex;order:2;margin:0 auto 0 0;align-items:center;gap:12px}
+.outctl .ctl{width:auto;display:flex;align-items:center;gap:6px}
+.outctl .ctl .dial{width:30px;height:30px;margin:0}
+.outctl .ctl svg{width:30px;height:30px}
+.outctl .ctl .lab{display:none}
+.outctl .ctl .val{font-size:11px}
+.outctl .toggle{width:40px;height:24px;margin:0}
+.outctl .toggle::after{width:18px;height:18px;top:2px;left:2px}
+.outctl .toggle.on::after{transform:translateX(16px)}
+/* a long list pages with arrows and a count, not a dot a page */
+.pager .pn{width:36px;height:28px;font-size:20px;line-height:1;color:var(--muted)}
+.pager .pc{font-family:var(--font-num);font-size:11px;letter-spacing:.08em;color:var(--muted);align-self:center;min-width:52px;text-align:center}
 .meters{display:grid;gap:9px}
 .mrow{display:grid;grid-template-columns:30px 1fr 50px;align-items:center;gap:10px}
 .meter{height:7px;border-radius:4px;background:var(--well);overflow:hidden;border:1px solid var(--line)}

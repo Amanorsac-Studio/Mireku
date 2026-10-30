@@ -83,7 +83,9 @@
         </div>
       </div>
       <div class="card">
-        <div class="head" style="margin-bottom:8px"><h2>Output</h2><span class="tag" id="limTag">Limiter</span></div>
+        <!-- the clean output volume and the limiter: after everything, no colour of their own.
+             They sit on their own line under the title; on a short window they shrink into the title row. -->
+        <div class="head outhead" style="margin-bottom:8px"><h2>Output</h2><div class="outctl" id="outCtl"></div><span class="tag" id="limTag">Limiter</span></div>
         <div class="meters">
           <div class="mrow"><span class="cap">IN</span><div class="meter" id="mIn"><b></b></div><span class="num" id="mInV">—</span></div>
           <div class="mrow"><span class="cap">OUT</span><div class="meter" id="mOut"><b></b></div><span class="num" id="mOutV">—</span></div>

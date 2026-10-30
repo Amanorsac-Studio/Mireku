@@ -680,6 +680,85 @@ struct OctaveUpShifter
     }
 };
 
+//================================================ Schroeder allpass diffuser
+// What a sparse eight-line network lacks and what Omnisphere's panel leads
+// with as DENSITY: a run of these in front of the loop smears each input
+// sample into a cloud of closely spaced copies, so the early tail is a wash
+// rather than countable echoes - and so the octave-up copy of that tail is a
+// wash too, which is the difference between a shimmer and a metallic one.
+struct AllpassDiffuser
+{
+    std::vector<float> buf;
+    int size = 0, w = 0, len = 1;
+    float g = 0.6f;
+    void prepare (double sr, float ms, float gain)
+    {
+        len = juce::jmax (1, (int) std::lround (sr * ms * 0.001));
+        size = juce::nextPowerOfTwo (len + 4);
+        buf.assign ((size_t) size, 0.0f);
+        g = gain; w = 0;
+    }
+    void reset() { std::fill (buf.begin(), buf.end(), 0.0f); w = 0; }
+    float process (float x)
+    {
+        const float d = buf[(size_t) ((w - len + size) & (size - 1))];
+        const float v = x - g * d;
+        buf[(size_t) w] = v;
+        w = (w + 1) & (size - 1);
+        return d + g * v;
+    }
+};
+
+//================================================= delay-line micro-pitch
+// The Eventide H3000 way of detuning by cents: a delay line whose read
+// position drifts at (1 - ratio) samples per sample, read by two taps half a
+// window apart and crossfaded with an equal-power sine window so the wrap is
+// never heard. Latency is the window's mean, a few milliseconds; a phase
+// vocoder needs a hundred and more, and for a handful of cents the vocoder
+// buys nothing the ear can find. (Stretch stays where it earns its latency:
+// the octave-up shimmer.)
+struct MicroPitch
+{
+    std::vector<float> buf;
+    int size = 0, w = 0;
+    float window = 1.0f;     // samples
+    double phase = 0.0;      // 0..1 position of tap A through the window
+    void prepare (double sr, float windowMs)
+    {
+        window = (float) (sr * windowMs * 0.001);
+        size = juce::nextPowerOfTwo ((int) window + 8);
+        buf.assign ((size_t) size, 0.0f);
+        w = 0; phase = 0.0;
+    }
+    void reset() { std::fill (buf.begin(), buf.end(), 0.0f); phase = 0.0; }
+    float read (float delaySamples) const
+    {
+        const float d = juce::jlimit (1.0f, (float) (size - 3), delaySamples);
+        const float rp = (float) w - d;
+        const int i0 = (int) std::floor (rp);
+        const float frac = rp - (float) i0;
+        const int a = (i0 % size + size) & (size - 1), b = (a + 1) & (size - 1);
+        return buf[(size_t) a] * (1.0f - frac) + buf[(size_t) b] * frac;
+    }
+    /// ratio > 1 pitches UP (the read tap moves towards the write head).
+    float process (float x, double ratio)
+    {
+        buf[(size_t) w] = x;
+        // The tap's delay runs from `window` down to 0 for an upward shift
+        // (and the other way for a downward one); phase is where it is.
+        phase += (ratio - 1.0) / (double) window;
+        phase -= std::floor (phase);
+        const float dA = (float) ((1.0 - phase) * window);
+        double pB = phase + 0.5; pB -= std::floor (pB);
+        const float dB = (float) ((1.0 - pB) * window);
+        const float gA = std::sin ((float) phase * juce::MathConstants<float>::pi);
+        const float gB = std::sin ((float) pB * juce::MathConstants<float>::pi);
+        const float y = read (dA) * gA + read (dB) * gB;
+        w = (w + 1) & (size - 1);
+        return y;
+    }
+};
+
 //===================================================== FDN reverb core
 // Replaces juce::Reverb (Freeverb) under both the Plate and the Hall
 // (2026-10-29, after measuring it): Freeverb's eight parallel combs feed back
@@ -698,18 +777,27 @@ struct FdnReverb
     // the mode density fills in quickly. Scaled by SIZE.
     static constexpr float kBaseMs[N] = { 23.1f, 29.7f, 37.3f, 43.9f, 53.3f, 61.7f, 73.9f, 89.3f };
 
+    // IN-LOOP DIFFUSION. Input diffusers alone measured 8% early density: a
+    // sample goes through them once. An allpass inside each line is passed
+    // on EVERY circuit, so the tail smears further each time round - which
+    // is where a dense algorithm's wash actually comes from. Lossless, so
+    // the decay stays the decay; its length is counted in the loop gain.
+    static constexpr float kLoopApMs[N] = { 3.1f, 4.3f, 5.9f, 7.1f, 3.7f, 5.3f, 6.7f, 8.3f };
+
     void prepare (double sampleRate)
     {
         sr = sampleRate;
         const int maxLen = (int) (sr * 0.0893 * 1.6) + 256;      // longest line at size 1.6, plus mod room
         size = juce::nextPowerOfTwo (maxLen);
         for (auto& b : buf) b.assign ((size_t) size, 0.0f);
+        for (int i = 0; i < N; ++i) loopAp[i].prepare (sr, kLoopApMs[i], 0.55f);
         reset();
     }
     void reset()
     {
         for (auto& b : buf) std::fill (b.begin(), b.end(), 0.0f);
         for (auto& d : damp) d.reset();
+        for (auto& a : loopAp) a.reset();
         w = 0; phase = 0.0;
     }
     /// size 0..1 -> 0.45x..1.6x of the base lengths. rt60 in seconds. damp 0..1
@@ -722,8 +810,16 @@ struct FdnReverb
         for (int i = 0; i < N; ++i)
         {
             lenSamp[i] = (float) (kBaseMs[i] * 0.001 * sr) * scale;
-            // -60 dB after rt60 seconds of travelling round THIS line
-            gain[i] = std::pow (10.0f, -3.0f * lenSamp[i] / (rt * (float) sr));
+            // -60 dB after rt60 seconds of travelling round THIS line (the
+            // in-loop allpass is part of the circuit, so its length counts)
+            // ...at its GROUP delay, len * (1+g)/(1-g), not its length: at g 0.55
+            // that is 3.4x, and counting only the length ran a 0.5 s plate out
+            // to 0.7 s.
+            // The full group-delay figure overshot the other way (20 s measured
+            // 13.8); half of it measures within 15% across the range.
+            const float apG = loopAp[i].g;
+            const float circuit = lenSamp[i] + 0.5f * (float) loopAp[i].len * (1.0f + apG) / (1.0f - apG);
+            gain[i] = std::pow (10.0f, -3.0f * circuit / (rt * (float) sr));
             gSq += gain[i] * gain[i];
             modDepth[i] = mod01 * (float) (sr * 0.0004) * (1.0f + 0.15f * (float) i);   // up to ~0.5 ms
         }
@@ -759,7 +855,7 @@ struct FdnReverb
             const int a = (i0 % size + size) & m;
             const int b = (a + 1) & m;
             const float x = buf[i][(size_t) a] * (1.0f - frac) + buf[i][(size_t) b] * frac;
-            v[i] = damp[i].process (x) * gain[i];
+            v[i] = loopAp[i].process (damp[i].process (x)) * gain[i];
             sum += v[i];
         }
         phase += modInc; if (phase >= 1.0) phase -= 1.0;
@@ -776,6 +872,7 @@ struct FdnReverb
 
     std::array<std::vector<float>, N> buf;
     std::array<OnePoleLP, N> damp;
+    std::array<AllpassDiffuser, N> loopAp;
     std::array<float, N> lenSamp {}, gain {}, modDepth {};
     int size = 0, w = 0;
     double sr = 48000, phase = 0.0, modInc = 0.0;
@@ -793,22 +890,45 @@ public:
         fdn_.prepare (sr);
         pre_.prepare (sr, 220.0f);
         modDl_.prepare (sr, 12.0f);
-        for (auto& f : shimLp_) f.setCutoff (5000.0f, sr);
-        for (auto& f : shimHp_) f.setCutoff (120.0f, sr);
+        // The recirculation used to be low-passed at 5 kHz to stop the
+        // runaway. That is where the air went: the client compared it to
+        // Omnisphere's and heard a dull one. The soft ceiling is what
+        // actually bounds the loop; the band limit only needs to keep
+        // ultrasonic build-up and DC out, so it is 12 kHz / 80 Hz now.
+        for (auto& f : shimLp_) f.setCutoff (juce::jmin (12000.0f, (float) (sr * 0.4)), sr);
+        for (auto& f : shimHp_) f.setCutoff (80.0f, sr);
         wet_.setSize (2, maxBlock);
         shim_.setSize (2, maxBlock);
-        // SIGNALSMITH STRETCH as the octave-up shifter. The grain shifter it
-        // replaces measured as contributing NOTHING audible at shimmer 100,
-        // and before it was guarded it ran away. presetCheaper is the
-        // smaller FFT; a shimmer is heard through a long tail, where its
-        // extra smearing is invisible and its CPU saving is not.
-        shifter_.presetCheaper (2, (float) sr);
+        // DENSITY: four allpasses per channel in front of the network, at
+        // mutually prime-ish lengths, right-channel lengths offset so the two
+        // sides decorrelate. g 0.62 is a dense wash without ringing.
+        // Six stages, 66 ms in all at g 0.68: four stages at 31 ms measured
+        // the first 60 ms of the tail less than half dense.
+        // A plate is a smaller object: half the diffusion length and a little
+        // less feedback, or its own smear outlasts a half-second decay (the
+        // 0.5 s plate measured 0.7 s with the hall's diffusion in front).
+        static constexpr float kDiffMs[6] = { 4.73f, 6.19f, 8.31f, 11.87f, 15.13f, 19.91f };
+        const float diffScale = hall_ ? 1.0f : 0.5f, diffG = hall_ ? 0.68f : 0.6f;
+        for (int c = 0; c < 2; ++c)
+            for (int k = 0; k < 6; ++k)
+                diff_[c][k].prepare (sr, kDiffMs[k] * diffScale * (c == 0 ? 1.0f : 1.07f), diffG);
+        // and two more on the way OUT, so even the first arrivals are a cloud
+        static constexpr float kOutMs[2] = { 13.7f, 19.3f };
+        for (int c = 0; c < 2; ++c)
+            for (int k = 0; k < 2; ++k)
+                outDiff_[c][k].prepare (sr, kOutMs[k] * (c == 0 ? 1.0f : 0.93f), 0.5f);
+        // SIGNALSMITH STRETCH as the octave-up shifter, at its full-quality
+        // preset: the cheaper one's smearing was audible as grit on the
+        // octave once the tail itself became smooth.
+        shifter_.presetDefault (2, (float) sr);
         shifter_.setTransposeSemitones (12.0f);
         reset();
     }
     void reset() override
     {
         fdn_.reset(); pre_.reset(); modDl_.reset(); shifter_.reset();
+        for (auto& ch : diff_) for (auto& a : ch) a.reset();
+        for (auto& ch : outDiff_) for (auto& a : ch) a.reset();
         shim_.clear();
         for (auto& f : shimLp_) f.z = 0.0f;
         for (auto& f : shimHp_) f.lp.z = 0.0f;
@@ -840,11 +960,21 @@ public:
         for (int i = 0; i < n; ++i)
         {
             // the shimmer return from the PREVIOUS block is the feedback
-            const float fbL = shimmer > 0.001f ? sL[i] * shimmer * 0.6f : 0.0f;
-            const float fbR = shimmer > 0.001f ? sR[i] * shimmer * 0.6f : 0.0f;
+            const float fbL = shimmer > 0.001f ? sL[i] * shimmer * 0.7f : 0.0f;
+            const float fbR = shimmer > 0.001f ? sR[i] * shimmer * 0.7f : 0.0f;
             pre_.push (L[i] + fbL, R[i] + fbR);
             float inL = pre_.read (0, d), inR = pre_.read (1, d);
+            for (auto& a : diff_[0]) inL = a.process (inL);
+            for (auto& a : diff_[1]) inR = a.process (inR);
             fdn_.process (inL, inR, wL[i], wR[i]);
+            // EARLY TAP: the diffused input goes straight to the output as
+            // well. The shortest line is ~29 ms, so without this nothing
+            // diffuse reaches the ear before it, and the first 60 ms measured
+            // sparse (0.21 normalised density) while 60..80 ms was a wash.
+            wL[i] += inL * 0.25f;
+            wR[i] += inR * 0.25f;
+            for (auto& a : outDiff_[0]) wL[i] = a.process (wL[i]);
+            for (auto& a : outDiff_[1]) wR[i] = a.process (wR[i]);
         }
         if (shimmer > 0.001f)
         {
@@ -866,8 +996,13 @@ public:
         else shim_.clear();
         for (int i = 0; i < n; ++i)
         {
-            L[i] = L[i] * (1.0f - mix) + wL[i] * mix;
-            R[i] = R[i] * (1.0f - mix) + wR[i] * mix;
+            // The octave is also HEARD directly, not only after it has gone
+            // round once more: that is what puts the shimmer on top of the
+            // note rather than a second or two behind it.
+            const float oL = wL[i] + sL[i] * shimmer * 0.5f;
+            const float oR = wR[i] + sR[i] * shimmer * 0.5f;
+            L[i] = L[i] * (1.0f - mix) + oL * mix;
+            R[i] = R[i] * (1.0f - mix) + oR * mix;
         }
     }
     /// For the tests: the FDN's level compensation at the current settings.
@@ -882,6 +1017,8 @@ private:
     SoftCeiling guard_ = makeLoopGuard();          // the delays' feedback guard, on the shimmer loop
     std::array<OnePoleLP, 2> shimLp_;
     std::array<OnePoleHP, 2> shimHp_;
+    std::array<std::array<AllpassDiffuser, 6>, 2> diff_;
+    std::array<std::array<AllpassDiffuser, 2>, 2> outDiff_;
 };
 struct PlateReverbFx : ReverbFxBase { PlateReverbFx() : ReverbFxBase (FxType::plateReverb, false) {} };
 struct HallShimmerFx : ReverbFxBase { HallShimmerFx() : ReverbFxBase (FxType::hallShimmer, true) {} };
@@ -952,7 +1089,10 @@ public:
         for (auto& f : emphasis_) f.setCutoff (3000.0f, sr);
         wowLfo_.setRate (0.6f, sr);
         flutterLfo_.setRate (5.3f, sr);
-        for (auto& sh : shift_) { sh.presetCheaper (1, (float) sr); sh.setTransposeSemitones (0.0f); }
+        // 24 ms window: ~12 ms mean latency against the ~150 ms a phase
+        // vocoder needed, which the client heard as the tape "introducing a
+        // strong latency that none of the other plugins does".
+        for (auto& mp : micro_) mp.prepare (sr, 24.0f);
         tapeBuf_.setSize (2, maxBlock);
         detBuf_.setSize (2, maxBlock);
         reset();
@@ -963,7 +1103,7 @@ public:
         for (auto& f : age_) f.reset();
         for (auto& f : hissHp_) f.reset();
         for (auto& f : emphasis_) f.reset();
-        for (auto& sh : shift_) sh.reset();
+        for (auto& mp : micro_) mp.reset();
         tapeBuf_.clear();
         detBuf_.clear();
         for (auto& sm : smooth_) sm.reset (sr_, 0.02);
@@ -1023,12 +1163,12 @@ public:
         auto* dR = detBuf_.getWritePointer (1);
         if (detuneCents > 0.01f)
         {
-            shift_[0].setTransposeSemitones ( detuneCents / 100.0f);
-            shift_[1].setTransposeSemitones (-detuneCents / 100.0f);
-            const float* inL[1] = { tL }; float* outL[1] = { dL };
-            const float* inR[1] = { tR }; float* outR[1] = { dR };
-            shift_[0].process (inL, n, outL, n);
-            shift_[1].process (inR, n, outR, n);
+            const double up = std::pow (2.0, detuneCents / 1200.0), down = 1.0 / up;
+            for (int i = 0; i < n; ++i)
+            {
+                dL[i] = micro_[0].process (tL[i], up);
+                dR[i] = micro_[1].process (tR[i], down);
+            }
         }
         else
         {
@@ -1048,7 +1188,7 @@ private:
     std::array<OnePoleHP, 2> hissHp_;
     Lfo wowLfo_, flutterLfo_;
     juce::Random rng_ { 0x7a9e };
-    std::array<signalsmith::stretch::SignalsmithStretch<float>, 2> shift_;
+    std::array<MicroPitch, 2> micro_;
     juce::AudioBuffer<float> tapeBuf_, detBuf_;
     std::array<juce::SmoothedValue<float>, 2> smooth_;
 };

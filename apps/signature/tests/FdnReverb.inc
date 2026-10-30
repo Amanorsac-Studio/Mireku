@@ -126,3 +126,46 @@ static void testShimmerIsAudible()
     std::printf ("  tail at 880 Hz: shimmer off %.1f dB, on %.1f dB (440 Hz with shimmer on: %.1f dB)\n", off880, on880, on440);
     CHECK (on880 > off880 + 12.0, "shimmer 100 raises the octave-up partial by more than 12 dB");
 }
+
+/// DENSITY. The client set ours beside Omnisphere's shimmer and heard the
+/// difference; its panel leads with DENSITY. An eight-line network with no
+/// diffusion has countable early echoes, and an octave-up copy of countable
+/// echoes is a metallic shimmer. Measured as the fraction of samples in the
+/// 20..60 ms window of the impulse response that are within 40 dB of the
+/// loudest one: a wash fills it, discrete echoes leave it empty.
+static void testFdnEchoDensity()
+{
+    std::printf ("\n== FDN reverb (5) early echo density ==\n");
+    auto u = createFxUnit (FxType::hallShimmer);
+    u->prepare (48000.0, 480);
+    u->setParam ("size", 70.0f); u->setParam ("decay", 4.0f); u->setParam ("mix", 100.0f);
+    u->setParam ("shimmer", 0.0f); u->setParam ("mod", 0.0f);
+    std::vector<float> ir;
+    juce::AudioBuffer<float> b (2, 480);
+    for (int blk = 0; blk < 8; ++blk)                        // 80 ms
+    {
+        b.clear();
+        if (blk == 0) { b.setSample (0, 0, 1.0f); b.setSample (1, 0, 1.0f); }
+        u->process (b, 120.0);
+        for (int i = 0; i < 480; ++i) ir.push_back (b.getSample (0, i));
+    }
+    // Abel & Huang's normalised echo density: the fraction of samples whose
+    // magnitude exceeds the window's RMS, divided by the 0.3173 a Gaussian
+    // (fully dense) signal gives. Sparse echoes score near 0; a wash scores
+    // near 1. Two windows, so one loud early arrival cannot carry the score.
+    auto density = [&] (int from, int to)
+    {
+        double sq = 0.0;
+        for (int i = from; i < to; ++i) sq += (double) ir[(size_t) i] * ir[(size_t) i];
+        const double rms = std::sqrt (sq / (double) (to - from));
+        int above = 0;
+        for (int i = from; i < to; ++i) if (std::abs ((double) ir[(size_t) i]) > rms) ++above;
+        return (above / (double) (to - from)) / 0.3173;
+    };
+    const double early = density (960, 2880), later = density (2880, 3840);
+    std::printf ("  normalised echo density: 20..60 ms %.2f, 60..80 ms %.2f (1.0 = Gaussian-dense)\n", early, later);
+    // Half-dense within 60 ms, four-fifths by 80 ms. Before the in-loop
+    // allpasses and the early tap these read 0.21 and 0.82.
+    CHECK (early > 0.5, "the early tail (20..60 ms) is more than half dense");
+    CHECK (later > 0.8, "by 60..80 ms it is a wash (over 80% dense)");
+}

@@ -1989,6 +1989,8 @@ int main()
     // TAPE MACHINE + MODULATOR
     testTapeMachineDetunes();
     testModulatorSidebands();
+    testTapeMachineLatencyIsSmall();
+    testFdnEchoDensity();
     // DSP STANDARDS PASS
     testAliasSuppression();
     testToneBeforeAfter();

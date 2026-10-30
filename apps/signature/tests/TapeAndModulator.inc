@@ -105,3 +105,28 @@ static void testModulatorSidebands()
     CHECK (s540 > s340 + 20.0 && s540 > s440 + 20.0,
            "SHIFT: the upper sideband only - the lower one and the input are 20 dB down (the Hilbert pair works)");
 }
+
+/// The client: "the tape machine is introducing a strong latency that none
+/// of the other plugins does". It was the phase-vocoder detune, ~150 ms. A
+/// delay-line micro-pitch is a few ms. Measured on an impulse at the default
+/// 8 cents.
+static void testTapeMachineLatencyIsSmall()
+{
+    std::printf ("\n== Tape Machine: latency ==\n");
+    auto u = createFxUnit (FxType::tapeMachine);
+    u->prepare (48000.0, 480);
+    for (auto& [id, v] : std::vector<std::pair<const char*, float>> { { "drive", 30.0f }, { "wow", 25.0f }, { "age", 30.0f }, { "hiss", 0.0f }, { "detune", 8.0f }, { "mix", 100.0f } })
+        u->setParam (id, v);
+    juce::AudioBuffer<float> b (2, 480);
+    int firstHit = -1;
+    for (int blk = 0; blk < 40 && firstHit < 0; ++blk)
+    {
+        b.clear();
+        if (blk == 0) { b.setSample (0, 0, 1.0f); b.setSample (1, 0, 1.0f); }
+        u->process (b, 120.0);
+        for (int i = 0; i < 480; ++i)
+            if (std::abs (b.getSample (0, i)) > 0.05f) { firstHit = blk * 480 + i; break; }
+    }
+    std::printf ("  first output above -26 dB at sample %d (%.1f ms)\n", firstHit, firstHit / 48.0);
+    CHECK (firstHit >= 0 && firstHit < 48 * 30, "an impulse comes out within 30 ms (the vocoder detune took ~150)");
+}

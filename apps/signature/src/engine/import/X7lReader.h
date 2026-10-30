@@ -34,9 +34,11 @@
 //   then count × 64-byte keyzone records:
 //     +0   u8  keyRangeLo        +1   u8  keyRangeHi
 //     +2   u8  velRangeLo        +3   u8  velRangeHi
+//     +5   u8  pan               (1 = L63 .. 64 = centre .. 127 = R63)
 //     +8   u8  rootNote          +11  u8  channels (1 mono, 2 stereo)
 //     +15  u8  oneShot flag      (1 = no loop; see the note below)
-//     +36  u32 LE  sampleRate
+//     +36  u32 LE  sampleRate       (the PCM's playback rate; not always a
+//                                    standard one - see plausibleSampleRate)
 //     +44  u32 LE  loopStartSample
 //     +48  u32 LE  loopEndSample  (inclusive)
 //     +52  u32 LE  startSample    (0 in every file seen)
@@ -46,9 +48,16 @@
 //   Byte +15 was identified by dumping every undecoded byte of all 4,000+
 //   keyzones in the client's corpus and correlating: it is 1 for every keyzone
 //   whose declared loop spans the whole sample and 0 for every keyzone whose
-//   loop is a sub-region, with no exceptions. It is read here as corroboration
-//   only — the loop fields still decide — so a file that disagrees is refused
-//   rather than guessed at.
+//   loop is a sub-region, with no exceptions. It is the keybank's PLAY MODE
+//   (1 = one shot, 0 = loop). The client's 2026 "Full Expansion" library then
+//   showed what the corpus could not: a one-shot piano ("Gospel Grand v3")
+//   whose keyzones carry the flag = 1 AND leftover loop points - a start of
+//   39,300 on the left channel and 61 on the right of the same stereo pair,
+//   which no intended loop would have. On the synth a one-shot keybank plays
+//   once whatever its loop points say, so that is what is read here: when the
+//   flag says one shot the loop fields are normalised to the whole sample and
+//   the zone is a one-shot. The other disagreement (flag = loop, points
+//   spanning the whole sample) has never been seen and is still refused.
 //
 // ── Stereo ──────────────────────────────────────────────────────────────────
 //   When channels == 2 the keyzone records come in adjacent pairs, identical
@@ -56,13 +65,31 @@
 //   sub-records for them: left then right. The two are folded into ONE logical
 //   keyzone here, with one PCM span per channel.
 //
+//   STEREO BY PANNING. A second way a library stores stereo: two MONO keyzone
+//   records on the same key/velocity slot, identical except for sampleId and
+//   byte +5, which is 1 (hard left) on one and 127 (hard right) on the other.
+//   That is the Montage "two keybanks panned L63 / R63" idiom, and it is how
+//   the client's own 2026 "Full Expansion" library is built - 108 such pairs in
+//   its first waveform. Byte +5 was identified as pan the same way +15 was: it
+//   is 64 (centre) on all ~4,300 keyzones of the verified corpus and on every
+//   unpaired keyzone of that file, and exactly {1, 127} on the paired ones.
+//   The pairs are usually adjacent records but need not be (one waveform puts
+//   a right channel 55 records after its left), so pairing is by slot, not by
+//   position. A pair is folded into ONE stereo keyzone, left = the pan-1
+//   record. A waveform where only SOME slots are doubled, or where a doubled
+//   slot is not one left and one right, is still refused: that is two
+//   different samples in one slot, and guessing which one plays would be
+//   silent and wrong.
+//
 // ── DWIM record body — the audio (big-endian headers) ───────────────────────
 //   +0            u32 BE  sub-record count (== the DWFM keyzone-record count)
 //   then count × [byteLength:u32 BE][PCM: byteLength bytes]
 //   PCM is 16-bit signed little-endian, one channel per sub-record.
 #pragma once
 #include <juce_core/juce_core.h>
+#include <map>
 #include <optional>
+#include <set>
 #include <vector>
 
 namespace jm::x7l {
@@ -83,10 +110,31 @@ struct ReadError : public std::runtime_error
 inline constexpr const char* kMagic = "YAMAHA-YSFC";
 inline constexpr int kKeyzoneRecordBytes = 64;
 
-/// Sample rates the reader accepts (matches the .jmi schema's enum).
+/// Sample rates a .jmi bundle may declare (the schema's enum).
 inline bool legalSampleRate (juce::uint32 r)
 {
     return r == 44100 || r == 48000 || r == 88200 || r == 96000;
+}
+
+/// Rates a keyzone may carry. A keyzone's rate is the rate its PCM plays back
+/// at, and it need not be a standard one: the client's 2026 "Full Expansion"
+/// library has three Mini Moog waveforms whose keyzones sit at 44,063 ..
+/// 44,120 Hz, one rate per note - samples TUNED BY RATE, the way Akai-era
+/// samplers and their converters do it (44,066 Hz is 44,100 lowered by 1.3
+/// cents). The PCM is still copied bit for bit and the WAV written carries the
+/// true rate, which the player honours (SampleData::fileSampleRate), so the
+/// pitch comes out exactly as the synth plays it. The bundle's nominal rate is
+/// nominalSampleRate() of that.
+inline bool plausibleSampleRate (juce::uint32 r) { return r >= 8000 && r <= 192000; }
+
+/// The schema rate nearest a keyzone's true rate.
+inline juce::uint32 nominalSampleRate (juce::uint32 r)
+{
+    const juce::uint32 legal[] = { 44100, 48000, 88200, 96000 };
+    juce::uint32 best = legal[0];
+    for (auto l : legal)
+        if (std::llabs ((long long) l - (long long) r) < std::llabs ((long long) best - (long long) r)) best = l;
+    return best;
 }
 
 struct PcmSpan
@@ -101,6 +149,7 @@ struct Keyzone
     int keyRangeLo = 0, keyRangeHi = 127;
     int velRangeLo = 1, velRangeHi = 127;
     int rootNote = 60;
+    int pan = 64;                          ///< byte +5: 1 = L63, 64 = centre, 127 = R63 (64 after folding a pair)
     juce::uint32 sampleRate = 44100;
     int channels = 1;                      ///< 1 mono, 2 stereo (two PCM spans)
     juce::uint32 lengthSamples = 0;        ///< frames per channel
@@ -113,6 +162,7 @@ struct Keyzone
     juce::int64 pcmOffset = 0, pcmBytes = 0;
     juce::int64 totalPcmBytes = 0;
     int recordIndex = 0;                   ///< first DWFM record this zone came from
+    std::vector<int> recordIndices;        ///< the DWFM record per channel, left first (recordIndices[0] == recordIndex)
 };
 
 struct Waveform
@@ -317,6 +367,7 @@ readKeyMap (const juce::uint8* b, juce::int64 size, const detail::RawRecord& rec
         z.velRangeLo = body[o + 2];
         z.velRangeHi = body[o + 3];
         z.rootNote = body[o + 8];
+        z.pan = body[o + 5];
         z.channels = channels;
         z.oneShotFlag = body[o + 15] != 0;
         z.sampleRate = u32le (body, len, o + 36);
@@ -339,9 +390,9 @@ readKeyMap (const juce::uint8* b, juce::int64 size, const detail::RawRecord& rec
             throw ReadError (ReadError::Kind::format, where + ": root note is out of range");
         if (z.velRangeLo < 1 || z.velRangeHi > 127 || z.velRangeLo > z.velRangeHi)
             throw ReadError (ReadError::Kind::format, where + ": impossible velocity range");
-        if (! legalSampleRate (z.sampleRate))
+        if (! plausibleSampleRate (z.sampleRate))
             throw ReadError (ReadError::Kind::format,
-                             where + ": unsupported sample rate " + juce::String ((int) z.sampleRate));
+                             where + ": implausible sample rate " + juce::String ((int) z.sampleRate));
         if (z.lengthSamples == 0)
             throw ReadError (ReadError::Kind::format, where + ": zero-length sample");
         if (z.loopEndSample >= z.lengthSamples)
@@ -353,17 +404,22 @@ readKeyMap (const juce::uint8* b, juce::int64 size, const detail::RawRecord& rec
         if (z.startSample >= z.lengthSamples)
             throw ReadError (ReadError::Kind::format, where + ": start offset is past the end of the audio");
 
-        // Corroboration, not a decision: the loop FIELDS decide whether a zone
-        // loops, and byte +15 must agree with them. It does for every keyzone in
-        // the verified corpus; a file where it does not is one this reader has
-        // mis-parsed, and guessing which of the two to believe would be wrong.
+        // Byte +15 is the play mode (see the header). One shot wins over
+        // leftover loop points: the fields are normalised to the whole sample
+        // so every later stage, and the TypeScript reader, see the same zone.
+        // A LOOP flag on points that span the whole sample has never been seen
+        // and would be a mis-parse, so it is still refused rather than guessed.
         const bool spansWhole = z.loopStartSample == 0 && z.loopEndSample == z.lengthSamples - 1;
-        if (z.oneShotFlag != spansWhole)
+        if (z.oneShotFlag && ! spansWhole)
+        {
+            z.loopStartSample = 0;
+            z.loopEndSample = z.lengthSamples - 1;
+        }
+        else if (! z.oneShotFlag && spansWhole)
             throw ReadError (ReadError::Kind::format,
-                             where + ": the one-shot flag at +15 says "
-                                 + juce::String (z.oneShotFlag ? "no loop" : "looped")
-                                 + " but the loop fields say the opposite, so this keyzone has been "
-                                   "mis-parsed and its audio cannot be mapped safely");
+                             where + ": the play-mode flag at +15 says looped but the loop points span the "
+                                     "whole sample, so this keyzone has been mis-parsed and its audio cannot "
+                                     "be mapped safely");
         return z;
     };
 
@@ -374,8 +430,34 @@ readKeyMap (const juce::uint8* b, juce::int64 size, const detail::RawRecord& rec
                              "keyzone records (" + juce::String (actual) + "), so its left/right pairs do "
                              "not line up");
 
+    // Two records describe one sample when everything but the handle and the
+    // pan agrees. Used for both stereo idioms (the channels==2 flag and the
+    // hard-panned mono pair).
+    auto sameSample = [] (const Keyzone& a, const Keyzone& c)
+    {
+        return c.keyRangeLo == a.keyRangeLo && c.keyRangeHi == a.keyRangeHi
+            && c.velRangeLo == a.velRangeLo && c.velRangeHi == a.velRangeHi
+            && c.rootNote == a.rootNote && c.channels == a.channels
+            && c.sampleRate == a.sampleRate
+            && c.lengthSamples == a.lengthSamples
+            && c.loopStartSample == a.loopStartSample
+            && c.loopEndSample == a.loopEndSample
+            && c.startSample == a.startSample;
+    };
+    auto slotOf = [] (const Keyzone& z)
+    {
+        return juce::String (z.keyRangeLo) + "-" + juce::String (z.keyRangeHi) + "/"
+             + juce::String (z.velRangeLo) + "-" + juce::String (z.velRangeHi);
+    };
+    auto slotWords = [] (const Keyzone& z)
+    {
+        return "key " + juce::String (z.keyRangeLo) + ".." + juce::String (z.keyRangeHi)
+             + " at velocity " + juce::String (z.velRangeLo) + ".." + juce::String (z.velRangeHi);
+    };
+
     std::vector<Keyzone> zones;
     juce::StringArray slots;
+    std::vector<Keyzone> all;             // every record, in file order (mono path)
     for (int r = 0; r < actual; r += channels)
     {
         auto left = readRecord (r);
@@ -384,37 +466,87 @@ readKeyMap (const juce::uint8* b, juce::int64 size, const detail::RawRecord& rec
                              "DWFM record " + juce::String (wfIndex) + " keyzone " + juce::String (r)
                                  + ": channel count differs from the waveform's - a mixed-channel waveform "
                                    "is not understood");
+        left.recordIndex = r;
+        left.recordIndices = { r };
         if (channels == 2)
         {
             const auto right = readRecord (r + 1);
-            const bool same = right.keyRangeLo == left.keyRangeLo && right.keyRangeHi == left.keyRangeHi
-                           && right.velRangeLo == left.velRangeLo && right.velRangeHi == left.velRangeHi
-                           && right.rootNote == left.rootNote && right.channels == 2
-                           && right.sampleRate == left.sampleRate
-                           && right.lengthSamples == left.lengthSamples
-                           && right.loopStartSample == left.loopStartSample
-                           && right.loopEndSample == left.loopEndSample
-                           && right.startSample == left.startSample;
-            if (! same)
+            if (! sameSample (left, right))
                 throw ReadError (ReadError::Kind::format,
                                  "DWFM record " + juce::String (wfIndex) + " keyzones " + juce::String (r) + "/"
                                      + juce::String (r + 1) + " are marked stereo but do not describe the same "
                                        "sample, so they cannot be the left and right channels of one recording");
+            left.recordIndices.push_back (r + 1);
+            const auto slot = slotOf (left);
+            if (slots.contains (slot))
+                throw ReadError (ReadError::Kind::format,
+                                 "DWFM record " + juce::String (wfIndex) + ": two keyzones both claim "
+                                     + slotWords (left) + ". Two different samples in one slot cannot be "
+                                       "mapped unambiguously, and guessing which one plays would be silent "
+                                       "and wrong.");
+            slots.add (slot);
+            left.index = (int) zones.size();
+            zones.push_back (std::move (left));
         }
-        const auto slot = juce::String (left.keyRangeLo) + "-" + juce::String (left.keyRangeHi) + "/"
-                        + juce::String (left.velRangeLo) + "-" + juce::String (left.velRangeHi);
-        if (slots.contains (slot))
-            throw ReadError (ReadError::Kind::format,
-                             "DWFM record " + juce::String (wfIndex) + ": two keyzones both claim key "
-                                 + juce::String (left.keyRangeLo) + ".." + juce::String (left.keyRangeHi)
-                                 + " at velocity " + juce::String (left.velRangeLo) + ".."
-                                 + juce::String (left.velRangeHi) + ". Two different samples in one slot "
-                                   "cannot be mapped unambiguously, and guessing which one plays would be "
-                                   "silent and wrong.");
-        slots.add (slot);
-        left.index = (int) zones.size();
-        left.recordIndex = r;
-        zones.push_back (std::move (left));
+        else all.push_back (std::move (left));
+    }
+    if (channels == 2) return { std::move (zones), actual };
+
+    // ---- mono records: one per slot, or a hard-panned left/right pair per slot ----
+    std::map<juce::String, std::vector<int>> bySlot;      // slot -> indices into `all`, file order
+    for (int i = 0; i < (int) all.size(); ++i) bySlot[slotOf (all[(size_t) i])].push_back (i);
+
+    int single = 0, paired = 0;
+    for (auto& [slot, idx] : bySlot)
+    {
+        if (idx.size() == 1) { ++single; continue; }
+        const auto& a = all[(size_t) idx[0]];
+        if (idx.size() == 2)
+        {
+            const auto& c = all[(size_t) idx[1]];
+            const bool hardPanned = (a.pan == 1 && c.pan == 127) || (a.pan == 127 && c.pan == 1);
+            if (hardPanned && sameSample (a, c)) { ++paired; continue; }
+        }
+        throw ReadError (ReadError::Kind::format,
+                         "DWFM record " + juce::String (wfIndex) + ": " + juce::String ((int) idx.size())
+                             + " keyzones all claim " + slotWords (a) + " (pans "
+                             + [&] { juce::StringArray p; for (int i : idx) p.add (juce::String (all[(size_t) i].pan)); return p.joinIntoString (", "); }()
+                             + "). Two different samples in one slot cannot be mapped unambiguously, and "
+                               "guessing which one plays would be silent and wrong. The one doubling this "
+                               "reader understands is a stereo pair: two otherwise identical keyzones panned "
+                               "hard left (1) and hard right (127).");
+    }
+    if (paired > 0 && single > 0)
+        throw ReadError (ReadError::Kind::format,
+                         "DWFM record " + juce::String (wfIndex) + ": " + juce::String (paired)
+                             + " slot(s) hold a hard-panned left/right pair but " + juce::String (single)
+                             + " hold a single mono keyzone. A waveform that is stereo in some keys and mono "
+                               "in others is not understood, so it is not guessed at.");
+
+    if (paired == 0)
+    {
+        for (auto& z : all) { z.index = (int) zones.size(); zones.push_back (std::move (z)); }
+        return { std::move (zones), actual };
+    }
+
+    // Fold each pair into one stereo keyzone, in the order the pairs' first
+    // members appear in the file, so the zone order is stable and matches the
+    // TypeScript reader's.
+    std::set<int> done;
+    for (int i = 0; i < (int) all.size(); ++i)
+    {
+        if (done.count (i)) continue;
+        const auto& idx = bySlot[slotOf (all[(size_t) i])];
+        const int l = all[(size_t) idx[0]].pan == 1 ? idx[0] : idx[1];
+        const int rr = l == idx[0] ? idx[1] : idx[0];
+        done.insert (l); done.insert (rr);
+        Keyzone z = all[(size_t) l];
+        z.channels = 2;
+        z.pan = 64;
+        z.recordIndex = l;
+        z.recordIndices = { l, rr };
+        z.index = (int) zones.size();
+        zones.push_back (std::move (z));
     }
     return { std::move (zones), actual };
 }
@@ -432,38 +564,57 @@ inline void verifyLayout (const juce::uint8* b, juce::int64 size, const detail::
                          "DWIM record " + juce::String (wfIndex) + " holds " + juce::String ((int) declared)
                              + " samples but its key map has " + juce::String (records) + " keyzone records");
 
+    // Walk every sub-record first. Sub-record i belongs to keyzone RECORD i, and
+    // a logical zone's channels may come from records that are not adjacent (a
+    // hard-panned pair), so the spans are indexed before they are handed out.
+    std::vector<PcmSpan> spans;
     juce::int64 p = rec.offset + 4;
     const juce::int64 end = rec.offset + rec.length;
-    for (auto& zone : zones)
+    for (int i = 0; i < records; ++i)
     {
-        zone.pcm.clear();
-        zone.totalPcmBytes = 0;
-        for (int c = 0; c < zone.channels; ++c)
-        {
-            if (p + 4 > end)
-                throw ReadError (ReadError::Kind::format,
-                                 "DWIM record " + juce::String (wfIndex) + " ended before keyzone "
-                                     + juce::String (zone.index) + "'s audio");
-            const auto byteLength = u32be (b, size, p);
-            const juce::int64 expected = (juce::int64) zone.lengthSamples * 2;
-            if ((juce::int64) byteLength != expected)
-                throw ReadError (ReadError::Kind::format,
-                                 "DWIM record " + juce::String (wfIndex) + " sub-record "
-                                     + juce::String (zone.recordIndex + c) + " is " + juce::String ((int) byteLength)
-                                     + " bytes; the key map says " + juce::String ((int) zone.lengthSamples)
-                                     + " 16-bit samples (" + juce::String (expected) + " bytes)");
-            need (b, size, p + 4, (juce::int64) byteLength, "DWIM sub-record");
-            zone.pcm.push_back ({ p + 4, (juce::int64) byteLength });
-            zone.totalPcmBytes += (juce::int64) byteLength;
-            p += 4 + (juce::int64) byteLength;
-        }
-        zone.pcmOffset = zone.pcm[0].offset;
-        zone.pcmBytes = zone.pcm[0].bytes;
+        if (p + 4 > end)
+            throw ReadError (ReadError::Kind::format,
+                             "DWIM record " + juce::String (wfIndex) + " ended before sub-record "
+                                 + juce::String (i) + "'s audio");
+        const auto byteLength = u32be (b, size, p);
+        need (b, size, p + 4, (juce::int64) byteLength, "DWIM sub-record");
+        spans.push_back ({ p + 4, (juce::int64) byteLength });
+        p += 4 + (juce::int64) byteLength;
     }
     if (p != end)
         throw ReadError (ReadError::Kind::format,
                          "DWIM record " + juce::String (wfIndex) + " has " + juce::String (end - p)
                              + " bytes left over after its " + juce::String (records) + " samples");
+
+    for (auto& zone : zones)
+    {
+        zone.pcm.clear();
+        zone.totalPcmBytes = 0;
+        if ((int) zone.recordIndices.size() != zone.channels)
+            throw ReadError (ReadError::Kind::format,
+                             "DWFM record " + juce::String (wfIndex) + " keyzone " + juce::String (zone.index)
+                                 + " has " + juce::String ((int) zone.recordIndices.size())
+                                 + " source record(s) for " + juce::String (zone.channels) + " channel(s)");
+        for (int r : zone.recordIndices)
+        {
+            if (r < 0 || r >= records)
+                throw ReadError (ReadError::Kind::format,
+                                 "DWIM record " + juce::String (wfIndex) + " has no sub-record "
+                                     + juce::String (r) + " for keyzone " + juce::String (zone.index));
+            const auto& span = spans[(size_t) r];
+            const juce::int64 expected = (juce::int64) zone.lengthSamples * 2;
+            if (span.bytes != expected)
+                throw ReadError (ReadError::Kind::format,
+                                 "DWIM record " + juce::String (wfIndex) + " sub-record "
+                                     + juce::String (r) + " is " + juce::String (span.bytes)
+                                     + " bytes; the key map says " + juce::String ((int) zone.lengthSamples)
+                                     + " 16-bit samples (" + juce::String (expected) + " bytes)");
+            zone.pcm.push_back (span);
+            zone.totalPcmBytes += span.bytes;
+        }
+        zone.pcmOffset = zone.pcm[0].offset;
+        zone.pcmBytes = zone.pcm[0].bytes;
+    }
 }
 
 //==============================================================================

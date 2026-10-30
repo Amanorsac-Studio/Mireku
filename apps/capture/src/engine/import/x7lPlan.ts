@@ -50,7 +50,7 @@ import type {
 } from '@jm/jmi-format/web';
 import { sampleFileName } from '@jm/jmi-format/web';
 import { bundleFolderName } from '../export';
-import type { X7lLibrary, X7lWaveform } from './x7l';
+import { nominalSampleRate, type X7lLibrary, type X7lWaveform } from './x7l';
 import { dpfmUsage, type DpfmLayer, type DpfmUsage } from './dpfm';
 
 /**
@@ -59,7 +59,9 @@ import { dpfmUsage, type DpfmLayer, type DpfmUsage } from './dpfm';
  * (`instrument.schema.json` → `velocityMap.maxItems`, which is what
  * `dropPlan.ts` uses); four is this path's own self-imposed limit on invented
  * windows, kept because inventing more than four even bands is a guess about
- * material nobody measured.
+ * material nobody measured. Windows the library states — in its DPFM block,
+ * its key maps, or waveform names ending in each layer's top velocity (see
+ * `namedVelocityBounds`) — are not invented and go up to the schema's sixteen.
  */
 export const MAX_VELOCITY_LAYERS = 4;
 
@@ -150,9 +152,16 @@ export interface X7lInstrumentPlan {
   fromDpfm: boolean;
 }
 
+/** An instrument the planner could not lay out; the rest of the library still imports. */
+export interface X7lSkippedInstrument {
+  name: string;
+  reason: string;
+}
+
 export interface X7lImportPlan {
   version: string;
   instruments: X7lInstrumentPlan[];
+  skipped: X7lSkippedInstrument[];
   totalPcmBytes: number;
   notes: string[];
 }
@@ -345,7 +354,7 @@ function arithmeticStep(xs: number[]): number | null {
 export function findKeySplitGroups(waveforms: X7lWaveform[]): X7lWaveform[][] {
   const pools = new Map<string, X7lWaveform[]>();
   for (const wf of waveforms) {
-    const key = `${velocitySplitKey(wf)}|${wf.channels}|${wf.keyzones[0].sampleRate}`;
+    const key = `${velocitySplitKey(wf)}|${wf.channels}|${nominalSampleRate(wf.keyzones[0].sampleRate)}`;
     const list = pools.get(key);
     if (list) list.push(wf);
     else pools.set(key, [wf]);
@@ -607,9 +616,11 @@ export function dpfmPlan(lib: X7lLibrary): DpfmPlan | null {
   const plannable = (body: number[]): boolean => {
     if (!body.every((i) => splits[i] === 1)) return false;
     const ch = lib.waveforms[body[0]].channels;
-    const sr = lib.waveforms[body[0]].keyzones[0].sampleRate;
+    const sr = nominalSampleRate(lib.waveforms[body[0]].keyzones[0].sampleRate);
     return !body.some(
-      (i) => lib.waveforms[i].channels !== ch || lib.waveforms[i].keyzones.some((z) => z.sampleRate !== sr),
+      (i) =>
+        lib.waveforms[i].channels !== ch ||
+        lib.waveforms[i].keyzones.some((z) => nominalSampleRate(z.sampleRate) !== sr),
     );
   };
 
@@ -938,11 +949,32 @@ export function planImport(lib: X7lLibrary, levelsDb: number[], opts: PlanOption
     return keys.size === 1 ? [...keys][0] : null;
   };
 
+  // Names ending in each layer's top velocity ("EP2C Velocity 15" … "127")
+  // group as one instrument even without a DPFM. Left to the stem rule they
+  // would not: it strips a one- or two-digit tail but not "111" or "127", so
+  // the eight would come out as three instruments.
+  const namedKey = new Map<Unit, string>();
+  {
+    const byBase = new Map<string, Unit[]>();
+    for (const u of units) {
+      if (u.members.length !== 1 || dpfmKeyFor(u)) continue;
+      const m = /^(.*?)\s*\d{1,3}$/.exec(u.members[0].name);
+      if (!m) continue;
+      const k = `${u.signature}||${m[1].trim().toLowerCase()}`;
+      const list = byBase.get(k);
+      if (list) list.push(u);
+      else byBase.set(k, [u]);
+    }
+    for (const [k, list] of byBase) {
+      if (namedVelocityBounds(list)) for (const u of list) namedKey.set(u, `named:${k}`);
+    }
+  }
+
   const groups = new Map<string, Unit[]>();
   const groupDpfm = new Map<string, DpfmInstrument>();
   for (const u of units) {
     const dk = dpfmKeyFor(u);
-    const key = dk ?? `${u.signature}||${u.stem.toLowerCase()}`;
+    const key = dk ?? namedKey.get(u) ?? `${u.signature}||${u.stem.toLowerCase()}`;
     if (dk) {
       const g = dpfm?.groups.get(dk);
       if (g) groupDpfm.set(key, g);
@@ -953,16 +985,55 @@ export function planImport(lib: X7lLibrary, levelsDb: number[], opts: PlanOption
   }
 
   const instruments: X7lInstrumentPlan[] = [];
+  const skipped: X7lSkippedInstrument[] = [];
   let index = 0;
   const usedNames = new Set<string>();
 
+  // One instrument that cannot be laid out does not sink the library: it is
+  // reported and the rest still plan. The 2026 "Full Expansion" library would
+  // otherwise have lost 26 waveforms to one unplannable eight-layer set.
   for (const [key, unitGroup] of groups) {
-    const plan = planInstrument(unitGroup, levelsDb, index, usedNames, opts, lib, groupDpfm.get(key) ?? null);
-    instruments.push(plan);
-    index++;
+    try {
+      const plan = planInstrument(unitGroup, levelsDb, index, usedNames, opts, lib, groupDpfm.get(key) ?? null);
+      instruments.push(plan);
+      index++;
+    } catch (e) {
+      const name = [...new Set(unitGroup.map((u) => u.stem || u.members[0].name))].join(' + ');
+      skipped.push({ name, reason: (e as Error).message });
+    }
   }
 
-  return { version: lib.version, instruments, totalPcmBytes: lib.totalPcmBytes, notes };
+  return { version: lib.version, instruments, skipped, totalPcmBytes: lib.totalPcmBytes, notes };
+}
+
+/**
+ * Velocity windows stated by the waveform names. Every unit must be a single
+ * waveform whose name ends in an integer; the integers must be distinct, lie in
+ * 1..127, and the largest must be 127 (the top window always reaches the top).
+ * Sorted ascending they are the windows' upper bounds; each lower bound is the
+ * previous upper bound plus one. Two to sixteen layers (the schema's limit).
+ */
+export function namedVelocityBounds(units: Unit[]): { order: Unit[]; windows: { lo: number; hi: number }[] } | null {
+  if (units.length < 2 || units.length > 16) return null;
+  const tagged: { unit: Unit; hi: number }[] = [];
+  for (const u of units) {
+    if (u.members.length !== 1) return null;
+    const m = /(\d{1,3})\s*$/.exec(u.members[0].name);
+    if (!m) return null;
+    const hi = Number(m[1]);
+    if (hi < 1 || hi > 127) return null;
+    tagged.push({ unit: u, hi });
+  }
+  tagged.sort((a, b) => a.hi - b.hi);
+  if (new Set(tagged.map((t) => t.hi)).size !== tagged.length) return null;
+  if (tagged[tagged.length - 1].hi !== 127) return null;
+  const windows: { lo: number; hi: number }[] = [];
+  let lo = 1;
+  for (const t of tagged) {
+    windows.push({ lo, hi: t.hi });
+    lo = t.hi + 1;
+  }
+  return { order: tagged.map((t) => t.unit), windows };
 }
 
 function unitSignature(members: X7lWaveform[]): string {
@@ -1023,13 +1094,33 @@ function planInstrument(
       ? (dpfmUnits as Unit[])
       : null;
 
+  // Failing a DPFM split, the waveform NAMES may state the windows: "EP2C
+  // Velocity 15" .. "EP2C Velocity 127" is eight layers whose names end in each
+  // layer's top velocity. Those numbers are the library author's windows, not
+  // an inference, so they are used as given and the four-window cap on
+  // invented bands does not apply.
+  const named = !dpfmOrdered ? namedVelocityBounds(unitGroup) : null;
+
   // Units in a group are velocity layers of one another; order them by the
   // measured level of their loudest member, quietest first.
-  const byLevel = dpfmOrdered ?? [...unitGroup].sort((a, b) => unitLevel(a) - unitLevel(b));
-  if (!dpfmOrdered && byLevel.some((u, i) => u !== unitGroup[i])) {
+  const byLevel = dpfmOrdered ?? named?.order ?? [...unitGroup].sort((a, b) => unitLevel(a) - unitLevel(b));
+  if (!dpfmOrdered && !named && byLevel.some((u, i) => u !== unitGroup[i])) {
     perInstrumentNotes.push(
       'Velocity layer order was taken from the measured level of the audio, not the library catalogue order.',
     );
+  }
+  if (named) {
+    perInstrumentNotes.push(
+      `Velocity windows were taken from the waveform names, which end in each layer's top velocity ` +
+        `(${named.windows.map((w) => w.hi).join(', ')}): ${named.windows.map((w) => `${w.lo}-${w.hi}`).join(', ')}.`,
+    );
+    const measured = [...named.order].sort((a, b) => unitLevel(a) - unitLevel(b));
+    if (measured.some((u, i) => u !== named.order[i])) {
+      perInstrumentNotes.push(
+        'The measured peak levels of these waveforms do not rise in the order their names put them in. ' +
+          'The named order was kept: it is what the library author built.',
+      );
+    }
   }
   if (dpfmOrdered) {
     const measured = [...new Set(dpfmOrdered)].sort((a, b) => unitLevel(a) - unitLevel(b));
@@ -1087,7 +1178,13 @@ function planInstrument(
           vel: null,
           label: `${lib.waveforms[dpfm.windows![i].waveformIndex].name} vel ${dpfm.windows![i].lo}-${dpfm.windows![i].hi}`,
         }))
-      : byLevel.map((u) => ({ unit: u, vel: null, label: unitLabel(u) }));
+      : named
+        ? named.order.map((u, i) => ({
+            unit: u,
+            vel: null,
+            label: `${unitLabel(u)} vel ${named.windows[i].lo}-${named.windows[i].hi}`,
+          }))
+        : byLevel.map((u) => ({ unit: u, vel: null, label: unitLabel(u) }));
 
   /* ---- name ---- */
   const stemName = dpfm
@@ -1116,6 +1213,8 @@ function planInstrument(
 
   if (dpfmOrdered && dpfm?.windows) {
     rawWindows = dpfm.windows.map((w, i) => ({ lo: w.lo, hi: w.hi, sources: [i] }));
+  } else if (named) {
+    rawWindows = named.windows.map((w, i) => ({ lo: w.lo, hi: w.hi, sources: [i] }));
   } else if (splitsUsable) {
     rawWindows = foldSourceWindows(sourceSplits);
     if (sourceSplits.length > MAX_VELOCITY_LAYERS) {
@@ -1296,7 +1395,7 @@ function planInstrument(
       );
     }
     for (const z of wf.keyzones) {
-      if (z.sampleRate !== template.members[0].keyzones[0].sampleRate) {
+      if (nominalSampleRate(z.sampleRate) !== nominalSampleRate(template.members[0].keyzones[0].sampleRate)) {
         throw new Error(
           `Key-off waveform "${wf.name}" is ${z.sampleRate} Hz but "${name}" is ` +
             `${template.members[0].keyzones[0].sampleRate} Hz; nothing is resampled on this path.`,
@@ -1305,7 +1404,25 @@ function planInstrument(
     }
   }
 
-  const sampleRate = template.members[0].keyzones[0].sampleRate;
+  // The bundle's rate is the schema rate nearest the source's. Keyzones tuned
+  // by rate (see plausibleSampleRate in x7l.ts) keep their true rate in their
+  // own WAV, which the player honours.
+  const sampleRate = nominalSampleRate(template.members[0].keyzones[0].sampleRate);
+  {
+    const tuned: number[] = [];
+    for (const wf of [...allWaveforms, ...releaseWaveforms])
+      for (const z of wf.keyzones) if (z.sampleRate !== sampleRate) tuned.push(z.sampleRate);
+    if (tuned.length) {
+      const lo = Math.min(...tuned);
+      const hi = Math.max(...tuned);
+      const cents = 1200 * Math.log2(Math.max(hi, sampleRate) / Math.min(lo, sampleRate));
+      perInstrumentNotes.push(
+        `${tuned.length} sample(s) are tuned by rate in the source (${lo}..${hi} Hz, within ${cents.toFixed(1)} ` +
+          `cents of ${sampleRate}); each keeps its true rate in its own WAV, which the player honours, and ` +
+          `the bundle is declared at the nominal rate.`,
+      );
+    }
+  }
   return {
     index,
     name,

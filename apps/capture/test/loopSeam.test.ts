@@ -38,6 +38,7 @@ function keyzone(lengthSamples: number, loopStart: number, loopEnd: number): X7l
     velRangeLo: 1,
     velRangeHi: 127,
     rootNote: 60,
+    pan: 64,
     sampleRate: 44100,
     channels: 1,
     lengthSamples,
@@ -50,6 +51,7 @@ function keyzone(lengthSamples: number, loopStart: number, loopEnd: number): X7l
     pcmBytes: lengthSamples * 2,
     totalPcmBytes: lengthSamples * 2,
     recordIndex: 0,
+    recordIndices: [0],
   };
 }
 

@@ -166,6 +166,10 @@ export function runBatchImport(opts: BatchOptions): BatchResult {
       const plan = planImport(lib, levelsFor(lib, bytes));
       log(`  YSFC ${lib.version}, ${lib.waveforms.length} waveform(s) -> ${plan.instruments.length} instrument(s)`);
       for (const note of plan.notes) log(`  note: ${note}`);
+      for (const s of plan.skipped) {
+        log(`  SKIPPED "${s.name}": ${s.reason}`);
+        problems.push(`"${s.name}" was skipped: ${s.reason}`);
+      }
       if (plan.instruments.length === 0) {
         rows.push({
           file,
@@ -173,7 +177,9 @@ export function runBatchImport(opts: BatchOptions): BatchResult {
           bundles: 0,
           samples: 0,
           mb: 0,
-          detail: 'no instruments in the plan — nothing in the library groups into an instrument',
+          detail: problems.length
+            ? problems.join('; ')
+            : 'no instruments in the plan — nothing in the library groups into an instrument',
         });
         continue;
       }

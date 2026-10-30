@@ -115,6 +115,9 @@ inline ImportReport importLibraries (const juce::Array<juce::File>& files, const
             for (auto& wf : lib.waveforms)
                 levels.push_back (measureKeyzone (raw, representativeKeyzone (wf)).peakDb);
             auto plan = planImport (lib, dp, levels);
+            for (auto& s : plan.skipped)
+                entry.refusal << (entry.refusal.isEmpty() ? "" : " ")
+                              << "\"" << s.name << "\" was skipped: " << s.reason;
 
             for (auto& inst : plan.instruments)
             {

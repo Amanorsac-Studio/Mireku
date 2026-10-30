@@ -97,6 +97,7 @@ for (const name of files) {
   }
   if (ip) {
     text += `INSTRUMENTS ${ip.instruments.length}\n`;
+    for (const s of ip.skipped) text += `  INSTSKIP ${s.name}: ${s.reason}\n`;
     for (const inst of ip.instruments) {
       text += `  INST ${inst.index} name=${inst.name} bundle=${inst.bundleName}`
             + ` world=${WORLD_ORDER.indexOf(inst.world)} sustaining=${inst.soundType === 'sustaining' ? 1 : 0}`

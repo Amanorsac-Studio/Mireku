@@ -1619,6 +1619,7 @@ static void testArpStateRoundTrip()
 #include "TesterGateTests.inc"
 // X7L READER (C++) - the in-app importer, against the TypeScript reference.
 #include "X7lReaderTests.inc"
+#include "X7lPairedMono.inc"
 // VELOCITY RESPONSE - the Yamaha-style two-stage curve, added 2026-10-29.
 #include "VelocityResponse.inc"
 // ANCHORED PLAYBACK - level-matched recorded layers, hard switching, the
@@ -1973,6 +1974,8 @@ int main()
     testX7lReader();
     testX7lConvert();
     testX7lImportGuards();
+    testX7lHardPannedPairs();
+    testX7lNamedWindowsAndSkips();
     // VELOCITY RESPONSE
     testVelocityCurveShapes();
     testVelocityDepthAndOffset();

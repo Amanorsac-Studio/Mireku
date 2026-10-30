@@ -45,9 +45,12 @@
  *   then `count` × 64-byte keyzone records:
  *     +0   u8   keyRangeLo          +1   u8   keyRangeHi
  *     +2   u8   velRangeLo          +3   u8   velRangeHi
+ *     +5   u8   pan                 (1 = L63 … 64 = centre … 127 = R63)
  *     +8   u8   rootNote
  *     +11  u8   channels            (1 = mono, 2 = stereo)
- *     +36  u32 LE  sampleRate
+ *     +15  u8   play mode           (1 = one shot, 0 = loop; see below)
+ *     +36  u32 LE  sampleRate     (the PCM's playback rate; not always a
+ *                                  standard one — see plausibleSampleRate)
  *     +44  u32 LE  loopStartSample
  *     +48  u32 LE  loopEndSample  (inclusive; == length-1 for a whole-sample loop)
  *     +52  u32 LE  startSample    (0 in every file seen)
@@ -63,6 +66,17 @@
  *   `loopStart <= loopEnd < lengthSamples` for every keyzone in the corpus and
  *   is exactly 0 in every library whose loops span the whole sample.
  *
+ *   Byte +15 is the keybank's PLAY MODE. Across the corpus it is 1 for every
+ *   keyzone whose loop spans the whole sample and 0 for every sub-region loop,
+ *   so the two always agreed. The client's 2026 "Full Expansion" library then
+ *   showed a one-shot piano ("Gospel Grand v3") with the flag = 1 AND leftover
+ *   loop points — a start of 39,300 on the left channel and 61 on the right of
+ *   the same stereo pair, which no intended loop would have. On the synth a
+ *   one-shot keybank plays once whatever its loop points say, so that is what
+ *   is read here: when the flag says one shot the loop fields are normalised to
+ *   the whole sample and the zone is a one-shot. The other disagreement (flag =
+ *   loop, points spanning the whole sample) has never been seen and is refused.
+ *
  * ── Stereo ──────────────────────────────────────────────────────────────────
  *   When `channels == 2` the keyzone records come in adjacent pairs that are
  *   byte-identical except for `sampleId`, and the DWIM record holds two
@@ -76,6 +90,23 @@
  *   is 1 in exactly the two libraries that have no such pairs, and 2 in every
  *   library that has them, where the zone count is always even and the pairing
  *   is exact.
+ *
+ * ── Stereo by panning ───────────────────────────────────────────────────────
+ *   A second way a library stores stereo: two MONO keyzone records on the same
+ *   key/velocity slot, identical except for `sampleId` and byte +5, which is 1
+ *   (hard left) on one and 127 (hard right) on the other. That is the Montage
+ *   "two keybanks panned L63 / R63" idiom, and it is how the client's own 2026
+ *   "Full Expansion" library is built — 108 such pairs in its first waveform.
+ *   Byte +5 was identified as pan the same way +56 was identified as a handle:
+ *   it is 64 (centre) on all ~4,300 keyzones of the verified corpus and on every
+ *   unpaired keyzone of that file, and exactly {1, 127} on the paired ones.
+ *   The pairs are usually adjacent records but need not be (one waveform puts a
+ *   right channel 55 records after its left), so pairing is by slot, not by
+ *   position. A pair is folded into ONE stereo keyzone, left = the pan-1
+ *   record. A waveform where only SOME slots are doubled, or where a doubled
+ *   slot is not one left and one right, is still refused: that is two
+ *   different samples in one slot, and guessing which one plays would be
+ *   silent and wrong.
  *
  * ── DWIM record body — the audio (big-endian headers) ───────────────────────
  *   +0            u32 BE  sub-record count (== the DWFM keyzone-record count)
@@ -147,6 +178,8 @@ export interface X7lKeyzone {
   velRangeLo: number;
   velRangeHi: number;
   rootNote: number;
+  /** byte +5: 1 = L63, 64 = centre, 127 = R63 (64 once a hard-panned pair is folded) */
+  pan: number;
   sampleRate: number;
   /** 1 = mono, 2 = stereo (two PCM spans, left then right) */
   channels: 1 | 2;
@@ -170,6 +203,8 @@ export interface X7lKeyzone {
   totalPcmBytes: number;
   /** index of the first DWFM keyzone *record* this logical zone came from */
   recordIndex: number;
+  /** the DWFM record per channel, left first (`recordIndices[0] === recordIndex`) */
+  recordIndices: number[];
 }
 
 export interface X7lWaveform {
@@ -336,8 +371,27 @@ function readCatalogue(b: Uint8Array, blockOffset: number, tag: string): Catalog
 
 const KEYZONE_RECORD_BYTES = 64;
 
-/** Sample rates the reader will accept (matches the .jmi schema's enum). */
-const LEGAL_SAMPLE_RATES = new Set([44100, 48000, 88200, 96000]);
+/** Sample rates a .jmi bundle may declare (the schema's enum). */
+const LEGAL_SAMPLE_RATES = [44100, 48000, 88200, 96000];
+
+/**
+ * Rates a keyzone may carry. A keyzone's rate is the rate its PCM plays back
+ * at, and it need not be a standard one: the client's 2026 "Full Expansion"
+ * library has three Mini Moog waveforms whose keyzones sit at 44,063 .. 44,120
+ * Hz, one rate per note — samples TUNED BY RATE, the way Akai-era samplers and
+ * their converters do it (44,066 Hz is 44,100 lowered by 1.3 cents). The PCM is
+ * still copied bit for bit and the WAV written carries the true rate, which
+ * the player honours, so the pitch comes out exactly as the synth plays it.
+ * The bundle's nominal rate is nominalSampleRate() of that.
+ */
+export function plausibleSampleRate(r: number): boolean {
+  return r >= 8000 && r <= 192000;
+}
+
+/** The schema rate nearest a keyzone's true rate. */
+export function nominalSampleRate(r: number): number {
+  return LEGAL_SAMPLE_RATES.reduce((best, l) => (Math.abs(l - r) < Math.abs(best - r) ? l : best));
+}
 
 export function parseX7l(bytes: Uint8Array): X7lLibrary {
   if (bytes.length < 0x100) throw new X7lFormatError(`File is only ${bytes.length} bytes — not a YSFC library`);
@@ -527,6 +581,7 @@ function readKeyMap(
       velRangeLo: body[o + 2],
       velRangeHi: body[o + 3],
       rootNote: body[o + 8],
+      pan: body[o + 5],
       channels: channels as 1 | 2,
       sampleRate: u32le(body, o + 36),
       loopStartSample: u32le(body, o + 44),
@@ -551,8 +606,8 @@ function readKeyMap(
     if (z.velRangeLo < 1 || z.velRangeHi > 127 || z.velRangeLo > z.velRangeHi) {
       throw new X7lFormatError(`${where}: impossible velocity range ${z.velRangeLo}..${z.velRangeHi}`);
     }
-    if (!LEGAL_SAMPLE_RATES.has(z.sampleRate)) {
-      throw new X7lFormatError(`${where}: unsupported sample rate ${z.sampleRate}`);
+    if (!plausibleSampleRate(z.sampleRate)) {
+      throw new X7lFormatError(`${where}: implausible sample rate ${z.sampleRate}`);
     }
     if (z.lengthSamples === 0) throw new X7lFormatError(`${where}: zero-length sample`);
     if (z.loopEndSample >= z.lengthSamples) {
@@ -568,6 +623,22 @@ function readKeyMap(
     if (z.startSample >= z.lengthSamples) {
       throw new X7lFormatError(`${where}: start offset ${z.startSample} is past the end of the audio`);
     }
+    // Byte +15 is the play mode (see the header). One shot wins over leftover
+    // loop points: the fields are normalised to the whole sample so every later
+    // stage, and the C++ reader, see the same zone. A LOOP flag on points that
+    // span the whole sample has never been seen and would be a mis-parse, so it
+    // is refused rather than guessed at.
+    const oneShotFlag = body[o + 15] !== 0;
+    const spansWhole = z.loopStartSample === 0 && z.loopEndSample === z.lengthSamples - 1;
+    if (oneShotFlag && !spansWhole) {
+      z.loopStartSample = 0;
+      z.loopEndSample = z.lengthSamples - 1;
+    } else if (!oneShotFlag && spansWhole) {
+      throw new X7lFormatError(
+        `${where}: the play-mode flag at +15 says looped but the loop points span the whole sample, ` +
+          `so this keyzone has been mis-parsed and its audio cannot be mapped safely`,
+      );
+    }
     return z;
   };
 
@@ -579,8 +650,42 @@ function readKeyMap(
     );
   }
 
+  type Rec = ReturnType<typeof readRecord>;
+  // Two records describe one sample when everything but the handle and the
+  // pan agrees. Used for both stereo idioms (the channels === 2 flag and the
+  // hard-panned mono pair).
+  const sameSample = (a: Rec, c: Rec): boolean =>
+    c.keyRangeLo === a.keyRangeLo &&
+    c.keyRangeHi === a.keyRangeHi &&
+    c.velRangeLo === a.velRangeLo &&
+    c.velRangeHi === a.velRangeHi &&
+    c.rootNote === a.rootNote &&
+    c.channels === a.channels &&
+    c.sampleRate === a.sampleRate &&
+    c.lengthSamples === a.lengthSamples &&
+    c.loopStartSample === a.loopStartSample &&
+    c.loopEndSample === a.loopEndSample &&
+    c.startSample === a.startSample;
+  const slotOf = (z: Rec) => `${z.keyRangeLo}-${z.keyRangeHi}/${z.velRangeLo}-${z.velRangeHi}`;
+  const slotWords = (z: Rec) =>
+    `key ${z.keyRangeLo}..${z.keyRangeHi} at velocity ${z.velRangeLo}..${z.velRangeHi}`;
+  const AMBIGUOUS =
+    'Two different samples in one slot cannot be mapped unambiguously, and guessing which one plays ' +
+    'would be silent and wrong.';
+  const asZone = (rec: Rec, index: number, recordIndices: number[]): X7lKeyzone => ({
+    index,
+    ...rec,
+    pcm: [],
+    pcmOffset: 0,
+    pcmBytes: 0,
+    totalPcmBytes: 0,
+    recordIndex: recordIndices[0],
+    recordIndices,
+  });
+
   const zones: X7lKeyzone[] = [];
   const slots = new Map<string, number>();
+  const all: Rec[] = []; // every record, in file order (mono path)
   for (let r = 0; r < actual; r += channels) {
     const left = readRecord(r);
     if (left.channels !== channels) {
@@ -591,47 +696,90 @@ function readKeyMap(
     }
     if (channels === 2) {
       const right = readRecord(r + 1);
-      const same =
-        right.keyRangeLo === left.keyRangeLo &&
-        right.keyRangeHi === left.keyRangeHi &&
-        right.velRangeLo === left.velRangeLo &&
-        right.velRangeHi === left.velRangeHi &&
-        right.rootNote === left.rootNote &&
-        right.channels === 2 &&
-        right.sampleRate === left.sampleRate &&
-        right.lengthSamples === left.lengthSamples &&
-        right.loopStartSample === left.loopStartSample &&
-        right.loopEndSample === left.loopEndSample &&
-        right.startSample === left.startSample;
-      if (!same) {
+      if (!sameSample(left, right)) {
         throw new X7lFormatError(
           `DWFM record ${wfIndex} keyzones ${r}/${r + 1} are marked stereo but do not describe the ` +
             `same sample (key, velocity, root, rate, length or loop differ), so they cannot be the ` +
             `left and right channels of one recording`,
         );
       }
+      const index = zones.length;
+      const slot = slotOf(left);
+      const prev = slots.get(slot);
+      if (prev !== undefined) {
+        throw new X7lFormatError(
+          `DWFM record ${wfIndex} keyzones ${prev} and ${index} both claim ${slotWords(left)}. ${AMBIGUOUS}`,
+        );
+      }
+      slots.set(slot, index);
+      zones.push(asZone(left, index, [r, r + 1]));
+    } else {
+      all.push(left);
     }
-    const index = zones.length;
-    const slot = `${left.keyRangeLo}-${left.keyRangeHi}/${left.velRangeLo}-${left.velRangeHi}`;
-    const prev = slots.get(slot);
-    if (prev !== undefined) {
-      throw new X7lFormatError(
-        `DWFM record ${wfIndex} keyzones ${prev} and ${index} both claim key ${left.keyRangeLo}..${left.keyRangeHi} ` +
-          `at velocity ${left.velRangeLo}..${left.velRangeHi}. Two different samples in one slot cannot be ` +
-          `mapped unambiguously, and guessing which one plays would be silent and wrong.`,
-      );
-    }
-    slots.set(slot, index);
-    zones.push({
-      index,
-      ...left,
-      pcm: [],
-      pcmOffset: 0,
-      pcmBytes: 0,
-      totalPcmBytes: 0,
-      recordIndex: r,
-    });
   }
+  if (channels === 2) return { keyzones: zones, records: actual };
+
+  // ---- mono records: one per slot, or a hard-panned left/right pair per slot ----
+  // See the header: byte +5 is pan, and the Montage "two keybanks panned L63 /
+  // R63" idiom stores a stereo sample as two mono keyzones on one slot. Pairs
+  // need not be adjacent, so pairing is by slot.
+  const bySlot = new Map<string, number[]>(); // slot -> indices into `all`, file order
+  all.forEach((z, i) => {
+    const k = slotOf(z);
+    const list = bySlot.get(k);
+    if (list) list.push(i);
+    else bySlot.set(k, [i]);
+  });
+
+  let single = 0;
+  let paired = 0;
+  for (const idx of bySlot.values()) {
+    if (idx.length === 1) {
+      single++;
+      continue;
+    }
+    const a = all[idx[0]];
+    if (idx.length === 2) {
+      const c = all[idx[1]];
+      const hardPanned = (a.pan === 1 && c.pan === 127) || (a.pan === 127 && c.pan === 1);
+      if (hardPanned && sameSample(a, c)) {
+        paired++;
+        continue;
+      }
+    }
+    throw new X7lFormatError(
+      `DWFM record ${wfIndex}: ${idx.length} keyzones all claim ${slotWords(a)} (pans ` +
+        `${idx.map((i) => all[i].pan).join(', ')}). ${AMBIGUOUS} The one doubling this reader ` +
+        `understands is a stereo pair: two otherwise identical keyzones panned hard left (1) and ` +
+        `hard right (127).`,
+    );
+  }
+  if (paired > 0 && single > 0) {
+    throw new X7lFormatError(
+      `DWFM record ${wfIndex}: ${paired} slot(s) hold a hard-panned left/right pair but ${single} hold ` +
+        `a single mono keyzone. A waveform that is stereo in some keys and mono in others is not ` +
+        `understood, so it is not guessed at.`,
+    );
+  }
+
+  if (paired === 0) {
+    all.forEach((z, i) => zones.push(asZone(z, zones.length, [i])));
+    return { keyzones: zones, records: actual };
+  }
+
+  // Fold each pair into one stereo keyzone, in the order the pairs' first
+  // members appear in the file, so the zone order is stable and matches the
+  // C++ reader's.
+  const done = new Set<number>();
+  all.forEach((z, i) => {
+    if (done.has(i)) return;
+    const idx = bySlot.get(slotOf(z))!;
+    const l = all[idx[0]].pan === 1 ? idx[0] : idx[1];
+    const rr = l === idx[0] ? idx[1] : idx[0];
+    done.add(l);
+    done.add(rr);
+    zones.push({ ...asZone(all[l], zones.length, [l, rr]), channels: 2, pan: 64 });
+  });
   return { keyzones: zones, records: actual };
 }
 
@@ -658,35 +806,53 @@ function verifyLayout(
       `DWIM record ${wfIndex} holds ${declared} samples but its key map has ${records} keyzone records`,
     );
   }
+  // Walk every sub-record first. Sub-record i belongs to keyzone RECORD i, and
+  // a logical zone's channels may come from records that are not adjacent (a
+  // hard-panned pair), so the spans are indexed before they are handed out.
+  const spans: X7lPcmSpan[] = [];
   let p = rec.offset + 4;
   const end = rec.offset + rec.length;
-  for (const zone of zones) {
-    zone.pcm = [];
-    zone.totalPcmBytes = 0;
-    for (let c = 0; c < zone.channels; c++) {
-      if (p + 4 > end) {
-        throw new X7lFormatError(`DWIM record ${wfIndex} ended before keyzone ${zone.index}'s audio`);
-      }
-      const byteLength = u32be(bytes, p);
-      const expected = zone.lengthSamples * 2;
-      if (byteLength !== expected) {
-        throw new X7lFormatError(
-          `DWIM record ${wfIndex} sub-record ${zone.recordIndex + c} is ${byteLength} bytes; the key map ` +
-            `says ${zone.lengthSamples} 16-bit samples (${expected} bytes)`,
-        );
-      }
-      need(bytes, p + 4, byteLength, `DWIM record ${wfIndex} sub-record ${zone.recordIndex + c}`);
-      zone.pcm.push({ offset: p + 4, bytes: byteLength });
-      zone.totalPcmBytes += byteLength;
-      p += 4 + byteLength;
+  for (let i = 0; i < records; i++) {
+    if (p + 4 > end) {
+      throw new X7lFormatError(`DWIM record ${wfIndex} ended before sub-record ${i}'s audio`);
     }
-    zone.pcmOffset = zone.pcm[0].offset;
-    zone.pcmBytes = zone.pcm[0].bytes;
+    const byteLength = u32be(bytes, p);
+    need(bytes, p + 4, byteLength, `DWIM record ${wfIndex} sub-record ${i}`);
+    spans.push({ offset: p + 4, bytes: byteLength });
+    p += 4 + byteLength;
   }
   if (p !== end) {
     throw new X7lFormatError(
       `DWIM record ${wfIndex} has ${end - p} bytes left over after its ${records} samples`,
     );
+  }
+
+  for (const zone of zones) {
+    zone.pcm = [];
+    zone.totalPcmBytes = 0;
+    if (zone.recordIndices.length !== zone.channels) {
+      throw new X7lFormatError(
+        `DWFM record ${wfIndex} keyzone ${zone.index} has ${zone.recordIndices.length} source record(s) ` +
+          `for ${zone.channels} channel(s)`,
+      );
+    }
+    for (const r of zone.recordIndices) {
+      const span = spans[r];
+      if (!span) {
+        throw new X7lFormatError(`DWIM record ${wfIndex} has no sub-record ${r} for keyzone ${zone.index}`);
+      }
+      const expected = zone.lengthSamples * 2;
+      if (span.bytes !== expected) {
+        throw new X7lFormatError(
+          `DWIM record ${wfIndex} sub-record ${r} is ${span.bytes} bytes; the key map ` +
+            `says ${zone.lengthSamples} 16-bit samples (${expected} bytes)`,
+        );
+      }
+      zone.pcm.push(span);
+      zone.totalPcmBytes += span.bytes;
+    }
+    zone.pcmOffset = zone.pcm[0].offset;
+    zone.pcmBytes = zone.pcm[0].bytes;
   }
 }
 

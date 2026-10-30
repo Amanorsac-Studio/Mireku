@@ -1,8 +1,27 @@
-MIREKU 1.0.1 - test build
+MIREKU 1.0.2 - test build
 Amanorsac Studio
 
 
-0. WHAT CHANGED IN 1.0.1
+0. WHAT CHANGED IN 1.0.2
+
+   Installs over 1.0.1 or 1.0.0. The library, presets, performances and the
+   test key are kept; the key keeps the days it has left.
+
+     - VELOCITY: you can hear it now. The old law only moved 9 dB from the
+       softest touch to the hardest; sounds now follow the standard sampler
+       law (about 40 dB of range). Every sound will feel more dynamic.
+     - ATTACK is 0 by default on every sound. Saved presets keep their own.
+     - PLATE and HALL/SHIMMER are a new reverb. DECAY now means seconds, the
+       level no longer rises with DECAY, stereo is kept, and SHIMMER is a
+       real shimmer (a proper pitch shifter, and a much denser tail). It no
+       longer crashes at extreme settings. Reverb presets will sound
+       different - that is the point.
+     - Two new units in ADD UNIT: TAPE MACHINE (drive, wow/flutter, age,
+       hiss, and a DETUNE in cents that spreads two copies left/right) and
+       MODULATOR (ring modulation or frequency shifting, with an LFO).
+     - Third-party licence notices are installed as THIRD-PARTY-LICENCES.txt.
+
+   WHAT CHANGED IN 1.0.1
 
    Installs over 1.0.0. The library, presets, performances and the test key
    are kept; the key keeps the days it has left.

@@ -147,6 +147,7 @@ else
   WELCOME_SRC="$APP_DIR/installer/mac/welcome.html"
 fi
 cp "$README_SRC" "$DOCS/Read Me First.txt"
+cp "$APP_DIR/installer/THIRD-PARTY-LICENCES.txt" "$DOCS/"      # MIT notices (Signalsmith)
 cp "$APP_DIR/installer/mac/Uninstall MIREKU.command" "$DOCS/"; chmod +x "$DOCS/Uninstall MIREKU.command"
 pkgbuild --root "$DOCS" --identifier com.amanorsac.mireku.docs --version "$VERSION" \
          --install-location "/Library/Application Support/Amanorsac Studio/MIREKU" "$PKGS/docs.pkg"

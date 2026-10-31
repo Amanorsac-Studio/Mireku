@@ -207,7 +207,7 @@ export const FX_REGISTRY: Record<FxType, FxSpec> = {
   // a MONO switch. Mirrors FxParams.h; the plugin is the reference implementation.
   modPedal: {
     type: 'modPedal',
-    name: 'Modulation',
+    name: 'JM Modulation',
     params: [
       { id: 'mode', label: 'Mode', kind: 'enum', choices: ['chorus', 'flanger', 'phaser', 'wow+flut'], default: 'chorus' },
       { id: 'rate', label: 'Rate', kind: 'float', min: 0.05, max: 10, default: 0.5, unit: 'Hz', log: true },

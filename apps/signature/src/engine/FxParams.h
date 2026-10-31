@@ -220,7 +220,7 @@ inline const std::array<FxSpec, kNumFxTypes>& fxRegistry()
         // buttons and a MONO switch. In WOW+FLUT the mix is locked full wet -
         // a dry copy under a pitch warble is a chorus, not a tape - which is
         // the padlock drawn beside the mix knob on the original.
-        { FxType::modPedal, "modPedal", "Modulation", {
+        { FxType::modPedal, "modPedal", "JM Modulation", {
             { "mode", "Mode", ParamKind::Enum, 0, 3, 0, { "chorus", "flanger", "phaser", "wow+flut" } },
             { "rate", "Rate", ParamKind::Float, 0.05f, 10.0f, 0.5f, {}, "Hz", false, true },
             { "intensity", "Intensity", ParamKind::Float, 0, 100, 50 },

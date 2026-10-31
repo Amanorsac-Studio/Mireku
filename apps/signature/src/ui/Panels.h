@@ -896,6 +896,18 @@ public:
         };
         addAndMakeVisible (bypass_);
         if (type_ == FxType::widener) startTimerHz (10);
+        // The modulation pedal's MIX is locked full wet in WOW+FLUT (the
+        // padlock on the client's photo): the knob greys out while that mode
+        // is chosen, and the DSP ignores it there regardless.
+        if (type_ == FxType::modPedal) { startTimerHz (10); lockMixForWowFlutter(); }
+    }
+
+    void lockMixForWowFlutter()
+    {
+        if (type_ != FxType::modPedal || knobs_.size() < 3) return;
+        const bool wowFlutter = proc_.getParamNormalized (prefix_ + ".fx" + juce::String (idx_) + ".mode") >= 0.99f;
+        auto* mix = knobs_[2];                       // rate, intensity, MIX in registry order
+        if (mix->isEnabled() == wowFlutter) mix->setEnabled (! wowFlutter);
     }
 
     // FX personality mapping (unchanged from V1/V2, logged in DECISIONS) — the
@@ -918,6 +930,7 @@ public:
             case FxType::plateReverb:    return 5;
             case FxType::tapeMachine:    return 1;   // orange, beside the tape delay
             case FxType::ringMod:        return 2;   // purple, with the modulations
+            case FxType::modPedal:       return 2;   // purple, with the modulations
             default:                     return 5;   // widener
         }
     }
@@ -1091,7 +1104,7 @@ public:
     void mouseUp (const juce::MouseEvent&) override { dragArmed_ = false; dragging_ = false; }
 
 private:
-    void timerCallback() override { repaint(); }
+    void timerCallback() override { lockMixForWowFlutter(); repaint(); }
 
     /// R7 (item 2). Shared by the remove chip and the menu's "Remove" item so
     /// the two routes cannot drift.

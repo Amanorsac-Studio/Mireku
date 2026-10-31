@@ -1069,6 +1069,170 @@ private:
 };
 
 //==============================================================================
+//==============================================================================
+// WOW AND FLUTTER, specified in PITCH.
+//
+// The first tape machine wobbled a delay line by a fixed 1.8 ms at 0.6 Hz. The
+// pitch a listener hears is the DERIVATIVE of the delay, so that was +-12 cents
+// at the knob's maximum and +-3 cents at its default - a faint chorus that
+// nobody could hear as tape, which is what the client reported. This engine
+// starts from the pitch deviation it is asked for and derives the delay
+// excursion from it: a sine of peak ratio r at w rad/s needs an excursion of
+// r / w seconds. The excursion is capped so the unit's mean delay never
+// exceeds 20 ms (the instantaneous delay swings up to twice that at the
+// bottom of a deep, slow wow); a very slow wow is therefore shallower than
+// asked rather than late, and at ordinary settings the centre is a few ms.
+//
+// WOW is one sine whose rate and depth drift under slow random walks, as a
+// capstan's eccentricity does. FLUTTER is three sines at irregular ratios of a
+// base rate near 7 Hz (which follows the wow rate gently: a faster tape
+// flutters faster), each breathing under its own filtered noise, plus a faint
+// scrape band of filtered noise. Everything is per-sample and seeded, so a
+// render is the same at any block size.
+struct WowFlutter
+{
+    /// A slowly wandering value in -1..1: a new target every `holdSeconds`,
+    /// approached through a one-pole, so it has no steps and no DC lean.
+    struct SlowNoise
+    {
+        juce::uint32 seed = 1;
+        int counter = 0, period = 1;
+        float target = 0.0f, z = 0.0f, a = 0.001f;
+        void prepare (double sr, float holdSeconds, float smoothHz, juce::uint32 s)
+        {
+            seed = s;
+            period = juce::jmax (1, (int) (sr * holdSeconds));
+            a = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * smoothHz / (float) sr);
+            reset();
+        }
+        void reset() { counter = 0; target = 0.0f; z = 0.0f; }
+        float uniform()
+        {
+            seed = seed * 1664525u + 1013904223u;
+            return (float) (seed >> 8) / 8388608.0f - 1.0f;      // -1..1
+        }
+        float tick()
+        {
+            if (--counter <= 0) { counter = period; target = uniform(); }
+            z += a * (target - z);
+            return z;
+        }
+    };
+
+    void prepare (double sr)
+    {
+        sr_ = sr;
+        // The latency cap, on the CENTRE delay: the read position swings the
+        // same distance either side of it, so the instantaneous delay peaks
+        // at twice this (40 ms) while the mean the player feels is at most
+        // 20 ms, and at ordinary settings a millisecond or two.
+        budget_ = (float) (sr * 0.020);
+        centreA_ = 1.0f - std::exp (-1.0f / (float) (sr * 0.05)); // 50 ms centre follower
+        rateDrift_.prepare (sr, 1.7f, 0.25f, 0x51a3u);
+        depthDrift_.prepare (sr, 2.3f, 0.20f, 0x9e37u);
+        for (int ch = 0; ch < 2; ++ch)
+            for (int k = 0; k < 3; ++k)
+                flutterAm_[ch][k].prepare (sr, 0.23f + 0.07f * (float) k, 2.5f, 0x1000u * (juce::uint32) (ch * 3 + k + 1));
+        for (auto& s : scrapeLp_) s.setCutoff (160.0f, sr);
+        for (auto& s : scrapeHp_) s.setCutoff (40.0f, sr);
+        reset();
+    }
+    void reset()
+    {
+        for (auto& ph : wowPhase_) ph = 0.0;
+        for (auto& chs : flutterPhase_) for (auto& ph : chs) ph = 0.0;
+        rateDrift_.reset(); depthDrift_.reset();
+        for (auto& chs : flutterAm_) for (auto& n : chs) n.reset();
+        for (auto& s : scrapeLp_) s.reset();
+        for (auto& s : scrapeHp_) s.reset();
+        scrapeSeed_ = 0x2f6eu;
+        centre_ = 0.0f;
+    }
+
+    /// Once per block. `rateHz` is the wow rate; `intensity` 0..1; `mono` gives
+    /// both channels the same delay (one capstan), otherwise the right side
+    /// runs a quarter turn behind with its own flutter.
+    void set (float rateHz, float intensity, bool mono)
+    {
+        mono_ = mono;
+        const float i = juce::jlimit (0.0f, 1.0f, intensity);
+        rate_ = juce::jlimit (0.05f, 10.0f, rateHz);
+        // depth as pitch: wow up to +-90 cents, flutter up to +-10, scrape +-1.5
+        wowCents_ = 90.0f * std::pow (i, 1.5f);
+        const float flutterCents = 10.0f * i;
+        const float scrapeCents = 1.5f * i;
+        const float toRatio = 0.69314718f / 1200.0f;            // cents -> ratio, small-angle
+        const float flutterBase = 7.4f * std::pow (rate_ / 0.5f, 0.3f);
+        static constexpr float kRatio[3] = { 1.0f, 2.37f, 3.71f };
+        static constexpr float kWeight[3] = { 1.0f / 1.7f, 0.45f / 1.7f, 0.25f / 1.7f };
+        float flutterEx = 0.0f;
+        for (int k = 0; k < 3; ++k)
+        {
+            flutterHz_[k] = flutterBase * kRatio[k];
+            const float r = flutterCents * kWeight[k] * toRatio;
+            flutterAmp_[k] = r * (float) sr_ / (juce::MathConstants<float>::twoPi * flutterHz_[k]);
+            flutterEx += flutterAmp_[k];
+        }
+        scrapeAmp_ = scrapeCents * toRatio * (float) sr_ / (juce::MathConstants<float>::twoPi * 80.0f);
+        const float wowR = wowCents_ * toRatio;
+        wowAmp_ = wowR * (float) sr_ / (juce::MathConstants<float>::twoPi * rate_);
+        // the latency cap: wow gives way first, flutter keeps its share
+        const float room = juce::jmax (0.0f, budget_ - flutterEx * 1.35f - scrapeAmp_ * 4.0f);
+        wowAmp_ = juce::jmin (wowAmp_, room / 1.25f);           // 1.25: the depth drift's headroom
+        excursion_ = wowAmp_ * 1.25f + flutterEx * 1.35f + scrapeAmp_ * 4.0f;
+    }
+
+    /// Per sample: the two read positions, in samples behind the write head.
+    void tick (float& dL, float& dR)
+    {
+        // the slow walks
+        const float rateMul = 1.0f + 0.12f * rateDrift_.tick();
+        const float depthMul = 1.0f + 0.25f * depthDrift_.tick();
+        const double inc = (double) (rate_ * rateMul) / sr_;
+        centre_ += centreA_ * ((excursion_ + 3.0f) - centre_);
+
+        // scrape: a narrow noise band, the same on both sides (it is the tape)
+        scrapeSeed_ = scrapeSeed_ * 1664525u + 1013904223u;
+        const float white = (float) (scrapeSeed_ >> 8) / 8388608.0f - 1.0f;
+        const float scrape = scrapeHp_[0].process (scrapeLp_[0].process (white)) * scrapeAmp_ * 4.0f;
+
+        float out[2];
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            if (ch == 1 && mono_) { out[1] = out[0]; break; }
+            wowPhase_[ch] += inc; if (wowPhase_[ch] >= 1.0) wowPhase_[ch] -= 1.0;
+            const double wph = wowPhase_[ch] + (ch == 1 ? 0.25 : 0.0);
+            float d = centre_ + wowAmp_ * depthMul * (float) std::cos (juce::MathConstants<double>::twoPi * wph);
+            for (int k = 0; k < 3; ++k)
+            {
+                auto& ph = flutterPhase_[ch][k];
+                ph += (double) flutterHz_[k] / sr_; if (ph >= 1.0) ph -= 1.0;
+                const float am = 0.75f + 0.35f * flutterAm_[ch][k].tick();
+                d += flutterAmp_[k] * am * (float) std::sin (juce::MathConstants<double>::twoPi * (ph + 0.37 * ch + 0.11 * k));
+            }
+            out[ch] = d + scrape;
+        }
+        dL = out[0]; dR = out[1];
+    }
+
+    float centreSamples() const { return centre_; }
+    float wowCents() const { return wowCents_; }
+
+private:
+    double sr_ = 48000.0;
+    bool mono_ = false;
+    float rate_ = 0.5f, wowCents_ = 0.0f, wowAmp_ = 0.0f, excursion_ = 0.0f, budget_ = 1200.0f;
+    float flutterHz_[3] { 7.4f, 17.5f, 27.5f }, flutterAmp_[3] { 0, 0, 0 }, scrapeAmp_ = 0.0f;
+    float centre_ = 0.0f, centreA_ = 0.001f;
+    double wowPhase_[2] { 0.0, 0.0 };
+    double flutterPhase_[2][3] {};
+    SlowNoise rateDrift_, depthDrift_;
+    SlowNoise flutterAm_[2][3];
+    std::array<OnePoleLP, 1> scrapeLp_;
+    std::array<OnePoleHP, 1> scrapeHp_;
+    juce::uint32 scrapeSeed_ = 0x2f6eu;
+};
+
 //================================================= 13. Tape Machine + Detune
 // A tape pass - pre-emphasised saturation, wow and flutter on a modulated
 // delay, an "age" high roll-off, hiss - followed by a DETUNER: two copies of
@@ -1083,12 +1247,11 @@ public:
     void prepare (double sr, int maxBlock) override
     {
         sr_ = sr;
-        wowDl_.prepare (sr, 30.0f);
+        wowDl_.prepare (sr, 40.0f);
         for (auto& f : age_) f.setCutoff (12000.0f, sr);
         for (auto& f : hissHp_) f.setCutoff (2000.0f, sr);
         for (auto& f : emphasis_) f.setCutoff (3000.0f, sr);
-        wowLfo_.setRate (0.6f, sr);
-        flutterLfo_.setRate (5.3f, sr);
+        wf_.prepare (sr);
         // 24 ms window: ~12 ms mean latency against the ~150 ms a phase
         // vocoder needed, which the client heard as the tape "introducing a
         // strong latency that none of the other plugins does".
@@ -1100,6 +1263,7 @@ public:
     void reset() override
     {
         wowDl_.reset();
+        wf_.reset();
         for (auto& f : age_) f.reset();
         for (auto& f : hissHp_) f.reset();
         for (auto& f : emphasis_) f.reset();
@@ -1131,15 +1295,18 @@ public:
         const float gainIn = 1.0f + 5.0f * drive * drive;
         const float gainOut = 1.0f / std::tanh (juce::jmax (0.1f, gainIn * 0.5f)) * 0.5f;
         const float hissAmp = hiss * hiss * 0.02f;
+        juce::ignoreUnused (msToSamp);
+        // WOW AND FLUTTER as pitch (see WowFlutter): one capstan, so both
+        // channels read the same wandering position. 0.55 Hz is a 7.5 ips
+        // reel's once-around.
+        wf_.set (0.55f, wow, true);
 
         for (int i = 0; i < n; ++i)
         {
-            // WOW (slow, deep) and FLUTTER (fast, shallow) on the read position
-            const float wowS = wowLfo_.tickSin() * 1.8f * wow;
-            const float flS = flutterLfo_.tickSin (0.3) * 0.12f * wow;
-            const float d = (4.0f + wowS + flS) * msToSamp;            // around 4 ms
+            float dL, dR;
+            wf_.tick (dL, dR);
             wowDl_.push (L[i], R[i]);
-            float l = wowDl_.read (0, d), r = wowDl_.read (1, d * 1.01f);
+            float l = wowDl_.read (0, dL), r = wowDl_.read (1, dR);
             // pre-emphasis into the saturator, de-emphasis after: tape bites the
             // top first, which is what separates "tape" from "distortion"
             for (int c = 0; c < 2; ++c)
@@ -1186,7 +1353,7 @@ private:
     ModDelay wowDl_;
     std::array<OnePoleLP, 2> age_, emphasis_;
     std::array<OnePoleHP, 2> hissHp_;
-    Lfo wowLfo_, flutterLfo_;
+    WowFlutter wf_;
     juce::Random rng_ { 0x7a9e };
     std::array<MicroPitch, 2> micro_;
     juce::AudioBuffer<float> tapeBuf_, detBuf_;
@@ -1286,6 +1453,136 @@ private:
     std::array<std::array<Ap, 9>, 2> ap_;
 };
 
+//======================================================= 15. Modulation pedal
+// One pedal, four effects, one INTENSITY knob (client, 2026-10-30, from a
+// photo). CHORUS is a single BBD-style voice around 7 ms; FLANGER a short
+// sweep with feedback that rises with intensity; PHASER four stages sweeping
+// 200 Hz upwards; WOW+FLUT the WowFlutter engine above, full wet - the MIX
+// knob is locked in that mode because a dry copy under a pitch warble is a
+// chorus, not a tape. MONO gives both channels the same modulation; off, the
+// right channel runs a quarter turn behind so the effect spreads.
+class ModPedalFx : public FxUnit
+{
+public:
+    ModPedalFx() : FxUnit (FxType::modPedal) {}
+    void prepare (double sr, int) override
+    {
+        sr_ = sr;
+        dl_.prepare (sr, 40.0f);
+        wf_.prepare (sr);
+        reset();
+    }
+    void reset() override
+    {
+        dl_.reset(); wf_.reset();
+        lfo_.phase = 0.0;
+        fb_[0] = fb_[1] = 0.0f;
+        for (auto& c : ap_) for (auto& z : c) z = 0.0f;
+    }
+    void process (juce::AudioBuffer<float>& b, double) override
+    {
+        const int mode = (int) p (0);
+        const float rate = p (1);
+        const float inten = juce::jlimit (0.0f, 1.0f, p (2) / 100.0f);
+        const bool mono = p (4) >= 0.5f;
+        const float wetG = mode == 3 ? 1.0f : juce::jlimit (0.0f, 1.0f, p (3) / 100.0f);
+        const float dryG = 1.0f - wetG;
+        const int n = b.getNumSamples();
+        auto* L = b.getWritePointer (0);
+        auto* R = b.getNumChannels() > 1 ? b.getWritePointer (1) : L;
+        const float msToSamp = (float) (sr_ / 1000.0);
+        const double rOff = mono ? 0.0 : 0.25;                   // the right side's quarter turn
+        lfo_.setRate (rate, sr_);
+
+        switch (mode)
+        {
+            case 0:   // CHORUS
+            {
+                const float centre = 7.0f, depth = 0.2f + 4.3f * inten;   // ms
+                for (int i = 0; i < n; ++i)
+                {
+                    const double ph = lfo_.phase;
+                    const float mL = lfo_.tickSin();
+                    lfo_.phase = ph;
+                    const float mR = lfo_.tickSin (rOff);
+                    dl_.push (L[i], R[i]);
+                    const float wl = dl_.read (0, (centre + depth * mL) * msToSamp);
+                    const float wr = dl_.read (1, (centre + depth * mR) * msToSamp);
+                    L[i] = dryG * L[i] + wetG * wl;
+                    R[i] = dryG * R[i] + wetG * wr;
+                }
+                break;
+            }
+            case 1:   // FLANGER
+            {
+                const float fb = 0.35f + 0.4f * inten, sweep = 0.3f + 5.5f * inten;   // ms
+                for (int i = 0; i < n; ++i)
+                {
+                    const double ph = lfo_.phase;
+                    const float mL = 0.5f * (1.0f + lfo_.tickSin());
+                    lfo_.phase = ph;
+                    const float mR = 0.5f * (1.0f + lfo_.tickSin (rOff));
+                    dl_.push (guard_.shape (L[i] + fb_[0] * fb), guard_.shape (R[i] + fb_[1] * fb));
+                    fb_[0] = dl_.read (0, (0.5f + sweep * mL) * msToSamp);
+                    fb_[1] = dl_.read (1, (0.5f + sweep * mR) * msToSamp);
+                    L[i] = dryG * L[i] + wetG * fb_[0];
+                    R[i] = dryG * R[i] + wetG * fb_[1];
+                }
+                break;
+            }
+            case 2:   // PHASER
+            {
+                const float fb = 0.3f + 0.4f * inten, span = 0.4f + 1.0f * inten;    // decades above 200 Hz
+                for (int i = 0; i < n; ++i)
+                {
+                    const double ph = lfo_.phase;
+                    const float mL = 0.5f * (1.0f + lfo_.tickSin());
+                    lfo_.phase = ph;
+                    const float mR = 0.5f * (1.0f + lfo_.tickSin (rOff));
+                    for (int ch = 0; ch < 2; ++ch)
+                    {
+                        const float f = juce::jmin ((float) (sr_ * 0.4), 200.0f * std::pow (10.0f, (ch == 0 ? mL : mR) * span));
+                        const float t = std::tan (juce::MathConstants<float>::pi * f / (float) sr_);
+                        const float c = (t - 1.0f) / (t + 1.0f);
+                        float* s = ch == 0 ? &L[i] : &R[i];
+                        float x = *s + fb_[ch] * fb;
+                        for (int st = 0; st < 4; ++st)
+                        {
+                            const float y = c * x + ap_[ch][(size_t) st];
+                            ap_[ch][(size_t) st] = x - c * y;
+                            x = y;
+                        }
+                        fb_[ch] = x;
+                        *s = dryG * *s + wetG * x;
+                    }
+                }
+                break;
+            }
+            default:  // WOW + FLUTTER, full wet
+            {
+                wf_.set (rate, inten, mono);
+                for (int i = 0; i < n; ++i)
+                {
+                    float dL, dR;
+                    wf_.tick (dL, dR);
+                    dl_.push (L[i], R[i]);
+                    L[i] = dl_.read (0, dL);
+                    R[i] = dl_.read (1, dR);
+                }
+                break;
+            }
+        }
+    }
+private:
+    double sr_ = 48000;
+    ModDelay dl_;
+    WowFlutter wf_;
+    Lfo lfo_;
+    float fb_[2] { 0.0f, 0.0f };
+    std::array<std::array<float, 4>, 2> ap_ {};
+    SoftCeiling guard_ = makeLoopGuard();
+};
+
 inline std::unique_ptr<FxUnit> createFxUnit (FxType t)
 {
     switch (t)
@@ -1304,6 +1601,7 @@ inline std::unique_ptr<FxUnit> createFxUnit (FxType t)
         case FxType::widener:       return std::make_unique<WidenerFx>();
         case FxType::tapeMachine:   return std::make_unique<TapeMachineFx>();
         case FxType::ringMod:       return std::make_unique<RingModFx>();
+        case FxType::modPedal:      return std::make_unique<ModPedalFx>();
         default:                    return nullptr;
     }
 }

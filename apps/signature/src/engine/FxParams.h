@@ -18,6 +18,9 @@ enum class FxType : int {
     // Added 2026-10-29 at the client's request. APPEND ONLY: the integer value
     // is what a saved rack's unit index means.
     tapeMachine, ringMod,
+    // Added 2026-10-30: the MODULATION pedal (chorus / flanger / phaser /
+    // wow+flutter behind one intensity knob). Takes 14.
+    modPedal,
     Count
 };
 constexpr int kNumFxTypes = (int) FxType::Count;
@@ -212,6 +215,17 @@ inline const std::array<FxSpec, kNumFxTypes>& fxRegistry()
             { "lfoRate", "LFO Rate", ParamKind::Float, 0.05f, 10.0f, 0.5f, {}, "Hz", false, true },
             { "lfoDepth", "LFO Depth", ParamKind::Float, 0, 100, 0 },
             { "mix", "Mix", ParamKind::Float, 0, 100, 50 } } },
+        // MODULATION PEDAL (client, 2026-10-30, from a photo of the pedal he
+        // wanted): one big INTENSITY knob, RATE and MIX beside it, four mode
+        // buttons and a MONO switch. In WOW+FLUT the mix is locked full wet -
+        // a dry copy under a pitch warble is a chorus, not a tape - which is
+        // the padlock drawn beside the mix knob on the original.
+        { FxType::modPedal, "modPedal", "Modulation", {
+            { "mode", "Mode", ParamKind::Enum, 0, 3, 0, { "chorus", "flanger", "phaser", "wow+flut" } },
+            { "rate", "Rate", ParamKind::Float, 0.05f, 10.0f, 0.5f, {}, "Hz", false, true },
+            { "intensity", "Intensity", ParamKind::Float, 0, 100, 50 },
+            { "mix", "Mix", ParamKind::Float, 0, 100, 50 },
+            { "mono", "Mono", ParamKind::Bool, 0, 1, 0 } } },
     } };
     return reg;
 }

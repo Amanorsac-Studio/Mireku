@@ -27,7 +27,7 @@
               "jmChorus", "tremoloAutoPan", "phaser", "flanger", "epPreamp",
               "vintageEq", "compressor", "tapeDelay", "digitalDelay",
               "plateReverb", "hallShimmer", "widener", "svFilter",
-              "tapeMachine", "ringMod"
+              "tapeMachine", "ringMod", "modPedal"
             ]
           },
           "bypassed": { "type": "boolean" },

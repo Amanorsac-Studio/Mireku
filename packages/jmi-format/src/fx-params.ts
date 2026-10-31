@@ -202,6 +202,20 @@ export const FX_REGISTRY: Record<FxType, FxSpec> = {
       { id: 'mix', label: 'Mix', kind: 'float', min: 0, max: 100, default: 50 },
     ],
   },
+  // Modulation pedal (client, 2026-10-30): chorus / flanger / phaser / wow+flutter
+  // behind one INTENSITY knob, with RATE, MIX (locked full wet in wow+flut) and
+  // a MONO switch. Mirrors FxParams.h; the plugin is the reference implementation.
+  modPedal: {
+    type: 'modPedal',
+    name: 'Modulation',
+    params: [
+      { id: 'mode', label: 'Mode', kind: 'enum', choices: ['chorus', 'flanger', 'phaser', 'wow+flut'], default: 'chorus' },
+      { id: 'rate', label: 'Rate', kind: 'float', min: 0.05, max: 10, default: 0.5, unit: 'Hz', log: true },
+      { id: 'intensity', label: 'Intensity', kind: 'float', min: 0, max: 100, default: 50 },
+      { id: 'mix', label: 'Mix', kind: 'float', min: 0, max: 100, default: 50 },
+      { id: 'mono', label: 'Mono', kind: 'bool', default: false },
+    ],
+  },
   // Amanorsac sound designer: resonant state-variable filter with a drive stage in front.
   svFilter: {
     type: 'svFilter',

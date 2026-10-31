@@ -30,7 +30,7 @@ static juce::File testdataDir()
 static void testFxRegistry()
 {
     std::printf ("\n== FX parameter registry (mirrors fx-params.ts) ==\n");
-    CHECK ((int) fxRegistry().size() == 14, "14 FX units registered (12 + Tape Machine + Modulator)");
+    CHECK ((int) fxRegistry().size() == 15, "15 FX units registered (12 + Tape Machine + Modulator + Modulation pedal)");
     auto& tape = fxSpec (FxType::tapeDelay);
     CHECK (findParam (tape, "wowFlutter") != nullptr, "tapeDelay has wowFlutter");
     CHECK (findParam (tape, "time")->def == 375.0f, "tapeDelay time default 375 ms (3/16 @ 120)");
@@ -1631,6 +1631,8 @@ static void testArpStateRoundTrip()
 #include "FdnReverb.inc"
 // TAPE MACHINE + MODULATOR - the two units added 2026-10-29.
 #include "TapeAndModulator.inc"
+// MODULATION PEDAL + the wow/flutter engine it shares with the tape machine.
+#include "ModPedal.inc"
 // WORLD VOICING - the per-world tone controls, measured.
 #include "WorldVoicing.inc"
 
@@ -1996,6 +1998,10 @@ int main()
     testTapeMachineDetunes();
     testModulatorSidebands();
     testTapeMachineLatencyIsSmall();
+    // MODULATION PEDAL
+    testWowFlutterMovesPitch();
+    testWowFlutterLatencyIsBounded();
+    testModPedalMixLockAndMono();
     testFdnEchoDensity();
     // WORLD VOICING
     testWorldVoicingControls();

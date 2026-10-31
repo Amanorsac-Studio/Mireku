@@ -1,8 +1,26 @@
-MIREKU 1.0.2 - test build
+MIREKU 1.0.3 - test build
 Amanorsac Studio
 
 
-0. WHAT CHANGED IN 1.0.2
+0. WHAT CHANGED IN 1.0.3
+
+   Installs over any earlier build. The library, presets, performances and
+   the test key are kept; the key keeps the days it has left.
+
+     - JM MODULATION, a new unit in ADD UNIT: one INTENSITY knob, RATE, MIX,
+       four modes (chorus, flanger, phaser, wow+flut) and a MONO switch. In
+       WOW+FLUT the mix is locked full wet, as on the pedal.
+     - WOW/FLUTTER on the TAPE MACHINE now moves the pitch for real. At 50 it
+       is a tape wobble; at 100 it is seasick. Before, it barely moved.
+     - IMPORT LIBRARY reads the JM Signature Sound Library (Full Expansion):
+       stereo pairs, one-shot sounds and the named velocity layers (EP2C
+       Velocity 1..8 and the like) all come in as one instrument each.
+     - IMPORT LIBRARY asks WHERE each instrument goes (JM Set, MKS, FM or
+       Strings) before it writes anything. ALL sets every row at once.
+     - A sound that cannot be laid out is skipped and named in the report;
+       the rest of the file still imports.
+
+   WHAT CHANGED IN 1.0.2
 
    Installs over 1.0.1 or 1.0.0. The library, presets, performances and the
    test key are kept; the key keeps the days it has left.

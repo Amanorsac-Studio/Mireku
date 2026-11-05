@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Your account · MIREKU</title>
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#0a0907">
+<link rel="icon" href="images/icon.png" type="image/png">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="/" aria-label="MIREKU home">
+      <img src="images/mireku-mark.webp" alt="" width="40" height="34">
+      <span><b>MIREKU</b><small>Sound library</small></span>
+    </a>
+    <nav class="nav" aria-label="Main">
+      <a href="/">Home</a>
+      <a href="/#buy" class="hide-sm">Get MIREKU</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap acct">
+  <span class="eyebrow">Your account</span>
+  <h1>MIREKU</h1>
+  <p class="muted" id="intro">Your licence key and downloads live here. The same account works on amanorsac.studio.</p>
+
+  <p class="msg" id="loading" role="status">Loading…</p>
+
+  <!-- signed out -->
+  <section class="panel" id="signin" hidden>
+    <h2 id="signin-title">Sign in</h2>
+    <form id="f-signin" novalidate>
+      <div class="field" id="row-name" hidden>
+        <label for="name">Your name</label>
+        <input id="name" name="name" autocomplete="name" maxlength="120">
+      </div>
+      <div class="field">
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" autocomplete="email" required>
+      </div>
+      <div class="field" id="row-pass">
+        <label for="pass">Password</label>
+        <input id="pass" name="pass" type="password" autocomplete="current-password" minlength="8" required>
+      </div>
+      <button class="btn" type="submit" id="go">Sign in</button>
+      <p class="msg" id="signin-msg" role="status"></p>
+    </form>
+    <p class="switch" id="sw-new">New here? <button type="button" data-mode="up">Create an account</button></p>
+    <p class="switch" id="sw-old" hidden>Already have an account? <button type="button" data-mode="in">Sign in</button></p>
+    <p class="switch" id="sw-forgot"><button type="button" data-mode="forgot">Forgotten your password?</button></p>
+  </section>
+
+  <!-- arriving from a password reset email -->
+  <section class="panel" id="reset" hidden>
+    <h2>Choose a new password</h2>
+    <form id="f-reset" novalidate>
+      <div class="field">
+        <label for="newpass">New password</label>
+        <input id="newpass" type="password" autocomplete="new-password" minlength="8" required>
+      </div>
+      <button class="btn" type="submit">Save password</button>
+      <p class="msg" id="reset-msg" role="status"></p>
+    </form>
+  </section>
+
+  <!-- signed in -->
+  <div id="mine" hidden>
+    <div class="panel who">
+      <span>Signed in as <b id="who"></b></span>
+      <button class="btn ghost small" type="button" id="signout">Sign out</button>
+    </div>
+
+    <section class="panel" id="owned" hidden>
+      <h2>Licence key</h2>
+      <p class="muted">Paste this into MIREKU when it asks. Click the key icon at the top of MIREKU to open the licence panel.</p>
+      <div class="keybox">
+        <code id="key">—</code>
+        <button class="btn ghost" type="button" id="copy">Copy</button>
+      </div>
+      <p class="msg" id="trial" hidden></p>
+
+      <h2 style="margin-top:30px">Computers</h2>
+      <p class="muted" id="seats"></p>
+      <ul class="devices" id="devices"></ul>
+
+      <h2 style="margin-top:30px">Download</h2>
+      <div class="dl" id="downloads"></div>
+      <p class="msg" id="dl-msg" role="status"></p>
+    </section>
+
+    <section class="panel" id="notowned" hidden>
+      <h2>MIREKU is not on this account yet</h2>
+      <p class="muted" id="notowned-text">Once you buy it, your licence key and downloads appear here.</p>
+      <button class="btn" type="button" id="buy" disabled>Coming soon</button>
+      <p class="msg" id="buy-msg" role="status"></p>
+    </section>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>MIREKU · James Mireku's sounds · made with Amanorsac Studio</span>
+    <nav aria-label="Footer">
+      <a href="https://amanorsac.studio/legal">Terms</a>
+      <a href="https://amanorsac.studio/privacy">Privacy</a>
+      <a href="https://amanorsac.studio/contact">Contact</a>
+    </nav>
+  </div>
+</footer>
+
+<script src="assets/config.js"></script>
+<script src="assets/vendor/supabase-2.116.0.js" defer></script>
+<script src="assets/common.js" defer></script>
+<script src="assets/account.js" defer></script>
+</body>
+</html>

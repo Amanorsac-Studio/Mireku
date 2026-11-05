@@ -53,6 +53,13 @@ option(JM_ASIO "Compile ASIO device support into the standalone" ON)
 # Test builds are named "-Tester-" and the installer scripts refuse to package a
 # release whose binary still contains the key.
 option(MIREKU_TESTER_BUILD "Build a key-gated test build" OFF)
+
+# A RELEASE build asks for the studio licence (src/plugin/License.h, the License
+# Integration Standard): it is silent until a MIREKU key has been activated
+# against amanorsac.studio and its signed proof verified. ON by default, so a
+# release cannot ship without it by accident. A tester build ignores it (it has
+# its own gate), and the headless test tools never compile it in.
+option(MIREKU_LICENSING "Require the studio licence in the plug-in and standalone" ON)
 set(JM_ASIO_SDK_DIR "" CACHE PATH
     "Optional: directory containing iasiodrv.h from a locally installed Steinberg ASIO SDK. \
 Leave empty to use the ASIO headers bundled with JUCE. The SDK is NOT redistributable and is \
@@ -195,7 +202,8 @@ target_compile_definitions(Mireku PUBLIC
     # R6(1): device backends. These must be PUBLIC/on the shared-code target —
     # that is where JUCE compiles juce_audio_devices.
     ${JM_AUDIO_BACKEND_DEFS}
-    $<$<BOOL:${MIREKU_TESTER_BUILD}>:MIREKU_TESTER_BUILD=1>)
+    $<$<BOOL:${MIREKU_TESTER_BUILD}>:MIREKU_TESTER_BUILD=1>
+    $<$<AND:$<BOOL:${MIREKU_LICENSING}>,$<NOT:$<BOOL:${MIREKU_TESTER_BUILD}>>>:MIREKU_LICENSING=1>)
 if(JM_ASIO_INCLUDE_DIR)
     target_include_directories(Mireku PUBLIC "${JM_ASIO_INCLUDE_DIR}")
 endif()
@@ -232,6 +240,7 @@ target_compile_definitions(MirekuTests PRIVATE
     JM_APP_VERSION="${PROJECT_VERSION}"
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
+    JUCE_MODAL_LOOPS_PERMITTED=1     # LicenseTests.inc pumps the message loop
     JM_TESTDATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../testdata")
 target_link_libraries(MirekuTests PRIVATE
     juce::juce_cryptography          # test-build key gate, via PluginProcessor.h

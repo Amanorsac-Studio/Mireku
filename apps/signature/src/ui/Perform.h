@@ -877,7 +877,7 @@ public:
     }
 
 private:
-    /// Item C: the key icon opens the (UI-shell-only) activation panel.
+    /// Item C: the key icon opens the licence panel.
     void showLicence()
     {
         if (auto* host = OverlayHost::find (this))
@@ -905,7 +905,7 @@ private:
                                                         : "Authoring mode (off - release build)...");
         m.addSeparator();
         m.addSectionHeader ("Licence");
-        m.addItem (4, proc_.state.library.hasLicenseKey() ? "Licence (active)..." : "Activate licence...");
+        m.addItem (4, proc_.isLicensed() && proc_.licensingEnabled() ? "Licence (active)..." : "Licence...");
         m.showMenuAsync (styledMenu (m, *gearBtn_), [this] (int r)
         {
             if (r == 1) { if (auto& h = SettingsPanel::audioSettingsHook()) h(); }
@@ -1145,14 +1145,15 @@ public:
         g.setColour (Theme::muted);
         g.setFont (Theme::value (13.0f));
         g.drawText ("v1.0.0", 14, 0, 70, getHeight(), juce::Justification::centredLeft, false);
-        // R3(C): the licence lamp now reflects the key stored by the activation
-        // panel; the library-fallback notice moved beside it so both are visible.
-        const bool lic = proc_.state.library.hasLicenseKey();
-        g.setColour (lic ? Theme::okGreen : Theme::warnRed);
+        // The licence lamp: the studio licence in a release build, and which kind
+        // of build this is otherwise. The library-fallback notice sits beside it.
+        const bool lic = proc_.licensingEnabled() && proc_.isLicensed();
+        const juce::String word = ! proc_.licensingEnabled() ? (tester::kEnabled ? "TEST BUILD" : "DEVELOPER BUILD")
+                                : lic ? "LICENCE ACTIVE" : "UNLICENSED";
+        g.setColour (lic ? Theme::okGreen : proc_.licensingEnabled() ? Theme::warnRed : Theme::muted);
         g.fillEllipse (86.0f, r.getCentreY() - 4.0f, 8.0f, 8.0f);
         g.setColour (lic ? Theme::goldHi : Theme::muted);
-        g.drawText (lic ? "LICENSE ACTIVE" : "UNLICENSED",
-                    100, 0, 130, getHeight(), juce::Justification::centredLeft, false);
+        g.drawText (word, 100, 0, 130, getHeight(), juce::Justification::centredLeft, false);
         if (proc_.state.library.usedFallback())
         {
             g.setColour (Theme::warnRed.withAlpha (0.9f));

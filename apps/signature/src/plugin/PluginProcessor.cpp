@@ -334,6 +334,11 @@ void JMSignatureProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     // A release build compiles this out entirely (kEnabled is constexpr false).
     if constexpr (tester::kEnabled)
         if (! testerOpen_.load (std::memory_order_relaxed)) { midi.clear(); return; }
+
+    // RELEASE BUILDS: the same, for the studio licence. isLicensed() is one
+    // relaxed atomic read; all network work happens elsewhere (Standard §7).
+    if constexpr (licensing::kEnabled)
+        if (! licence_.isLicensed()) { midi.clear(); return; }
     if (slotBuf.getNumSamples() < n) slotBuf.setSize (2, n, false, false, true);
 
     // MODULATION PHASE 1 — the transport clock. getPosition() may ONLY be called

@@ -677,12 +677,12 @@ public:
         settingsFile().replaceWithText (juce::JSON::toString (juce::var (o)));
     }
 
-    // ---------------------------------------------------------- licence (UI shell)
-    // JM-BUILD-SPEC.md §8 puts copy protection/licensing explicitly OUT OF SCOPE
-    // and the client said "we'll work more on the license later". This stores and
-    // reports the entered key and NOTHING else: no validation, no checksum, no
-    // cryptography, no server activation, no obfuscation, no enforcement. Nothing
-    // in the plugin is gated on it. See DECISIONS-signature.md, round 3 item C.
+    // ---------------------------------------------------------- old licence box
+    // Before the studio licensing system (plugin/License.h), the licence panel
+    // stored whatever was typed here, unchecked. Nothing reads it as a licence
+    // any more: the activation screen only offers it back as a starting point
+    // when it is shaped like a MIREKU key. Kept so an existing settings.json
+    // round-trips unchanged.
     const juce::String& licenseKey() const { return licenseKey_; }
     bool hasLicenseKey() const { return licenseKey_.trim().isNotEmpty(); }
     void setLicenseKey (const juce::String& k) { licenseKey_ = k.trim(); saveSettings(); }

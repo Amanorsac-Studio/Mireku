@@ -9,6 +9,7 @@
 #include "../engine/Limiter.h"
 #include "../engine/MidiRouting.h"
 #include "TesterGate.h"
+#include "License.h"
 
 namespace jm {
 
@@ -376,6 +377,15 @@ public:
     /// that expires mid-session without polling.
     juce::ChangeBroadcaster testerChanged;
 
+    //==========================================================================
+    // THE STUDIO LICENCE (release builds; see License.h). Without a verified
+    // licence the instrument is silent and the editor shows the activation
+    // screen. In a test build, or a headless tool, licensingEnabled() is false,
+    // licence() is null and isLicensed() is always true.
+    bool licensingEnabled() const noexcept { return licensing::kEnabled; }
+    bool isLicensed() const noexcept { return licence_.isLicensed(); }
+    licensing::Client* licence() noexcept { return licence_.client(); }
+
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 
     /// ModApplier — audio thread. Pushes one modulated NORMALISED value into the
@@ -388,6 +398,8 @@ private:
     //-------------------------------------------------- test-build key gate
     /// Lives beside the settings, so every instance of the plug-in on this
     /// machine reads the same key and the same remembered time.
+    /// The studio licence: one client shared by every instance in the process.
+    licensing::Holder licence_;
     tester::Gate tester_ { Library::appDataDir().getChildFile ("Security") };
     /// Read by the audio thread every block; written only from the message
     /// thread. True in a release build and never touched again.

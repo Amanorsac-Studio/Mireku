@@ -21,6 +21,7 @@
 //     second and third routes, per the brief.
 #pragma once
 #include "Widgets.h"
+#include "LicenceText.h"
 
 namespace jm {
 
@@ -291,22 +292,21 @@ private:
 };
 
 //==============================================================================
-/// Item C — licence activation, UI SHELL ONLY.
-/// JM-BUILD-SPEC.md §8 puts copy protection/licensing out of scope and the
-/// client said "we'll work more on the license later", so this panel stores the
-/// typed key in the existing settings file and reflects it in the status bar.
-/// There is deliberately NO validation, checksum, cryptography, server call,
-/// obfuscation or enforcement anywhere in this code path.
-class LicensePanel : public ChromePanel
+/// Item C — the licence panel behind the key icon. Since the studio licensing
+/// system arrived (License.h) it is real: it activates a key against
+/// amanorsac.studio, shows what the licence allows, and frees this computer's
+/// place (Standard R10). The full-window LicenseGatePanel handles the first
+/// activation; this panel is for a computer that is already licensed.
+class LicensePanel : public ChromePanel,
+                     private juce::ChangeListener
 {
 public:
-    static constexpr int kWidth = 560, kHeight = 268;
+    static constexpr int kWidth = 560, kHeight = 300;
 
-    explicit LicensePanel (JMSignatureProcessor& p) : ChromePanel ("Licence"), proc_ (p)
+    explicit LicensePanel (JMSignatureProcessor& p) : ChromePanel ("Licence"), proc_ (p), client_ (p.licence())
     {
         key_.setFont (Theme::value (15.0f));
-        key_.setTextToShowWhenEmpty ("JMSG-XXXX-XXXX-XXXX-XXXX", Theme::muted);
-        key_.setText (proc_.state.library.licenseKey(), juce::dontSendNotification);
+        key_.setTextToShowWhenEmpty ("MIRE-XXXX-XXXX-XXXX", Theme::muted);
         key_.setJustification (juce::Justification::centredLeft);
         key_.onReturnKey = [this] { activate(); };
         addAndMakeVisible (key_);
@@ -316,58 +316,104 @@ public:
         activate_.onClick = [this] { activate(); };
         addAndMakeVisible (activate_);
 
-        cancel_.setButtonText ("CANCEL");
-        cancel_.setFontHeight (12.0f);
-        cancel_.onClick = [this] { dismiss(); };
-        addAndMakeVisible (cancel_);
+        deactivate_.setButtonText ("DEACTIVATE");
+        deactivate_.setFontHeight (12.0f);
+        deactivate_.onClick = [this] { if (client_ != nullptr) client_->deactivate(); };
+        addAndMakeVisible (deactivate_);
 
-        status_ = proc_.state.library.hasLicenseKey() ? "LICENCE ACTIVE" : "UNLICENSED";
+        account_.setButtonText ("MY ACCOUNT");
+        account_.setFontHeight (12.0f);
+        account_.onClick = [] { juce::URL (licensing::kAccountUrl).launchInDefaultBrowser(); };
+        addAndMakeVisible (account_);
+
+        close_.setButtonText ("CLOSE");
+        close_.setFontHeight (12.0f);
+        close_.onClick = [this] { dismiss(); };
+        addAndMakeVisible (close_);
+
+        if (client_ != nullptr)
+        {
+            key_.setText (licenceKeyToOffer (proc_, *client_), juce::dontSendNotification);
+            client_->changed.addChangeListener (this);
+        }
+        else
+        {
+            // A test build (its own key gate) or a developer build: no studio licence.
+            key_.setEnabled (false);
+            activate_.setEnabled (false);
+            deactivate_.setEnabled (false);
+        }
+        refresh();
     }
+
+    ~LicensePanel() override { if (client_ != nullptr) client_->changed.removeChangeListener (this); }
 
     void contentResized (juce::Rectangle<int> area) override
     {
         area.removeFromTop (54);
         key_.setBounds (area.removeFromTop (36).reduced (12, 0));
-        area.removeFromTop (44);
+        area.removeFromTop (70);
         auto row = area.removeFromTop (34).reduced (12, 0);
-        activate_.setBounds (row.removeFromLeft (140));
-        row.removeFromLeft (12);
-        cancel_.setBounds (row.removeFromLeft (120));
+        activate_.setBounds (row.removeFromLeft (118));   row.removeFromLeft (10);
+        deactivate_.setBounds (row.removeFromLeft (118)); row.removeFromLeft (10);
+        account_.setBounds (row.removeFromLeft (118));    row.removeFromLeft (10);
+        close_.setBounds (row.removeFromLeft (90));
     }
 
     void paint (juce::Graphics& g) override
     {
         ChromePanel::paint (g);
+        const bool on = client_ != nullptr && client_->isLicensed();
         g.setColour (Theme::muted);
         g.setFont (Theme::ui (12.0f));
-        g.drawText ("ENTER YOUR MIREKU LICENCE KEY", 28, 62, getWidth() - 56, 16,
+        g.drawText ("YOUR MIREKU LICENCE KEY", 28, 62, getWidth() - 56, 16,
                     juce::Justification::centredLeft, false);
-        g.setColour (status_.startsWith ("LICENCE ACTIVE") ? Theme::okGreen : Theme::muted);
+        g.setColour (on ? Theme::okGreen : Theme::warnRed);
         g.fillEllipse (30.0f, (float) key_.getBottom() + 18.0f, 8.0f, 8.0f);
-        g.setColour (status_.startsWith ("LICENCE ACTIVE") ? Theme::goldHi : Theme::muted);
+        g.setColour (on ? Theme::goldHi : Theme::muted);
         g.setFont (Theme::display (13.0f));
         g.drawText (status_, 46, key_.getBottom() + 12, getWidth() - 76, 20,
                     juce::Justification::centredLeft, false);
-        g.setColour (Theme::muted.withAlpha (0.6f));
-        g.setFont (Theme::ui (10.0f));
-        g.drawText ("Activation is a UI preview - key handling is not implemented in this build.",
-                    28, getHeight() - 30, getWidth() - 56, 14, juce::Justification::centredLeft, false);
+        g.setColour (Theme::cream.withAlpha (0.85f));
+        g.setFont (Theme::ui (12.0f));
+        g.drawFittedText (detail_, 30, key_.getBottom() + 36, getWidth() - 60, 32,
+                          juce::Justification::topLeft, 2);
     }
 
+    /// Test hooks.
+    juce::String statusText() const { return status_; }
+    juce::String detailText() const { return detail_; }
+
 private:
-    void activate()
+    void activate() { if (client_ != nullptr) client_->activate (key_.getText()); }
+
+    void refresh()
     {
-        // Shell only: store what was typed, reflect it, stop. No validation.
-        proc_.state.library.setLicenseKey (key_.getText());
-        status_ = proc_.state.library.hasLicenseKey() ? "LICENCE ACTIVE" : "UNLICENSED";
-        proc_.stateChanged.sendChangeMessage();
+        if (client_ == nullptr)
+        {
+            status_ = jm::tester::kEnabled ? "TEST BUILD" : "DEVELOPER BUILD";
+            detail_ = "This build does not use a licence key.";
+        }
+        else
+        {
+            status_ = licenceStatusWord (*client_);
+            detail_ = licenceDetail (*client_);
+            const bool working = client_->state() == licensing::Client::State::working;
+            activate_.setEnabled (! working);
+            deactivate_.setEnabled (! working && client_->key().isNotEmpty());
+            if (client_->key().isEmpty() && client_->state() == licensing::Client::State::noKey) key_.clear();
+        }
+        proc_.stateChanged.sendChangeMessage();   // the status bar's lamp follows
         repaint();
     }
 
+    void changeListenerCallback (juce::ChangeBroadcaster*) override { refresh(); }
+
     JMSignatureProcessor& proc_;
+    licensing::Client* client_;
     juce::TextEditor key_;
-    ux::PlateButton activate_, cancel_;
-    juce::String status_;
+    ux::PlateButton activate_, deactivate_, account_, close_;
+    juce::String status_, detail_;
 };
 
 //======================================================= CLIENT REVIEW ROUND 4

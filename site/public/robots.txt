@@ -1,0 +1,5 @@
+# Closed until launch. On launch day replace this with:
+#   User-agent: *
+#   Allow: /
+User-agent: *
+Disallow: /

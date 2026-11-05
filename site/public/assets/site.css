@@ -189,7 +189,7 @@ section.block { padding: clamp(64px, 9vw, 110px) 0; }
 .gallery .frame img { aspect-ratio: auto; }
 
 /* ---------- James ---------- */
-.james { display: grid; grid-template-columns: 248px 1fr; gap: 44px; align-items: center; }
+.james { display: grid; grid-template-columns: 300px 1fr; gap: 44px; align-items: center; }
 /* The portrait is the app's badge drawing, 224 px wide: shown at that size in a
    thin gold frame, never stretched, so it stays sharp. */
 .portrait { width: 248px; padding: 11px; border-radius: 18px; border: 1px solid var(--gold);
@@ -276,3 +276,29 @@ footer nav { display: flex; gap: 18px; flex-wrap: wrap; }
 .dl { display: flex; gap: 12px; flex-wrap: wrap; }
 .who { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; color: var(--muted); }
 [hidden] { display: none !important; }
+
+/* ---------- photographs of James ---------- */
+.photo-portrait { border-radius: 18px; overflow: hidden; border: 1px solid var(--gold-lo); background: #000;
+                  box-shadow: 0 0 0 4px #0a0907, 0 0 0 5px rgba(217,164,65,.35), 0 30px 70px -30px rgba(217,164,65,.45); }
+.photo-portrait img { width: 100%; height: auto; aspect-ratio: 3 / 4; object-fit: cover; object-position: 50% 20%; }
+.about-id { grid-template-columns: 320px 1fr; }
+@media (max-width: 760px) { .about-id { grid-template-columns: 1fr; } .photo-portrait { max-width: 340px; } }
+@media (max-width: 720px) { .james .photo-portrait { max-width: 320px; } }
+
+.photos { display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(4, 200px); gap: 14px; margin-top: 30px; }
+.photos figure { margin: 0; border-radius: 14px; overflow: hidden; border: 1px solid var(--line); background: #000; }
+/* Five photographs, no gaps: one tall picture on the left, two pairs beside it. */
+.photos figure:nth-child(1) { grid-column: 1; grid-row: 1 / span 4; }
+.photos figure:nth-child(2) { grid-column: 2; grid-row: 1 / span 2; }
+.photos figure:nth-child(3) { grid-column: 2; grid-row: 3 / span 2; }
+.photos figure:nth-child(4) { grid-column: 3; grid-row: 1 / span 2; }
+.photos figure:nth-child(5) { grid-column: 3; grid-row: 3 / span 2; }
+.photos img { width: 100%; height: 100%; object-fit: cover; object-position: 50% 30%; transition: transform .6s ease; }
+.photos figure:hover img { transform: scale(1.03); }
+.photos figure:nth-child(1) img, .james .photo-portrait img { object-position: 50% 62%; }
+@media (max-width: 880px) {
+  .photos { grid-template-columns: 1fr 1fr; grid-template-rows: none; grid-auto-rows: 240px; }
+  .photos figure:nth-child(n) { grid-column: auto; grid-row: span 1; }
+  .photos figure:nth-child(1) { grid-column: 1 / -1; grid-row: span 2; }
+}
+@media (max-width: 520px) { .photos { grid-template-columns: 1fr; grid-auto-rows: 320px; } .photos figure:nth-child(1) { grid-row: span 1; } .photos figure:nth-child(1) img { object-position: 50% 40%; } }

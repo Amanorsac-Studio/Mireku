@@ -175,10 +175,240 @@ static int probeBundle (const juce::String& bundlePath, const juce::String& pres
     return out.ok && out.dest == authoring::SaveDest::bundleFactory ? 0 : 1;
 }
 
+//==============================================================================
+// MARKETING SCREENSHOTS (2026-11-05). NOT a CTest.
+//
+//   MirekuSnapshot --marketing <library folder> <out folder> [performance] [WxH]
+//
+// Loads the given library (the SEALED "MIREKU Library" is the intended one, so
+// the shots show the sounds and names a customer sees) and one of its factory
+// performances, then renders every page offscreen at WxH (default 1920x1080).
+// Nothing is written anywhere but <out folder>: the library path is set for
+// this process only, the setlist and scenes are built in memory, and no
+// performance or setlist is saved. Nothing appears on the screen.
+static bool chordOn_ = false;
+static int renderMarketing (const juce::File& libDir, const juce::File& outDir,
+                            const juce::String& perfName, int w, int h)
+{
+    JmLookAndFeel lnf;
+    juce::LookAndFeel::setDefaultLookAndFeel (&lnf);
+    auto pump = [] (int ms) { juce::MessageManager::getInstance()->runDispatchLoopUntil (ms); };
+
+    JMSignatureProcessor proc;
+    proc.state.library.setLibraryDirTransient (libDir);
+    std::printf ("library: %s (%d instruments)\n", libDir.getFullPathName().toRawUTF8(),
+                 (int) proc.state.library.bundles().size());
+    proc.prepareToPlay (48000.0, 256);
+
+    auto perfFile = proc.performanceFileNamed (perfName);
+    if (perfFile == juce::File()) { std::printf ("no performance named \"%s\"\n", perfName.toRawUTF8()); return 2; }
+    const bool loaded = proc.loadPerformancePreset (perfFile);
+    pump (300);
+    proc.restoreSlotBundles();
+    pump (200);
+    std::printf ("performance: %s (%s)\n", perfName.toRawUTF8(), loaded ? "loaded" : "FAILED");
+    for (int i = 0; i < 4; ++i)
+        std::printf ("  slot %c: %s\n", 'A' + i, proc.state.slots[(size_t) i].bundleName.toRawUTF8());
+
+    // A DEMONSTRATION of the macros, matrix, LFOs and arp, in memory only: none
+    // of the shipped performances uses them, and the edit-page shots would
+    // otherwise show empty pages. Every path is one the app itself offers.
+    {
+        const auto dests = proc.modDestinationPaths();
+        auto pick = [&] (const juce::String& suffix, int slot) -> juce::String
+        {
+            for (auto& d : dests)
+                if (d.startsWith ("slot" + juce::String (slot)) && d.endsWith (suffix)) return d;
+            for (auto& d : dests) if (d.endsWith (suffix)) return d;
+            return {};
+        };
+        auto addTarget = [&] (int m, const juce::String& path, float lo, float hi)
+        {
+            if (path.isEmpty()) return;
+            MacroTarget t; t.path = path; t.min = lo; t.max = hi;
+            proc.state.macros[(size_t) m].targets.push_back (t);
+        };
+        const char* macroNames[] = { "Shimmer", "Movement", "Space", "Warmth" };
+        for (int m = 0; m < 4; ++m) { proc.state.macros[(size_t) m].name = macroNames[m]; proc.state.macros[(size_t) m].targets.clear(); }
+        addTarget (0, pick (".shimmer", 0), 0.1f, 0.8f);
+        addTarget (0, pick (".mix", 0), 0.2f, 0.6f);
+        addTarget (0, "host.slotVol3", 0.55f, 0.85f);
+        addTarget (1, pick (".ensemble", 0), 0.0f, 0.9f);
+        addTarget (1, pick (".width", 0), 0.3f, 1.0f);
+        addTarget (2, pick (".decay", 0), 0.2f, 0.9f);
+        addTarget (3, pick (".treble", 0), 0.6f, 0.3f);
+
+        auto& md = proc.state.mod;
+        md.rowCount = 4;
+        md.lfos[0].shape = (int) LfoShape::triangle; md.lfos[0].sync = 0; md.lfos[0].rateHz = 0.35f;
+        md.lfos[1].shape = (int) LfoShape::smoothRandom; md.lfos[1].sync = 1; md.lfos[1].division = 11;
+        md.rows[0].source = ModSource::lfo1;     md.rows[0].destPath = "host.slotPan0"; md.rows[0].depth = 0.35f;  md.rows[0].enabled = true;
+        md.rows[1].source = ModSource::lfo2;     md.rows[1].destPath = "host.slotPan3"; md.rows[1].depth = -0.30f; md.rows[1].enabled = true;
+        md.rows[2].source = ModSource::velocity; md.rows[2].destPath = "host.slotVol2"; md.rows[2].depth = 0.25f;  md.rows[2].enabled = true;
+        md.rows[3].source = ModSource::lfo1;     md.rows[3].destPath = pick (".mix", 0);  md.rows[3].depth = 0.20f; md.rows[3].enabled = true;
+        md.arp.enabled = 0; md.arp.slotMask = 0x02; md.arp.mode = 2; md.arp.division = 5; md.arp.octaves = 2; md.arp.gate = 60.0f;
+        proc.publishModulation();
+        proc.publishArp();
+    }
+
+    // an in-memory setlist: the library's own performances as songs, two scenes
+    // on the first; never saved (sceneSave would write the player's file)
+    proc.setlist = JMSignatureProcessor::Setlist {};
+    proc.setlist.name = "Sunday Service";
+    const char* songs[][2] = { { "Opening", nullptr }, { "Worship Set", nullptr }, { "Offering", nullptr },
+                               { "Altar Call", nullptr }, { "Closing", nullptr } };
+    auto names = proc.performanceNames();
+    for (int i = 0; i < 5 && i < names.size(); ++i)
+    {
+        JMSignatureProcessor::Setlist::Entry e;
+        e.song = songs[i][0];
+        e.performance = i == 0 ? perfName : names[(i * 3) % names.size()];
+        proc.setlist.entries.push_back (e);
+    }
+    if (! proc.setlist.entries.empty())
+    {
+        auto& first = proc.setlist.entries[0];
+        for (auto* sc : { "Verse", "Chorus", "Bridge" })
+            first.scenes.push_back ({ sc, proc.performanceVar (perfName) });
+        proc.setlist.current = 0;
+        proc.setlist.currentScene = 1;
+    }
+
+    gShowLicenceLamp = false;                 // the customer's build has no licence lamp
+
+    // a chord held through every shot, so the meters show a playing instrument
+    auto play = [&] (int blocks)
+    {
+        juce::AudioBuffer<float> buf (proc.getTotalNumOutputChannels(), 256);
+        for (int b = 0; b < blocks; ++b)
+        {
+            juce::MidiBuffer midi;
+            if (b == 0 && ! chordOn_)
+                for (int n : { 48, 55, 60, 64, 67, 71 })
+                    midi.addEvent (juce::MidiMessage::noteOn (1, n, (juce::uint8) 92), 0);
+            buf.clear();
+            proc.processBlock (buf, midi);
+        }
+        chordOn_ = true;
+    };
+    play (40);
+
+    std::unique_ptr<JMSignatureEditor> ed (dynamic_cast<JMSignatureEditor*> (proc.createEditor()));
+    if (ed == nullptr) return 3;
+    ed->setSize (w, h);
+    ed->setVisible (true);
+    auto goPage = [&] (int page)
+    {
+        ed->setPage (page);                   // lights the header tab as a click does
+        pump (60);
+    };
+    outDir.createDirectory();
+    auto shoot = [&] (const char* file)
+    {
+        for (int i = 0; i < 6; ++i) { play (8); pump (40); }   // meters follow the sound
+        auto img = ed->createComponentSnapshot (ed->getLocalBounds(), false, 1.0f);
+        auto f = outDir.getChildFile (file);
+        f.deleteFile();
+        juce::FileOutputStream os (f);
+        if (os.openedOk()) { juce::PNGImageFormat().writeImageToStream (img, os); }
+        std::printf ("  %s (%dx%d)\n", f.getFullPathName().toRawUTF8(), img.getWidth(), img.getHeight());
+    };
+
+    goPage (4);                          // PERFORM
+    shoot ("01-perform.png");
+
+    // The four instrument pages, each with an instrument of ITS world (the
+    // performance above has no JM Set or FM sound), and with the demonstration
+    // routings put aside so the browser shows no "patch cannot hold" note.
+    {
+        const auto keepMod = proc.state.mod;
+        const auto keepMacros = proc.state.macros;
+        proc.state.mod = ModState {};
+        for (auto& m : proc.state.macros) m.targets.clear();
+        proc.publishModulation();
+        const char* show[] = { "JM Dyno Tines XL.jmi", "JM MKS 20.jmi", "JM Midnight DX.jmi", "Mireku VelvetPad.jmi" };
+        const char* worldFiles[] = { "02-jm-set.png", "03-mks.png", "04-fm.png", "05-strings.png" };
+        for (int p = 0; p < 4; ++p)
+        {
+            const BundleInfo* b = proc.state.library.findByFolderName (show[p]);
+            if (b == nullptr || b->world != p) b = proc.state.library.firstForWorld (p);
+            if (b != nullptr)
+            {
+                proc.loadBundleIntoSlot (p, *b);
+                if (auto* en = proc.apvts.getParameter ("slotEnable" + juce::String (p))) en->setValueNotifyingHost (1.0f);
+                std::printf ("  page %d shows %s\n", p, b->name.toRawUTF8());
+            }
+            pump (100);
+            goPage (p);
+            shoot (worldFiles[p]);
+        }
+        proc.loadPerformancePreset (perfFile);       // back to the performance for the rest
+        pump (300);
+        proc.restoreSlotBundles();
+        proc.state.mod = keepMod;
+        proc.state.macros = keepMacros;
+        proc.publishModulation();
+        proc.publishArp();
+        chordOn_ = false;                             // the swap ended the notes; play the chord again
+        play (40);
+    }
+
+    goPage (4);
+    if (auto* kb = ed->keyboardStrip())
+    {
+        kb->setVisible (true);
+        kb->toFront (false);
+        kb->pitchWheel().setValue (0.5f, false);
+        kb->modWheel().setValue (0.4f, false);
+        shoot ("06-keyboard.png");
+        kb->setVisible (false);
+    }
+
+    proc.cardFlipped[0] = true;
+    goPage (4);
+    shoot ("07-card-back-key-range.png");
+    proc.cardFlipped[0] = false;
+    goPage (4);
+
+    ed->showSetlist (true);
+    shoot ("08-setlist-scenes.png");
+    if (auto* sp = findOne<SetlistPanel> (*ed))
+    {
+        sp->showSettings (true);
+        shoot ("09-setlist-super-knob.png");
+        sp->showSettings (false);
+    }
+    ed->showSetlist (false);
+
+    goPage (4);
+    const struct { int tab; const char* file; } pages[] = {
+        { EditPageHost::macros, "10-edit-macros.png" }, { EditPageHost::matrix, "11-edit-mod-matrix.png" },
+        { EditPageHost::lfo, "12-edit-lfo.png" },       { EditPageHost::arp, "13-edit-arp.png" },
+    };
+    for (auto& pg : pages) { ed->showEditPage (pg.tab, 0); shoot (pg.file); }
+    ed->closeEditPage();
+
+    ed.reset();
+    proc.releaseResources();
+    juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
+    return 0;
+}
+
 int main (int argc, char** argv)
 {
     std::setvbuf (stdout, nullptr, _IONBF, 0);     // a crash must not swallow the lines before it
     juce::ScopedJuceInitialiser_GUI init;
+    if (argc >= 4 && juce::String (argv[1]) == "--marketing")
+    {
+        int w = 1920, h = 1080;
+        if (argc >= 6)
+        {
+            const auto wh = juce::StringArray::fromTokens (juce::String (argv[5]), "x", "");
+            if (wh.size() == 2) { w = wh[0].getIntValue(); h = wh[1].getIntValue(); }
+        }
+        return renderMarketing (juce::File (juce::String::fromUTF8 (argv[2])), juce::File (juce::String::fromUTF8 (argv[3])),
+                                argc >= 5 ? juce::String::fromUTF8 (argv[4]) : juce::String ("JM Celestial Grace"), w, h);
+    }
     if (argc >= 3 && juce::String (argv[1]) == "--probe-bundle")
         return probeBundle (juce::String::fromUTF8 (argv[2]),
                             argc >= 4 ? juce::String::fromUTF8 (argv[3]) : juce::String ("Authoring Probe"),

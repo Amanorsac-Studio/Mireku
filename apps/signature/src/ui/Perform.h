@@ -11,6 +11,16 @@
 
 namespace jm {
 
+/// The footer's licence lamp. A PLAYER build has no licence (its README says
+/// "No licence key and no account are required"), so the red UNLICENSED it
+/// used to show every customer was untrue; it is not drawn there. The studio
+/// build keeps it, and the marketing renders switch it off.
+#if MIREKU_PLAYER_BUILD
+inline bool gShowLicenceLamp = false;
+#else
+inline bool gShowLicenceLamp = true;
+#endif
+
 //==============================================================================
 // A Perform slot. Two layouts, one component and one behaviour set:
 //   Row  — the dock strip (550x78)   Card — the centre 2x2 grid cell (321x118)
@@ -2160,7 +2170,7 @@ public:
                            : "TEST KEY NEEDED",
                         100, 0, 180, getHeight(), juce::Justification::centredLeft, false);
         }
-        else
+        else if (gShowLicenceLamp)
         {
             const bool lic = proc_.state.library.hasLicenseKey();
             g.setColour (lic ? Theme::okGreen : Theme::warnRed);

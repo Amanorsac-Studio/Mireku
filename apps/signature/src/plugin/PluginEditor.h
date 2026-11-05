@@ -52,7 +52,6 @@ public:
 private:
     void timerCallback() override;
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
-    void setPage (int page);
     void rebuildCenter();
     /// Places every band for a root of `rootW` design units wide (designW on
     /// a 3:2 window, more on a wider one, never more than maxDesignW).
@@ -108,6 +107,7 @@ private:
     /// band (client, 2026-11-03). Null while the rack is showing.
     std::unique_ptr<EditPage> editPage_;
 public:
+    void setPage (int page);                 // the header's tabs; public for the offscreen renders
     void showSetlist (bool on);
     void showEditPage (int tab, int macroIdx = -1);
     void closeEditPage();

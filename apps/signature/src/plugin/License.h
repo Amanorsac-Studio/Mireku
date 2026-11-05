@@ -26,9 +26,8 @@ constexpr bool kEnabled = MIREKU_LICENSING != 0 && ! jm::tester::kEnabled;
 /// Where a customer manages keys and computers. My Apps on amanorsac.studio reads
 /// the same accounts as the MIREKU site, so it is right for every buyer today.
 inline constexpr const char* kAccountUrl = "https://amanorsac.studio/my-apps";
-/// Where "Buy it" goes. Change to the MIREKU site's own address once its domain
-/// exists; until then the studio's shelf is the stable address.
-inline constexpr const char* kBuyUrl = "https://amanorsac.studio/apps";
+/// Where "Buy it" goes: the MIREKU site.
+inline constexpr const char* kBuyUrl = "https://jamesmireku.com/#buy";
 
 inline Product product()
 {

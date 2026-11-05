@@ -57,25 +57,31 @@ Cloudflare's secrets. Never put them in a file here.
 
 ## Launch checklist (one at a time)
 
-1. Cloudflare: check the Worker's name. If it is not `mireku`, change
-   `"name"` in `wrangler.jsonc` to match.
+The site's address is **https://jamesmireku.com** (custom domain on the
+`mireku` Worker; the workers.dev addresses are switched off).
+
+1. Cloudflare Worker name is `mireku`, matching `wrangler.jsonc`. Done.
 2. Supabase → Authentication → URL Configuration → Redirect URLs: add
-   `https://<worker address>/**`.
+   `https://jamesmireku.com/**`.
 3. Merge this branch into `main`. Cloudflare builds and serves the site,
-   still closed to search engines and with selling off.
-4. Studio repository: add `studio/catalog-entry.json`'s `mireku` entry to
-   `catalog.json` (status `hidden`, so it shows nowhere on amanorsac.studio),
-   with `page` set to the real address. Copy `public/images/icon.png` and
-   `public/images/01-perform-800.webp` to `images/apps/mireku/`.
-5. Upload the installers to the `amanorsac-downloads` R2 bucket and fill
+   still closed to search engines and with selling off. (Builds from `main`
+   fail until then, because `main` has no `site` folder.)
+4. Studio repository, `supabase/functions/create-app-paystack/index.ts`:
+   `returnOrigin` must accept `https://jamesmireku.com`, or Paystack sends
+   MIREKU buyers back to amanorsac.studio. Add
+   `if (o === "https://jamesmireku.com") return o;` beside the SITE check and
+   redeploy the function.
+5. Studio repository: add `studio/catalog-entry.json`'s `mireku` entry to
+   `catalog.json` (status `hidden`, so it shows nowhere on amanorsac.studio).
+   Copy `public/images/icon.png` and `public/images/01-perform-800.webp` to
+   `images/apps/mireku/`.
+6. Upload the installers to the `amanorsac-downloads` R2 bucket and fill
    `installers` (`windows`, `mac`), as for the other apps.
-6. Price: set `price_cents` (dollars × 100). For a round cedi figure, also set
+7. Price: set `price_cents` (dollars × 100). For a round cedi figure, also set
    `paystack_price` in pesewas (cedis × 100).
-7. Go-ahead: set the catalog `status` to `available`, `SELLING: true` here,
+8. Emails: the separate Resend account, verified for jamesmireku.com.
+9. Go-ahead: set the catalog `status` to `available`, `SELLING: true` here,
    remove the noindex line and the robots Disallow.
-8. Domain, when it exists: add it to the Worker, to Supabase's redirect URLs,
-   and to `create-app-paystack`'s `returnOrigin` (it accepts only
-   amanorsac.studio and workers.dev today).
 
 ## Open decisions
 
@@ -91,7 +97,8 @@ Cloudflare's secrets. Never put them in a file here.
 - **Library download (5.4 GB).** Installers are keyed by platform only. The
   library needs its own delivery decision before launch.
 - **Emails.** Sign-up and reset emails come from the studio's hook with
-  Amanorsac branding until the separate Resend account and domain exist.
+  Amanorsac branding until the separate Resend account is set up for
+  jamesmireku.com (step 8).
 - **"Nothing leaves your computer."** The marketing notes say MIREKU makes no
   network request. Once the app checks keys with the studio, that line is no
   longer true and must not be used. The site does not use it.

@@ -3330,8 +3330,7 @@ the answer is believed only once its signature verifies.
   standalone. A tester build keeps its own gate and has none of this; the
   headless tools (tests, snapshot, validation) never compile it in.
 - **Web addresses.** "My account" opens amanorsac.studio/my-apps, which reads
-  the same accounts as the MIREKU site. "Buy" opens amanorsac.studio/apps until
-  the MIREKU site has its domain: change `kBuyUrl` in `License.h` then.
+  the same accounts as the MIREKU site. "Buy" opens jamesmireku.com, the MIREKU site.
 - **The old key.** `settings.json`'s `licenseKey` is still read and written, so
   the file round-trips, but nothing trusts it. The activation screen offers it
   back only if it is shaped like a MIREKU key.

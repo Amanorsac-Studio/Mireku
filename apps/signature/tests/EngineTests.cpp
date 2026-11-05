@@ -1617,6 +1617,7 @@ static void testArpStateRoundTrip()
 #include "DspStandards.inc"
 // TEST-BUILD KEY GATE — shared/tester-gate/TesterGate.h, against signed vectors.
 #include "TesterGateTests.inc"
+#include "LicenseTests.inc"
 // X7L READER (C++) - the in-app importer, against the TypeScript reference.
 #include "X7lReaderTests.inc"
 
@@ -1957,6 +1958,9 @@ int main()
     // TEST-BUILD KEY GATE. Runs in an ordinary build too: it passes the public
     // key in explicitly, so it never depends on MIREKU_TESTER_BUILD.
     testTesterGate();
+    // THE STUDIO LICENCE. Against throwaway keys and a scripted server: no network.
+    testLicenseCrypto();
+    testLicenseClient();
     testX7lReader();
     testX7lConvert();
     testX7lImportGuards();

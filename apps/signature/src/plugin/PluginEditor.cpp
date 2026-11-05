@@ -138,6 +138,16 @@ JMSignatureEditor::JMSignatureEditor (JMSignatureProcessor& p)
         gate_->setBounds (getLocalBounds());
     }
 
+    // RELEASE BUILDS. The licence's activation screen; it shows and hides itself
+    // as the licence changes, so a key entered here unlocks without a restart.
+    if (proc_.licensingEnabled() && proc_.licence() != nullptr)
+    {
+        licenceGate_ = std::make_unique<LicenseGatePanel> (proc_);
+        addAndMakeVisible (*licenceGate_);
+        licenceGate_->setVisible (LicenseGatePanel::shouldShow (proc_));
+        licenceGate_->setBounds (getLocalBounds());
+    }
+
     startTimerHz (15);
 }
 
@@ -229,6 +239,7 @@ void JMSignatureEditor::resized()
     // child of it, so it fills the window at 1:1 and is not letterboxed with the
     // chassis.
     if (gate_ != nullptr) gate_->setBounds (getLocalBounds());
+    if (licenceGate_ != nullptr) licenceGate_->setBounds (getLocalBounds());
 }
 
 } // namespace jm

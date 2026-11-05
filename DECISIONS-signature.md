@@ -3289,3 +3289,69 @@ caught as a layout problem rather than silently clipped).
   failures)**. (Run WITHOUT `JM_LIBRARY_DIR=testdata` it fails `Omni: one note
   reaches all four slots` — the pre-existing, documented reason the suite is
   pinned to `testdata` in CMakeLists.)
+
+## The studio licence replaces the unchecked key box (2026-11-05)
+
+Round 3 item C left the licence panel as a UI shell: it stored any text and lit
+"LICENSE ACTIVE". MIREKU now follows the studio's License Integration Standard
+v1.1 (the one SecondOut 1.3.1 ships), so a key is checked by amanorsac.studio and
+the answer is believed only once its signature verifies.
+
+- **Where it lives.** `shared/studio-license/` (`LicenseCrypto.h`, `LicenseClient.h`),
+  beside `shared/tester-gate/`, so Low End and Top End can use the same code.
+  `src/plugin/License.h` is MIREKU's binding: folder `Amanorsac Studio/MIREKU`,
+  key prefix `MIRE`, DPAPI entropy `MIREKU/license/v1`.
+- **Signature check in portable C++.** JUCE has no elliptic-curve code, and CNG
+  and Security.framework take the signature differently. P-256 verification
+  touches no secret, so it is written once over `juce::BigInteger` and tested
+  against OpenSSL (`scripts/make-license-test-vectors.js` writes
+  `tests/LicenseVectors.h` from throwaway key pairs). `BigInteger::inverseModulo`
+  looped for ever on some inputs, so inverses use Fermat (`a^(m-2) mod m`).
+  One verification takes about 46 ms in a release build, once an hour, off the
+  audio thread; the stored proof is checked once at load.
+- **The key prefix is checked by the app.** `/licenses/activate` accepts any
+  product's key and the proof only repeats the key back, so without this a
+  SecondOut key would open MIREKU. A key that does not start `MIRE-` is refused
+  before anything is sent.
+- **Storage (R7).** Windows: `%LOCALAPPDATA%\Amanorsac Studio\MIREKU\` with
+  `license-key.dat` and `license-proof.dat` under DPAPI. macOS: the same two
+  items as generic passwords in the login Keychain (service
+  `Amanorsac Studio/MIREKU`), and `device.id` in
+  `~/Library/Application Support/Amanorsac Studio/MIREKU/`. On a Mac, acceptance
+  test A3 is checked in Keychain Access rather than by a `.dat` file. Not yet
+  run inside a sandboxed AU host (Logic); if the Keychain refuses there, MIREKU
+  still activates but has to reach the server at each start.
+- **One client per process.** `juce::SharedResourcePointer`, so several
+  instances in a DAW share one device id, one seat and one hourly heartbeat.
+- **Enforcement.** Like the test gate: silent in `processBlock` without a
+  licence, and `LicenseGatePanel` covers the editor. It hides itself the moment
+  a proof verifies (A3, no reopen).
+- **Build switch.** `MIREKU_LICENSING` (CMake, default ON) for the plug-in and
+  standalone. A tester build keeps its own gate and has none of this; the
+  headless tools (tests, snapshot, validation) never compile it in.
+- **Web addresses.** "My account" opens amanorsac.studio/my-apps, which reads
+  the same accounts as the MIREKU site. "Buy" opens amanorsac.studio/apps until
+  the MIREKU site has its domain: change `kBuyUrl` in `License.h` then.
+- **The old key.** `settings.json`'s `licenseKey` is still read and written, so
+  the file round-trips, but nothing trusts it. The activation screen offers it
+  back only if it is shaped like a MIREKU key.
+
+### Verification (Linux container, GCC, JUCE 8.0.15)
+
+- `MirekuTests`: **ALL TESTS PASSED**, 405 checks, 71 of them new (24 OpenSSL
+  signatures, each also tampered and checked against a wrong key; every proof
+  rule in §5; the client against a scripted server for A1 to A3, A5, A8 and A9,
+  ended licences, unknown codes and failed deactivation).
+- `Mireku_Standalone` and `Mireku_VST3` build with licensing on. The standalone
+  run on a virtual display opens on the activation screen; a SecondOut key is
+  refused before anything is sent; with no route to amanorsac.studio it reports
+  that it could not reach the licence server.
+- Acceptance A11 and A12 on the Linux standalone binary: the studio key's bytes
+  `cd a5 7d 1c c8 a6 e2 71` occur exactly once; no `127.0.0.1` or `localhost`.
+- `UiSelfCheck`: 17 failures here both before and after this change, all from
+  the placeholder bundles not being generated in this container. Not a
+  regression. `MirekuValidation` does not compile on Linux GCC (a JUCE SIMD
+  type), also before this change.
+- **Not run:** Windows (DPAPI) and macOS (Keychain) storage, and §9's checks
+  against the live server with a real key. Those need a release build on each
+  platform and a MIREKU key from the catalog.

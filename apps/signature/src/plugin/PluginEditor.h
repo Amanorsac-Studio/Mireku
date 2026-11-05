@@ -7,6 +7,7 @@
 #include "PluginProcessor.h"
 #include "../ui/Perform.h"
 #include "../ui/TesterGatePanel.h"
+#include "../ui/LicenseGatePanel.h"
 
 namespace jm {
 
@@ -94,6 +95,8 @@ private:
     std::unique_ptr<KeyboardStrip> keyboard_;   // R4(2): keys + pitch/mod wheels
     /// TEST BUILDS ONLY — the key screen. Null in a release build.
     std::unique_ptr<TesterGatePanel> gate_;
+    /// RELEASE BUILDS — the studio licence's activation screen. Null otherwise.
+    std::unique_ptr<LicenseGatePanel> licenceGate_;
     bool showKeyboard_ = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (JMSignatureEditor)

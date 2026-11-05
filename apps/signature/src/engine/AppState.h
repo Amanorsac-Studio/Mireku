@@ -145,7 +145,17 @@ inline ParamValues engineParamsFromJmiPreset (const jmi::Preset& p, int world)
 }
 
 //==============================================================================
-struct AmpEnvState { float attackMs = 2, decayMs = 0, sustain = 100, releaseMs = 250; };
+// Attack defaults to 0 (2026-10-29, the client's call): a recording already
+// contains the instrument's own attack, and a ramp on top of it only softens
+// the transient that was captured. Saved presets keep whatever they say.
+struct AmpEnvState { float attackMs = 0, decayMs = 0, sustain = 100, releaseMs = 250; };
+
+/// Per-slot half of the velocity response: level only, applied after the
+/// sample layer has already been chosen. 64/64 is neutral, so a slot that has
+/// never been touched behaves exactly as it did before this existed. The other
+/// half - the CURVE - is global and lives in settings.json, because it
+/// describes the player's keyboard rather than the sound.
+struct VelocityState { int depth = 64, offset = 64; };
 
 struct SlotState
 {
@@ -156,6 +166,18 @@ struct SlotState
     ParamValues engineParams;       // authoritative persisted copy
     FxRackState rack;
     AmpEnvState ampEnv;
+    VelocityState vel;
+    /// Per-engine pitch (client, 2026-11-02: "Octave/Transpose for the 4
+    /// engines"). Added to the global TRANSPOSE / OCTAVE, so a performance can
+    /// stack a bass octave under a pad while the global steppers still move
+    /// everything together. Saved with the slot, so with the performance.
+    int octave = 0;                 // -2..+2
+    int noteShift() const { return 12 * octave; }
+    /// KEY RANGE (client, 2026-11-03: "a limit, like the range in which a
+    /// world plays"): the played keys this engine answers, inclusive. A split
+    /// is two slots with ranges that meet; a layer is two that overlap.
+    int keyLo = 0, keyHi = 127;
+    bool wholeKeyboard() const { return keyLo <= 0 && keyHi >= 127; }
 };
 
 //==============================================================================
@@ -209,6 +231,11 @@ struct Macro
 {
     juce::String name;              // display name; value lives in APVTS "macroN"
     std::vector<MacroTarget> targets;
+    /// SETLIST SUPER KNOB (client, 2026-11-03): the one knob on the setlist
+    /// page moves every macro that is linked to it. Saved with the performance.
+    bool superLink = true;
+    float superMin = 0.0f, superMax = 1.0f;   // where the macro sits at super 0 and super 100
+    bool superInvert = false;
 };
 
 //==============================================================================
@@ -467,6 +494,10 @@ struct AppState
                 ts.add (juce::var (to));
             }
             o->setProperty ("targets", juce::var (ts));
+            o->setProperty ("superLink", m.superLink);
+            o->setProperty ("superMin", m.superMin);
+            o->setProperty ("superMax", m.superMax);
+            o->setProperty ("superInvert", m.superInvert);
             arr.add (juce::var (o));
         }
         return juce::var (arr);
@@ -478,6 +509,10 @@ struct AppState
             {
                 auto& mv = arr->getReference (i);
                 macros[(size_t) i].name = mv.getProperty ("name", "MACRO " + juce::String (i + 1)).toString();
+                macros[(size_t) i].superLink = (bool) mv.getProperty ("superLink", true);
+                macros[(size_t) i].superMin = juce::jlimit (0.0f, 1.0f, (float) (double) mv.getProperty ("superMin", 0.0));
+                macros[(size_t) i].superMax = juce::jlimit (0.0f, 1.0f, (float) (double) mv.getProperty ("superMax", 1.0));
+                macros[(size_t) i].superInvert = (bool) mv.getProperty ("superInvert", false);
                 macros[(size_t) i].targets.clear();
                 if (auto* ts = mv.getProperty ("targets", juce::var()).getArray())
                     for (auto& tv : *ts)
@@ -519,6 +554,16 @@ struct AppState
         env->setProperty ("sustain", s.ampEnv.sustain);
         env->setProperty ("releaseMs", s.ampEnv.releaseMs);
         o->setProperty ("ampEnvelope", juce::var (env));
+        auto* vel = new juce::DynamicObject();
+        vel->setProperty ("depth", s.vel.depth);
+        vel->setProperty ("offset", s.vel.offset);
+        o->setProperty ("velocity", juce::var (vel));
+        if (s.octave != 0) o->setProperty ("octave", s.octave);         // absent = 0 / whole keyboard,
+        if (! s.wholeKeyboard())                                        // so older files read unchanged
+        {
+            o->setProperty ("keyLo", s.keyLo);
+            o->setProperty ("keyHi", s.keyHi);
+        }
         return juce::var (o);
     }
     void slotFromVar (int i, const juce::var& v)
@@ -533,10 +578,20 @@ struct AppState
         s.engineParams = paramValuesFromVar (v.getProperty ("engine", juce::var()), worldEngineControls (s.world));
         s.rack = rackFromVar (v.getProperty ("fxRack", juce::var()));
         auto env = v.getProperty ("ampEnvelope", juce::var());
-        s.ampEnv.attackMs = (float) (double) env.getProperty ("attackMs", 2.0);
+        s.ampEnv.attackMs = (float) (double) env.getProperty ("attackMs", 0.0);
         s.ampEnv.decayMs = (float) (double) env.getProperty ("decayMs", 0.0);
         s.ampEnv.sustain = (float) (double) env.getProperty ("sustain", 100.0);
         s.ampEnv.releaseMs = (float) (double) env.getProperty ("releaseMs", 250.0);
+        // A state saved before velocity response existed has no "velocity"
+        // object at all, and falls through to the neutral 64/64 - i.e. to
+        // exactly what it sounded like when it was saved.
+        auto vel = v.getProperty ("velocity", juce::var());
+        s.vel.depth = (int) vel.getProperty ("depth", 64);
+        s.vel.offset = (int) vel.getProperty ("offset", 64);
+        s.octave = juce::jlimit (-2, 2, (int) v.getProperty ("octave", 0));
+        s.keyLo  = juce::jlimit (0, 127, (int) v.getProperty ("keyLo", 0));
+        s.keyHi  = juce::jlimit (0, 127, (int) v.getProperty ("keyHi", 127));
+        if (s.keyHi < s.keyLo) std::swap (s.keyLo, s.keyHi);
     }
 };
 

@@ -35,12 +35,14 @@ const low = {
     {name:'Flip Top',     sub:'TUBE COMBO · ROUND',    p:'linear-gradient(#d7dce4,#b9c0cc)', pp:'#4a6a9a', k:'#18202c', g:W('#2a3a55','#1b283b'), ink:'#18202c', logo:'#1b283b', subc:'#4a5a72', onbg:'#18202c', onfg:'#d7dce4'},
     {name:'Monolith',     sub:'MODERN STACK · 300 W',  p:'linear-gradient(#2a2d33,#17191d)', pp:'#9aa0aa', k:'#d9dde5', g:W('#2a2a2a','#151515'), ink:'#d9dde5', logo:'#f43f5e', subc:'#9aa0aa', onbg:'#d9dde5', onfg:'#17191d'}],
   cabs:[{name:'1×15',sub:'Round, deep'},{name:'2×10',sub:'Punchy mids'},{name:'4×10',sub:'The stage cab'},
-        {name:'8×10',sub:'Big and slow'},{name:'DI',sub:'No cabinet'},{name:'Your IR',sub:'An impulse file'}] }; })();`,
+        {name:'8×10',sub:'Big and slow'},{name:'No cab',sub:'The amp, no speaker'},{name:'Your IR',sub:'An impulse file'}] }; })();`,
   // Brand and instrument wording. Applied to the whole page, in order.
   text: [
     ['Guitar amp, pedalboard, looper and music tutor.', 'Bass amp, pedalboard, looper and music tutor.'],
     ['Separate it to mute the guitar and play along.', 'Separate it to mute the bass and play along.'],
     ['Mute guitar', 'Mute bass'],
+    ['Your guitar as a bowed string: every note swells in like a bow, holds, and takes a player’s vibrato. Violin, viola or cello.',
+     'Your bass as a bowed string: every note swells in like a bow, holds, and takes a player’s vibrato. Cello, double bass or viola.'],
     ["an expression pedal goes on the Wah's Position", 'an expression pedal can drive any knob'],
     ['TOP END', 'LOW END'], ['Top End', 'Low End'], ['topend', 'lowend'],
     ["'te.cover'", "'le.cover'"],
@@ -73,6 +75,7 @@ const low = {
    shared stacked layout. */
 .rigL{grid-template-rows:minmax(0,1fr) auto}
 .rigL .amp{order:1} .rigL .board{order:2}
+.rigL>.amp,.rigL>.pbrowse{grid-row:1;grid-column:1} .rigL>.board{grid-row:2;grid-column:1}
 .rigR .looper{order:1} .rigR .scenes{order:2} .rigR .card:last-child{order:3}
 @media (min-width:901px) and (orientation:landscape){ .rigR{grid-template-rows:auto minmax(0,1fr) auto} }
 `,

@@ -1,4 +1,4 @@
-MIREKU 1.0.0
+MIREKU 1.1.0
 Amanorsac Studio
 
 
@@ -12,11 +12,15 @@ Amanorsac Studio
 
 2. THE SAMPLE LIBRARY
 
-   The library is delivered separately.
+   The library is delivered separately, as a folder named "MIREKU Library".
+   Each instrument in it is one sealed .jmi file that only MIREKU can open.
 
-   Put the .jmi folders anywhere, then open the SETTINGS tab and set LIBRARY
-   FOLDER to the folder holding them. Select RESCAN. The four category tabs
-   fill with whatever was found.
+   Put the folder anywhere, then open the SETTINGS tab and set LIBRARY
+   FOLDER to it. Select RESCAN. The four category tabs fill with whatever
+   was found.
+
+   Performances delivered with the library, in its Performance\Factory
+   folder, are listed on the PERFORM page's FACTORY tab beside MIREKU's own.
 
    Installing and uninstalling never touch the library, the presets or the
    performances.
@@ -24,12 +28,46 @@ Amanorsac Studio
 
 3. AUDIO AND MIDI
 
-   In the standalone, open the audio settings and choose the interface driver.
-   Select ASIO where the interface provides one; it gives the lowest latency.
-   A buffer of 128 or 256 samples is a reasonable starting point.
+   In the standalone, select the gear, then AUDIO / MIDI..., and choose
+   the interface driver. Select ASIO where the interface provides one; it
+   gives the lowest latency. A buffer of 128 or 256 samples is a reasonable
+   starting point.
 
-   Connect a MIDI keyboard before opening MIREKU, or enable it in the same
-   settings panel afterwards.
+   MIDI inputs are listed in the same window. Connect a keyboard before
+   opening MIREKU, or select RESCAN MIDI afterwards.
+
+   MIDI LEARN. Right-click any knob and select MIDI Learn, then move a
+   control on the keyboard; the knob follows it from then on. Right-click
+   again to clear it. CC 11 (expression) rides the master level without
+   learning, and is a source in the MOD MATRIX.
+
+   OCTAVE and TRANSPOSE. The two steppers on PERFORM move every engine.
+   Click a card's letter on PERFORM and it turns over to that engine's own
+   OCT and LOW / HIGH key range; on the model pages they are in the slot's
+   menu (the three dots), which can also learn a key from the keyboard.
+
+   SETLIST. The SETLIST plate on PERFORM opens the show page over the whole
+   instrument: songs in order (drag them to reorder), each naming the
+   performance it plays, PREV and NEXT, and the SUPER KNOB that moves every
+   macro linked to it (SETTINGS under the knob sets each macro's travel).
+   A MIDI program change n loads song n.
+
+   SCENES. Along the foot of the setlist page. SAVE SCENE keeps everything
+   about the moment (which worlds are on, every knob, the effects, the
+   macros, the super knob) as a scene of the loaded song. Tap a scene to
+   bring it all back; held notes keep sounding. Right-click a scene to
+   update, rename or remove it.
+
+   THE EDIT PAGE. MOD MATRIX, LFO and ARP on the bottom bar, a macro's
+   targets (double-click the macro) and the super knob settings open in
+   the band where the effects rack is, with tabs across the top. CLOSE
+   brings the rack back.
+
+   MULTI OUT. Each world (JM Set, MKS, FM, Strings) can be sent to OUT 1,
+   OUT 2, OUT 3 or OUT 4. In the standalone each OUT is mapped to a pair of
+   channels on the interface in the same window. In a DAW the plug-in offers
+   four stereo outputs; enable them in the host and route each as a track.
+   A world sent to an output the host has not enabled plays through OUT 1.
 
 
 4. SAVING WORK
@@ -43,9 +81,9 @@ Amanorsac Studio
                           and the arpeggiator. A patch cannot hold modulation;
                           a performance can.
 
-   To rename a sound, right-click it in the list and select "Rename sound".
-   To move a sound to another category, right-click it and select
-   "Move to category".
+   Presets and performances are saved as .jmi files in Documents\MIREKU\Presets,
+   never into the library. To rename one of your own presets or performances,
+   right-click it in the list and select "Rename".
 
 
 5. PRIVACY

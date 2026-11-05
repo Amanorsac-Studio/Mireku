@@ -96,8 +96,12 @@ JMSignatureEditor::JMSignatureEditor (JMSignatureProcessor& p)
     bar_ = std::make_unique<BottomBar> (proc_, [this]
     {
         showKeyboard_ = ! showKeyboard_;
+        if (showKeyboard_) closeEditPage();          // the keyboard and the page share the band
         keyboard_->setVisible (showKeyboard_);
+        bar_->setKeyboardEngaged (showKeyboard_);
     });
+    root_.onOpenEditPage = [this] (int tab, int macroIdx) { showEditPage (tab, macroIdx); };
+    root_.onCloseEditPage = [this] { closeEditPage(); };
     bar_->setBounds (0, L::barY, Theme::M::designW, L::barH);
     root_.addAndMakeVisible (*bar_);
 
@@ -154,11 +158,11 @@ void JMSignatureEditor::setPage (int page)
     rebuildCenter();
     if (browser_ != nullptr) browser_->rebuild();
     if (rack_ != nullptr) rack_->rebuild();
+    repaint();                                   // the end cheeks carry the page's kente
 }
 
 void JMSignatureEditor::rebuildCenter()
 {
-    using L = Theme::L;
     const int page = proc_.state.currentPage;
     modelPage_.reset();
     performPage_.reset();
@@ -166,7 +170,6 @@ void JMSignatureEditor::rebuildCenter()
     {
         // model page: centre stage + the persistent PERFORM dock on the right
         modelPage_ = std::make_unique<ModelPagePanel> (proc_, page);
-        modelPage_->setBounds (L::centerX, L::centerY, L::centerW, L::centerH);
         root_.addAndMakeVisible (*modelPage_);
         dock_->setVisible (true);
     }
@@ -174,15 +177,69 @@ void JMSignatureEditor::rebuildCenter()
     {
         // CLIENT CORRECTION: on PERFORM the four slots move to the middle, so
         // the right dock steps aside and the centre stage hosts the 2x2 grid.
-        performPage_ = std::make_unique<PerformCenterPanel> (proc_);
-        performPage_->setBounds (L::centerX, L::centerY, L::centerW + L::dockW + 6, L::centerH);
+        performPage_ = std::make_unique<PerformCenterPanel> (proc_, [this] { showSetlist (true); });
         root_.addAndMakeVisible (*performPage_);
         dock_->setVisible (false);
     }
+    layoutRoot (rootW_);                          // the new page takes the current width
     header_->toFront (false);
+    if (editPage_ != nullptr) editPage_->toFront (false);
     if (keyboard_ != nullptr) keyboard_->toFront (false);
+    if (proc_.setlist.viewOpen && setlist_ == nullptr) showSetlist (true);
+    if (setlist_ != nullptr) setlist_->toFront (false);
     if (root_.scrim_ != nullptr) root_.scrim_->toFront (false);      // modal stays on top
     if (root_.overlay_ != nullptr) root_.overlay_->toFront (false);
+}
+
+void JMSignatureEditor::showSetlist (bool on)
+{
+    proc_.setlist.viewOpen = on;
+    if (on)
+    {
+        if (setlist_ == nullptr)
+        {
+            setlist_ = std::make_unique<SetlistPanel> (proc_, [this] { showSetlist (false); });
+            root_.addAndMakeVisible (*setlist_);
+        }
+        setlist_->setBounds (0, 0, rootW_, Theme::M::designH);
+        setlist_->toFront (false);
+        if (root_.scrim_ != nullptr) root_.scrim_->toFront (false);
+        if (root_.overlay_ != nullptr) root_.overlay_->toFront (false);
+        setlist_->refresh();
+    }
+    else
+        setlist_.reset();
+}
+
+void JMSignatureEditor::showEditPage (int tab, int macroIdx)
+{
+    using L = Theme::L;
+    if (editPage_ == nullptr)
+    {
+        editPage_ = std::make_unique<EditPage> (proc_, [this] { closeEditPage(); });
+        root_.addAndMakeVisible (*editPage_);
+        editPage_->setBounds (L::rackX, L::rackY, rootW_ - 12 - L::rackX, L::rackH);
+    }
+    // the page takes the band the keyboard would use
+    if (showKeyboard_)
+    {
+        showKeyboard_ = false;
+        keyboard_->setVisible (false);
+        bar_->setKeyboardEngaged (false);
+    }
+    editPage_->open (tab, macroIdx);
+    editPage_->toFront (false);
+    if (setlist_ != nullptr) setlist_->toFront (false);
+    if (root_.scrim_ != nullptr) root_.scrim_->toFront (false);
+    if (root_.overlay_ != nullptr) root_.overlay_->toFront (false);
+    bar_->setEditTab (editPage_->tab());
+}
+
+void JMSignatureEditor::closeEditPage()
+{
+    editPage_.reset();
+    if (bar_ != nullptr) bar_->setEditTab (-1);
+    if (rack_ != nullptr) rack_->rebuild();        // the rack comes back as it is now
 }
 
 void JMSignatureEditor::changeListenerCallback (juce::ChangeBroadcaster*)
@@ -203,11 +260,61 @@ void JMSignatureEditor::timerCallback()
     if (bar_ != nullptr) bar_->refresh();
     if (modelPage_ != nullptr) modelPage_->refresh();
     if (performPage_ != nullptr) performPage_->refresh();
+    // the super knob fans out to its macros, and a program change steps the
+    // setlist, from here: both are message-thread work that must run on
+    // every page, not only while PERFORM is showing
+    proc_.pollSuperKnob();
+    if (editPage_ != nullptr) editPage_->refresh();
+    if (keyboard_ != nullptr && showKeyboard_) keyboard_->followMidi();
+    if (proc_.pollPendingProgram()) return;           // the load rebuilt the centre
+    if (setlist_ != nullptr) setlist_->refresh();
 }
 
 void JMSignatureEditor::paint (juce::Graphics& g)
 {
-    g.fillAll (Theme::chassis);      // letterbox
+    // The root is 3:2 and scales uniformly, so a 16:9 screen leaves a band at
+    // each side. Those bands are the instrument's end cheeks, not empty space:
+    // the same woven chassis as the panels, falling off into shadow at the
+    // outer edge, with a gold hairline where the panel meets the cheek
+    // (client, 2026-11-01: "empty spaces on the left and right").
+    g.fillAll (Theme::chassis);
+    const float scale = rootScale();
+    const float rootW = (float) rootW_ * scale, rootH = Theme::M::designH * scale;
+    const float ox = ((float) getWidth() - rootW) * 0.5f;
+    const float oy = ((float) getHeight() - rootH) * 0.5f;
+    auto cheek = [&] (juce::Rectangle<float> band, bool left)
+    {
+        if (band.getWidth() < 1.0f || band.getHeight() < 1.0f) return;
+        juce::ColourGradient fade (juce::Colour (0xff14110D), left ? band.getRight() : band.getX(), 0.0f,
+                                   juce::Colour (0xff050504), left ? band.getX() : band.getRight(), 0.0f, false);
+        g.setGradientFill (fade);
+        g.fillRect (band);
+        // the page's own kente, dimmed, so the cheek belongs to the panel it
+        // flanks rather than reading as a black bar
+        {
+            juce::Graphics::ScopedSaveState ss (g);
+            g.reduceClipRegion (band.toNearestInt());
+            g.setOpacity (0.28f);
+            g.drawImageWithin (ux::kenteRaster (juce::jlimit (0, 3, proc_.state.currentPage)),
+                               (int) band.getX(), (int) band.getY(), (int) band.getWidth(), (int) band.getHeight(),
+                               juce::RectanglePlacement::fillDestination, false);
+        }
+        juce::ColourGradient dim (juce::Colours::transparentBlack, left ? band.getRight() : band.getX(), 0.0f,
+                                  juce::Colours::black.withAlpha (0.75f), left ? band.getX() : band.getRight(), 0.0f, false);
+        g.setGradientFill (dim);
+        g.fillRect (band);
+        ux::drawMicroWeave (g, band, 0.12f, 0.0f);
+        g.setColour (Theme::goldDark.withAlpha (0.6f));
+        g.fillRect (left ? band.getRight() - 1.0f : band.getX(), band.getY(), 1.0f, band.getHeight());
+    };
+    cheek (juce::Rectangle<float> (0.0f, 0.0f, ox, (float) getHeight()), true);
+    cheek (juce::Rectangle<float> (ox + rootW, 0.0f, (float) getWidth() - ox - rootW, (float) getHeight()), false);
+    if (oy >= 1.0f)
+    {
+        g.setColour (Theme::goldDark.withAlpha (0.35f));
+        g.fillRect (ox, oy - 1.0f, rootW, 1.0f);
+        g.fillRect (ox, oy + rootH, rootW, 1.0f);
+    }
 }
 
 float JMSignatureEditor::rootScale() const
@@ -216,12 +323,44 @@ float JMSignatureEditor::rootScale() const
                        (float) getHeight() / (float) Theme::M::designH);
 }
 
+void JMSignatureEditor::layoutRoot (int rootW)
+{
+    using L = Theme::L;
+    rootW_ = rootW;
+    root_.setBounds (0, 0, rootW, Theme::M::designH);
+    // The extra width is shared: 45 % to the centre stage (its knob surface
+    // spreads), the rest to the PERFORM dock, both anchored where they always
+    // were. The browser keeps its column; the rack and the bars span the lot.
+    const int extra = rootW - Theme::M::designW;
+    const int centerExtra = juce::jmin (extra * 45 / 100, 460);
+    const int centerW = L::centerW + centerExtra;
+    const int dockX = L::centerX + centerW + 6;
+    const int dockW = rootW - 12 - dockX;
+    const int rackW = rootW - 12 - L::rackX;
+
+    header_->setBounds (0, 0, rootW, L::headerH);
+    browser_->setBounds (L::browserX, L::browserY, L::browserW, L::browserH);
+    dock_->setBounds (dockX, L::dockY, dockW, L::dockH);
+    rack_->setBounds (L::rackX, L::rackY, rackW, L::rackH);
+    bar_->setBounds (0, L::barY, rootW, L::barH);
+    bar_->setStageWidth (centerW);
+    if (keyboard_ != nullptr) keyboard_->setBounds (L::rackX, L::rackY + 40, rackW, L::rackH - 60);
+    if (editPage_ != nullptr) editPage_->setBounds (L::rackX, L::rackY, rackW, L::rackH);
+    if (modelPage_ != nullptr) modelPage_->setBounds (L::centerX, L::centerY, centerW, L::centerH);
+    if (performPage_ != nullptr) performPage_->setBounds (L::centerX, L::centerY, rootW - 12 - L::centerX, L::centerH);
+    if (setlist_ != nullptr) setlist_->setBounds (0, 0, rootW, Theme::M::designH);
+}
+
 void JMSignatureEditor::resized()
 {
     // root scaling law (kept from V2, and what makes maximise safe in R3/E):
-    // uniform contain, centred, never stretched — the rest is chassis letterbox
+    // uniform scale, centred, never stretched. The root's WIDTH follows the
+    // window (see Theme::M::maxDesignW); whatever is left is chassis.
     const float scale = rootScale();
-    const float ox = ((float) getWidth() - Theme::M::designW * scale) * 0.5f;
+    const int rootW = juce::jlimit (Theme::M::designW, Theme::M::maxDesignW,
+                                    (int) std::floor ((float) getWidth() / scale));
+    layoutRoot (rootW);
+    const float ox = ((float) getWidth() - (float) rootW * scale) * 0.5f;
     const float oy = ((float) getHeight() - Theme::M::designH * scale) * 0.5f;
     root_.setTransform (juce::AffineTransform::scale (scale).translated (ox, oy));
 

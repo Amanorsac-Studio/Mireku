@@ -47,3 +47,6 @@ apps/topend/
 *.jmi/
 MONTAGE/
 UsersamanoDocuments*/
+
+# python bytecode from the shared UI build
+__pycache__/

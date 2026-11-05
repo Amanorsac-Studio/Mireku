@@ -865,7 +865,10 @@ public:
         uint64_t first = byteFrom / chunkSize;
         uint64_t last = (byteTo - 1) / chunkSize;
         std::vector<uint8_t> plainChunk (chunkSize);
-        std::vector<uint8_t> cipherChunk (chunkSize);
+        // a chunk RECORD is ciphertext (up to chunkSize) + its 16-byte tag; the
+        // read below pulls both into this buffer (2026-11-04: it was sized to
+        // chunkSize alone, a 16-byte heap overrun on every full chunk)
+        std::vector<uint8_t> cipherChunk (chunkSize + 16);
 
         for (uint64_t k = first; k <= last; ++k)
         {

@@ -41,6 +41,7 @@
 #include <juce_core/juce_core.h>
 #include <vector>
 #include "jmi_format.h"
+#include "Sealed.h"
 
 // Kept in step with CMakeLists `project(... VERSION ...)`, which defines this.
 #ifndef JM_APP_VERSION
@@ -85,7 +86,7 @@ inline juce::String modeBadge (Mode m)
 {
     // ASCII only: juce::String (const char*) is an ASCII constructor, and a
     // typographic dash smuggled in through it renders as mojibake.
-    return m == Mode::authoring ? "AUTHORING MODE - SAVES GO TO FACTORY" : juce::String();
+    return m == Mode::authoring ? "AUTHORING MODE" : juce::String();
 }
 
 //==============================================================================
@@ -129,7 +130,7 @@ inline const juce::StringArray& allowedFxTypeIds()
     static const juce::StringArray ids { "jmChorus", "tremoloAutoPan", "phaser", "flanger",
                                          "epPreamp", "vintageEq", "compressor", "tapeDelay",
                                          "digitalDelay", "plateReverb", "hallShimmer", "widener",
-                                         "svFilter" };
+                                         "svFilter", "tapeMachine", "ringMod", "modPedal" };
     return ids;
 }
 
@@ -147,7 +148,7 @@ inline SchemaCheck checkBundlePresetVar (const juce::var& v)
     if (o == nullptr) { r.errors.add ("preset is not a JSON object"); return r; }
 
     static const juce::StringArray allowedTop { "formatVersion", "name", "tags", "engine",
-                                                "fxRack", "ampEnvelope" };
+                                                "fxRack", "ampEnvelope", "velocity" };
     for (auto& prop : o->getProperties())
         if (! allowedTop.contains (prop.name.toString()))
             r.errors.add ("additional property not allowed: " + prop.name.toString());
@@ -230,6 +231,29 @@ inline SchemaCheck checkBundlePresetVar (const juce::var& v)
                 r.errors.add ("ampEnvelope: additional property " + prop.name.toString());
     }
     else if (o->hasProperty ("ampEnvelope")) r.errors.add ("ampEnvelope must be an object");
+
+    // VELOCITY is OPTIONAL and stays optional: every preset the artist has
+    // already saved was written without it, and all of them must keep
+    // validating. Present-but-wrong is still an error, though - a malformed
+    // block would load as a silent slot.
+    if (auto* vel = o->getProperty ("velocity").getDynamicObject())
+    {
+        static const juce::StringArray allowedVel { "depth", "offset" };
+        for (auto& prop : vel->getProperties())
+            if (! allowedVel.contains (prop.name.toString()))
+                r.errors.add ("velocity: additional property " + prop.name.toString());
+        for (auto* id : { "depth", "offset" })
+        {
+            if (! vel->hasProperty (id)) { r.errors.add (juce::String ("velocity: missing ") + id); continue; }
+            auto pv = vel->getProperty (id);
+            if (! (pv.isInt() || pv.isInt64() || pv.isDouble()))
+            { r.errors.add (juce::String ("velocity.") + id + " must be a number"); continue; }
+            const double d = (double) pv;
+            if (d < 0.0 || d > 127.0)
+                r.errors.add (juce::String ("velocity.") + id + " " + juce::String (d, 0) + " outside 0..127");
+        }
+    }
+    else if (o->hasProperty ("velocity")) r.errors.add ("velocity must be an object");
 
     r.ok = r.errors.isEmpty();
     return r;
@@ -464,6 +488,54 @@ inline WriteResult guardedReplace (const juce::File& target, const juce::String&
     r.backup = bak;
     if (bak != juce::File())
         r.note = "Previous version kept as " + bak.getFileName();
+    return r;
+}
+
+/// The same guard for a SEALED document (engine/Sealed.h): the previous file
+/// is kept as .bak, the new one is written sealed, decrypted straight back and
+/// handed to `validate` as text; on any failure the previous bytes come back.
+template <typename Validate>
+inline WriteResult guardedReplaceDocument (const juce::File& target, sealed::DocKind kind, const juce::String& text,
+                                           bool allowReplace, Validate&& validate)
+{
+    WriteResult r;
+    auto dir = target.getParentDirectory();
+    if (! dir.isDirectory() && ! dir.createDirectory().wasOk())
+    {
+        r.message = "Could not create " + dir.getFullPathName() + ". The folder may be read only.";
+        return r;
+    }
+    const bool existed = target.existsAsFile();
+    if (existed && ! allowReplace)
+    {
+        r.message = "\"" + target.getFileNameWithoutExtension() + "\" already exists";
+        r.file = target;
+        return r;
+    }
+    juce::MemoryBlock previous;
+    juce::File bak;
+    if (existed)
+    {
+        target.loadFileAsData (previous);
+        bak = target.getSiblingFile (target.getFileName() + ".bak");
+        bak.deleteFile();
+        if (! target.copyFileTo (bak)) bak = juce::File();
+    }
+    juce::String err;
+    if (! sealed::writeDocument (target, kind, text, &err)) { r.message = err; return r; }
+    juce::String back, why;
+    if (! sealed::readDocument (target, kind, back, &why) || ! validate (back, why))
+    {
+        if (existed) target.replaceWithData (previous.getData(), previous.getSize());
+        else target.deleteFile();
+        r.message = "the written file did not read back valid, so nothing was changed"
+                  + (why.isEmpty() ? juce::String() : " (" + why + ")");
+        return r;
+    }
+    r.ok = true;
+    r.file = target;
+    r.backup = bak;
+    if (bak != juce::File()) r.note = "Previous version kept as " + bak.getFileName();
     return r;
 }
 
@@ -782,6 +854,258 @@ inline WriteResult writeInstrumentWorld (const juce::File& bundleDir, const juce
 }
 
 //==============================================================================
+// MEASURING A BUNDLE FOR ANCHORED PLAYBACK (2026-10-29).
+//
+// The format has carried `anchorVelocity`, `levelDb` and `playback.velocityMode`
+// since the studio app's sampler was written against them - and no writer ever
+// filled them in, so the plugin's engine never had anything to read. This is
+// that writer. It opens every sample in the bundle, measures it the way the
+// capture app's importer does (loudest 200 ms RMS window, mean square across
+// channels, -144 dB floor, two decimals - audioFile.ts measurePcm), and writes
+// the result into instrument.json through the same guard as every other
+// bundle edit: .bak, read back, validated, restored on any failure.
+//
+// ANCHOR VELOCITY. A recorded layer's "anchor" is the velocity it was played
+// at, and the capture sessions did not record that. The window's midpoint is
+// used: a layer sampled for 46..80 was played at about mf, and 63 is where the
+// engine's nearest-anchor rule then puts the boundaries - within a few steps
+// of the windows the bundle already declares. It is a convention, stated here
+// so it can be changed in one place if a session ever does record the anchor.
+//
+// The pass is split in two on purpose: measuring reads hundreds of megabytes
+// and runs on a worker thread with a progress bar; writing is a message-thread
+// act that takes the measurements and does the guarded replace.
+//==============================================================================
+
+struct ZoneLevel { int zone = 0; int anchorVelocity = 64; double levelDb = 0.0; };
+
+struct MeasuredLevels
+{
+    juce::File bundleDir;
+    std::vector<ZoneLevel> zones;         ///< one per inst.zones entry, in order
+    int samplesRead = 0;
+    juce::int64 bytesRead = 0;
+    juce::StringArray problems;           ///< samples that could not be read (the zone keeps no level)
+    bool aborted = false;
+};
+
+/// The capture app's body level: RMS of the loudest 200 ms window, in dBFS.
+inline double measureBodyRmsDb (juce::AudioFormatReader& r, juce::int64& bytesRead)
+{
+    const int channels = (int) r.numChannels;
+    const juce::int64 n = r.lengthInSamples;
+    if (channels <= 0 || n <= 0) return -144.0;
+    const int bodyWin = juce::jmax (1, juce::roundToInt (r.sampleRate * 0.2));
+    std::vector<double> ring ((size_t) bodyWin, 0.0);
+    double winSq = 0.0, bestWinSq = 0.0;
+    juce::int64 f = 0;
+    juce::AudioBuffer<float> buf (channels, 65536);
+    while (f < n)
+    {
+        const int take = (int) juce::jmin<juce::int64> (buf.getNumSamples(), n - f);
+        r.read (&buf, 0, take, f, true, true);
+        bytesRead += (juce::int64) take * channels * (juce::int64) (r.bitsPerSample / 8);
+        for (int i = 0; i < take; ++i)
+        {
+            double frameSq = 0.0;
+            for (int c = 0; c < channels; ++c)
+            {
+                const double v = buf.getSample (c, i);
+                frameSq += v * v;
+            }
+            frameSq /= channels;
+            const size_t slot = (size_t) ((f + i) % bodyWin);
+            winSq += frameSq - ring[slot];
+            ring[slot] = frameSq;
+            if (f + i >= bodyWin - 1 && winSq > bestWinSq) bestWinSq = winSq;
+        }
+        f += take;
+    }
+    // A file SHORTER than the window never reaches f >= bodyWin-1, so the
+    // loudest-window figure is never taken and the sample measures -144 dB -
+    // which then drags its zone's average through the floor. (The TypeScript
+    // this mirrors has the same hole; it is not reachable there because the
+    // capture app refuses sub-200 ms takes. A truncated round robin in a real
+    // bundle is exactly how it was found.) The whole file IS the window then.
+    if (n < bodyWin) bestWinSq = winSq;
+    const double bodyFrames = (double) juce::jmin<juce::int64> (n, bodyWin);
+    const double rms = std::sqrt (juce::jmax (0.0, bestWinSq) / bodyFrames);
+    const double db = rms <= 0.0 ? -144.0 : juce::jmax (-144.0, 20.0 * std::log10 (rms));
+    return std::round (db * 100.0) / 100.0;
+}
+
+/// Measures every sample. `onProgress (zoneIndex, zoneCount)`; `shouldAbort`
+/// is polled between samples. Reads only; writes nothing.
+inline MeasuredLevels measureBundleLevels (const juce::File& bundleDir,
+                                           std::function<bool()> shouldAbort = {},
+                                           std::function<void (int, int)> onProgress = {})
+{
+    MeasuredLevels out;
+    out.bundleDir = bundleDir;
+    jmi::Instrument inst;
+    std::string err;
+    if (! looksLikeBundle (bundleDir)
+        || ! jmi::loadInstrument (bundleDir.getFullPathName().toStdString(), inst, err))
+    {
+        out.problems.add (bundleDir == juce::File() ? "no bundle" : juce::String (err));
+        return out;
+    }
+    juce::AudioFormatManager fm;
+    fm.registerBasicFormats();
+    const int zoneCount = (int) inst.zones.size();
+    for (int zi = 0; zi < zoneCount; ++zi)
+    {
+        if (shouldAbort && shouldAbort()) { out.aborted = true; return out; }
+        if (onProgress) onProgress (zi, zoneCount);
+        auto& z = inst.zones[(size_t) zi];
+        ZoneLevel zl;
+        zl.zone = zi;
+        zl.anchorVelocity = juce::jlimit (1, 127, (z.velRangeLo + z.velRangeHi) / 2);
+        double sum = 0.0;
+        int counted = 0;
+        for (auto& rr : z.roundRobins)
+        {
+            auto f = bundleDir.getChildFile (juce::String (rr.file).replaceCharacter ('/', juce::File::getSeparatorChar()));
+            std::unique_ptr<juce::AudioFormatReader> r (fm.createReaderFor (f));
+            if (r == nullptr) { out.problems.add ("cannot read " + juce::String (rr.file)); continue; }
+            sum += measureBodyRmsDb (*r, out.bytesRead);
+            ++counted;
+            ++out.samplesRead;
+        }
+        // the capture app's rule: a layer's level is the mean of its round robins
+        zl.levelDb = counted > 0 ? std::round ((sum / counted) * 100.0) / 100.0 : 1.0;   // 1.0 == unmeasured
+        out.zones.push_back (zl);
+    }
+    return out;
+}
+
+/// Deep-compares two parsed JSON values; every difference, including an
+/// ADDED property, must be at a path `allowed (path)` accepts. Removed
+/// properties and changed array lengths are never allowed. Unlike
+/// varsDifferOnlyAt this does not insist that anything changed.
+template <typename Allowed>
+inline bool varsDifferOnlyWhere (const juce::var& a, const juce::var& b, Allowed&& allowed, juce::String& problem)
+{
+    struct Walk
+    {
+        Allowed& allowed;
+        juce::String& problem;
+        bool operator() (const juce::var& x, const juce::var& y, const juce::String& path)
+        {
+            auto* xo = x.getDynamicObject();
+            auto* yo = y.getDynamicObject();
+            if (xo != nullptr && yo != nullptr)
+            {
+                for (auto& p : xo->getProperties())
+                {
+                    const auto sub = path.isEmpty() ? p.name.toString() : path + "." + p.name.toString();
+                    if (! yo->hasProperty (p.name)) { problem = sub + ": removed"; return false; }
+                    if (! (*this) (p.value, yo->getProperty (p.name), sub)) return false;
+                }
+                for (auto& p : yo->getProperties())
+                {
+                    const auto sub = path.isEmpty() ? p.name.toString() : path + "." + p.name.toString();
+                    if (! xo->hasProperty (p.name) && ! allowed (sub)) { problem = sub + ": added"; return false; }
+                }
+                return true;
+            }
+            auto* xa = x.getArray();
+            auto* ya = y.getArray();
+            if (xa != nullptr && ya != nullptr)
+            {
+                if (xa->size() != ya->size()) { problem = path + ": array length changed"; return false; }
+                for (int i = 0; i < xa->size(); ++i)
+                    if (! (*this) (xa->getReference (i), ya->getReference (i),
+                                   path + "[" + juce::String (i) + "]")) return false;
+                return true;
+            }
+            const bool bothNumbers = (x.isDouble() || x.isInt() || x.isInt64())
+                                  && (y.isDouble() || y.isInt() || y.isInt64());
+            const bool equal = x.isVoid() == y.isVoid()
+                            && (xo == nullptr) == (yo == nullptr) && (xa == nullptr) == (ya == nullptr)
+                            && (bothNumbers ? std::abs ((double) x - (double) y) <= 1.0e-12
+                                            : x.toString() == y.toString());
+            if (equal) return true;
+            if (allowed (path)) return true;
+            problem = path + ": changed from \"" + x.toString() + "\" to \"" + y.toString() + "\"";
+            return false;
+        }
+    } walk { allowed, problem };
+    return walk (a, b, {});
+}
+
+/// Writes the measurements into instrument.json and switches the bundle to
+/// anchored playback. `xfade` and `brightness` are only written when the
+/// bundle does not already declare them - an author's own choice is kept.
+inline WriteResult writeBundleLevels (const MeasuredLevels& m,
+                                      double defaultXfade = 0.0, double defaultBrightness = 40.0)
+{
+    WriteResult r;
+    if (m.aborted) { r.message = "Measurement was stopped; nothing was written."; return r; }
+    if (! looksLikeBundle (m.bundleDir)) { r.message = "not a .jmi bundle"; return r; }
+    auto ij = m.bundleDir.getChildFile ("instrument.json");
+    const auto originalText = ij.loadFileAsString();
+    const auto original = juce::JSON::parse (originalText);
+    auto edited = juce::JSON::parse (originalText);
+    auto* root = edited.getDynamicObject();
+    auto* zones = root != nullptr ? root->getProperty ("zones").getArray() : nullptr;
+    if (zones == nullptr) { r.message = "instrument.json has no zones array."; return r; }
+    if ((int) m.zones.size() != zones->size())
+    {
+        r.message = "the bundle changed while it was being measured (" + juce::String (zones->size())
+                  + " zones now, " + juce::String ((int) m.zones.size()) + " measured).";
+        return r;
+    }
+    int measured = 0;
+    for (auto& zl : m.zones)
+    {
+        auto* zo = zones->getReference (zl.zone).getDynamicObject();
+        if (zo == nullptr) { r.message = "zone " + juce::String (zl.zone) + " is not an object"; return r; }
+        if (zl.levelDb > 0.0) continue;                 // unmeasured: leave the zone alone
+        zo->setProperty ("anchorVelocity", zl.anchorVelocity);
+        zo->setProperty ("levelDb", juce::jlimit (-120.0, 0.0, zl.levelDb));
+        ++measured;
+    }
+    if (measured == 0) { r.message = "No sample in this bundle could be measured."; return r; }
+
+    auto* pb = root->getProperty ("playback").getDynamicObject();
+    if (pb == nullptr)
+    {
+        pb = new juce::DynamicObject();
+        root->setProperty ("playback", juce::var (pb));
+    }
+    pb->setProperty ("velocityMode", "anchored");
+    if (! pb->hasProperty ("velocityXfade")) pb->setProperty ("velocityXfade", defaultXfade);
+    if (! pb->hasProperty ("velocityBrightness")) pb->setProperty ("velocityBrightness", defaultBrightness);
+
+    auto validate = [&] (const juce::String& back, juce::String& why)
+    {
+        auto parsedBack = juce::JSON::parse (back);
+        auto allowed = [] (const juce::String& path)
+        {
+            if (path == "playback" || path.startsWith ("playback.")) return true;
+            return path.startsWith ("zones[")
+                && (path.endsWith ("].anchorVelocity") || path.endsWith ("].levelDb"));
+        };
+        if (! varsDifferOnlyWhere (original, parsedBack, allowed, why)) return false;
+        jmi::Instrument inst;
+        std::string err;
+        if (! jmi::parseInstrumentJson (back.toStdString(), inst, err)) { why = juce::String (err); return false; }
+        if (! inst.velocityAnchored) { why = "the reader did not report anchored playback"; return false; }
+        int seen = 0;
+        for (auto& z : inst.zones) if (z.anchorVelocity > 0 && z.levelDb <= 0.0) ++seen;
+        if (seen != measured) { why = "the reader saw " + juce::String (seen) + " measured zones, not " + juce::String (measured); return false; }
+        return true;
+    };
+    r = guardedReplace (ij, juce::JSON::toString (edited, false), true, validate);
+    if (! r.ok) return r;
+    r.message = m.bundleDir.getFileNameWithoutExtension() + ": " + juce::String (measured) + " of "
+              + juce::String ((int) m.zones.size()) + " zones measured, anchored playback on.";
+    if (! m.problems.isEmpty()) r.note = juce::String (m.problems.size()) + " sample(s) could not be read";
+    return r;
+}
+
+//==============================================================================
 // RENAMING AN INSTRUMENT (a "sample", as the artist calls it).
 //
 // The list shows `meta.name`, not the folder name, so a rename is ONE property
@@ -1049,26 +1373,26 @@ inline CollectResult collect (const juce::File& libraryDir, const juce::File& pr
     // ------------------------------------------------------ performance presets
     auto perf = presetRoot.getChildFile ("Performance");
     int perfFactory = 0, perfUser = 0;
-    for (auto& f : perf.getChildFile ("Factory").findChildFiles (juce::File::findFiles, false, "*.json"))
+    for (auto& f : sealed::listDocuments (perf.getChildFile ("Factory")))
     {
         CollectedEntry e;
         e.kind = "performanceFactory";
         e.path = "performance/Factory/" + f.getFileName();
         e.origin = f.getFullPathName();
-        e.name = juce::JSON::parse (f.loadFileAsString())
+        e.name = sealed::readDocumentVar (f, sealed::performance)
                      .getProperty ("name", f.getFileNameWithoutExtension()).toString();
         e.bytes = f.getSize(); e.hash = contentHash (f);
         e.modifiedAt = f.getLastModificationTime().toISO8601 (true);
         e.authored = true;        // in authoring mode this folder IS the artist's output
         if (copyInto (f, destRoot.getChildFile (e.path))) { add (std::move (e)); ++perfFactory; }
     }
-    for (auto& f : perf.findChildFiles (juce::File::findFiles, false, "*.json"))
+    for (auto& f : sealed::listDocuments (perf))
     {
         CollectedEntry e;
         e.kind = "performanceUser";
         e.path = "performance/User/" + f.getFileName();
         e.origin = f.getFullPathName();
-        e.name = juce::JSON::parse (f.loadFileAsString())
+        e.name = sealed::readDocumentVar (f, sealed::performance)
                      .getProperty ("name", f.getFileNameWithoutExtension()).toString();
         e.bytes = f.getSize(); e.hash = contentHash (f);
         e.modifiedAt = f.getLastModificationTime().toISO8601 (true);
@@ -1083,14 +1407,14 @@ inline CollectResult collect (const juce::File& libraryDir, const juce::File& pr
         for (auto& wd : presetRoot.findChildFiles (juce::File::findDirectories, false))
         {
             if (wd.getFileName() == "Performance") continue;
-            for (auto& f : wd.findChildFiles (juce::File::findFiles, false, "*.json"))
+            for (auto& f : sealed::listDocuments (wd))
             {
                 CollectedEntry e;
                 e.kind = "worldPreset";
                 e.world = wd.getFileName();
                 e.path = "presets/" + e.world + "/" + f.getFileName();
                 e.origin = f.getFullPathName();
-                e.name = juce::JSON::parse (f.loadFileAsString())
+                e.name = sealed::readDocumentVar (f, sealed::preset)
                              .getProperty ("name", f.getFileNameWithoutExtension()).toString();
                 e.bytes = f.getSize(); e.hash = contentHash (f);
                 e.modifiedAt = f.getLastModificationTime().toISO8601 (true);
@@ -1305,7 +1629,8 @@ inline ImportResult importCollection (const juce::File& collectionRoot, const ju
             target.copyFileTo (bak);
         }
         target.getParentDirectory().createDirectory();
-        if (! target.replaceWithText (src.loadFileAsString())) { fail ("could not write " + target.getFullPathName()); continue; }
+        // bytes, not text: a sealed .jmi document comes back exactly as collected
+        if (! src.copyFileTo (target)) { fail ("could not write " + target.getFullPathName()); continue; }
         r.lines.add ("OK    " + rel + " -> " + target.getFullPathName());
         ++r.applied;
     }

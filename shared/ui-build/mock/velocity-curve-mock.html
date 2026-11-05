@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Velocity Response Mock</title>
+<style>
+:root{
+  --bg:#0a0908; --chassis:#100E0B; --panel:#15130F; --deep:#080706;
+  --line:#3B2A13; --gold:#D9A648; --goldhi:#FFD77A; --golddk:#6B4612;
+  --cream:#F4EAD5; --muted:#A59A87; --ok:#68F02A; --warn:#F07229;
+  --mono:ui-monospace,"JetBrains Mono",Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:#070605;color:var(--cream);
+  font:14px/1.4 "Segoe UI",system-ui,sans-serif;user-select:none}
+.wrap{padding:26px 30px 60px;max-width:1500px}
+h1{font:700 19px "Segoe UI";margin:0 0 2px;letter-spacing:.01em}
+h1 em{font-style:normal;color:var(--gold)}
+.sub{color:var(--muted);font:11px var(--mono);letter-spacing:.18em;margin-bottom:22px}
+
+.cols{display:grid;grid-template-columns:auto 1fr;gap:28px;align-items:start}
+@media (max-width:1380px){.cols{grid-template-columns:1fr}.surface{width:100%;max-width:900px}.side{max-width:900px}}
+
+/* ---------------- the SETTINGS surface, at 1.5x of the real 600x440 ------- */
+.surface{width:900px;height:660px;flex:none;border-radius:10px;padding:30px 34px;
+  background:
+    radial-gradient(130% 80% at 50% -10%,rgba(217,166,72,.07),transparent 60%),
+    linear-gradient(180deg,var(--panel),var(--chassis) 60%,var(--deep));
+  box-shadow:inset 0 0 0 1px #241a0d, inset 0 1px 0 rgba(255,215,122,.10),
+    0 20px 46px rgba(0,0,0,.7);
+  display:flex;flex-direction:column}
+.scale{position:absolute;margin:-24px 0 0 0;color:var(--muted);font:9px var(--mono);letter-spacing:.2em}
+
+.lbl{font:700 11px var(--mono);letter-spacing:.22em;color:var(--muted)}
+.path{font:13px var(--mono);color:var(--cream);margin:6px 0 16px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row{display:flex;gap:14px;align-items:center}
+.plate{font:700 11px var(--mono);letter-spacing:.14em;color:var(--cream);
+  padding:10px 16px;border-radius:5px;cursor:pointer;
+  background:linear-gradient(180deg,#201b14,#15110c);
+  box-shadow:inset 0 1px 0 rgba(255,215,122,.22),inset 0 0 0 1px #3a2a14,0 2px 4px #0008}
+.plate:hover{background:linear-gradient(180deg,#2a2217,#1a150e)}
+.hr{height:1px;margin:24px 0 20px;background:linear-gradient(90deg,var(--line),transparent)}
+
+/* ---------------- the new block ------------------------------------------ */
+.vhead{display:flex;align-items:baseline;gap:14px;margin-bottom:16px}
+.vhead .tag{font:700 9px var(--mono);letter-spacing:.2em;color:#1a1408;
+  background:var(--gold);padding:3px 7px;border-radius:3px}
+.vbody{display:grid;grid-template-columns:300px 1fr;gap:28px;flex:1;min-height:0}
+
+/* graph */
+.graphbox{position:relative;width:300px}
+canvas{display:block;border-radius:6px;background:
+  linear-gradient(180deg,#0c0a08,#060504);
+  box-shadow:inset 0 0 0 1px #2a1e0f, 0 6px 16px #0009;cursor:crosshair}
+.axis{display:flex;justify-content:space-between;color:var(--muted);
+  font:9px var(--mono);letter-spacing:.14em;margin-top:7px}
+.readout{margin-top:12px;font:11px var(--mono);color:var(--muted);line-height:1.7}
+.readout b{color:var(--goldhi);font-weight:600}
+.readout .big{color:var(--cream);font-size:13px}
+
+/* controls */
+.ctrls{display:flex;flex-direction:column;gap:18px}
+.curvepick{display:flex;flex-wrap:wrap;gap:7px}
+.cv{font:700 10px var(--mono);letter-spacing:.1em;color:var(--muted);
+  padding:8px 11px;border-radius:4px;cursor:pointer;
+  background:#14110c;box-shadow:inset 0 0 0 1px #2e2214}
+.cv:hover{color:var(--cream)}
+.cv.on{color:#1a1408;background:linear-gradient(180deg,var(--goldhi),var(--gold));
+  box-shadow:inset 0 0 0 1px #8a6520,0 0 12px rgba(217,166,72,.3)}
+.knobs{display:flex;gap:26px;padding-top:4px}
+.kn{display:grid;justify-items:center;gap:7px;width:84px}
+.kn.dim{opacity:.3;pointer-events:none}
+.dial{--a:0deg;width:64px;height:64px;border-radius:50%;position:relative;cursor:ns-resize;
+  background:
+    radial-gradient(circle at 38% 28%,#3a332a,#120f0b 68%);
+  box-shadow:0 4px 8px #000a,inset 0 1px 0 rgba(255,215,122,.30),inset 0 0 0 1px #2c2114}
+.dial::after{content:"";position:absolute;left:50%;top:6px;width:3px;height:17px;
+  margin-left:-1.5px;border-radius:2px;background:var(--goldhi);
+  transform-origin:50% 26px;transform:rotate(var(--a))}
+.kn .nm{font:700 9px var(--mono);letter-spacing:.2em;color:var(--muted)}
+.kn .vl{font:13px var(--mono);color:var(--cream)}
+.note{font:11px/1.6 var(--mono);color:var(--muted);
+  padding:11px 13px;border-radius:5px;background:#100d09;
+  box-shadow:inset 0 0 0 1px #241b10;border-left:2px solid var(--gold)}
+.note b{color:var(--cream);font-weight:600}
+
+/* test strip */
+.strip{margin-top:auto;padding-top:18px}
+.bars{display:flex;gap:2px;height:46px;align-items:flex-end;cursor:pointer}
+.bar{flex:1;background:#221a0f;border-radius:1px 1px 0 0;transition:background .1s}
+.bar.hit{background:var(--gold)}
+.striplbl{display:flex;justify-content:space-between;color:var(--muted);
+  font:9px var(--mono);letter-spacing:.14em;margin-top:6px}
+
+/* ---------------- the side notes ----------------------------------------- */
+.side{display:flex;flex-direction:column;gap:18px;padding-top:4px}
+.card{background:#0f0d0a;border-radius:8px;padding:16px 18px;
+  box-shadow:inset 0 0 0 1px #221a10}
+.card h3{margin:0 0 9px;font:700 11px var(--mono);letter-spacing:.2em;color:var(--gold)}
+.card p{margin:0 0 9px;font-size:13px;line-height:1.6;color:#d8cfbd}
+.card p:last-child{margin:0}
+.card code{font:12px var(--mono);color:var(--goldhi);background:#1a140c;
+  padding:1px 5px;border-radius:3px}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+td{padding:6px 0;vertical-align:top;color:#d8cfbd;border-bottom:1px solid #1e170f}
+tr:last-child td{border:0}
+td.k{width:88px;color:var(--gold);font:700 10px var(--mono);letter-spacing:.1em;
+  padding-right:12px;white-space:nowrap}
+.chain{font:11px var(--mono);line-height:2;color:var(--muted)}
+.chain b{color:var(--cream);font-weight:600}
+.chain .new{color:var(--goldhi)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>MIREKU &mdash; <em>Velocity Response</em> in SETTINGS</h1>
+  <div class="sub">MOCK &middot; INTERACTIVE &middot; CLICK A CURVE, DRAG THE KNOBS, CLICK THE STRIP</div>
+
+  <div class="cols">
+  <div>
+  <div class="scale">SETTINGS SURFACE &mdash; SHOWN AT 1.5&times; (REAL 600 &times; 440)</div>
+  <div class="surface">
+
+    <!-- what is already there -->
+    <div class="lbl">LIBRARY FOLDER</div>
+    <div class="path">C:\Users\amano\Documents\JM Signature\Library</div>
+    <div class="row">
+      <div class="plate">BROWSE...</div>
+      <div class="plate">RESCAN LIBRARY</div>
+      <div class="plate">IMPORT LIBRARY...</div>
+    </div>
+
+    <div class="hr"></div>
+
+    <!-- what is new -->
+    <div class="vhead">
+      <div class="lbl">VELOCITY RESPONSE</div>
+      <div class="tag">NEW</div>
+    </div>
+
+    <div class="vbody">
+      <div class="graphbox">
+        <canvas id="g" width="300" height="300"></canvas>
+        <div class="axis"><span>PLAYED 1</span><span>127</span></div>
+        <div class="readout" id="ro"></div>
+      </div>
+
+      <div class="ctrls">
+        <div>
+          <div class="lbl" style="margin-bottom:9px">CURVE</div>
+          <div class="curvepick" id="pick"></div>
+        </div>
+
+        <div class="knobs">
+          <div class="kn" id="kfix">
+            <div class="dial" data-p="fixed"></div>
+            <div class="nm">FIXED</div><div class="vl">100</div>
+          </div>
+          <div class="kn">
+            <div class="dial" data-p="depth"></div>
+            <div class="nm">DEPTH</div><div class="vl">64</div>
+          </div>
+          <div class="kn">
+            <div class="dial" data-p="offset"></div>
+            <div class="nm">OFFSET</div><div class="vl">64</div>
+          </div>
+        </div>
+
+        <div class="note" id="hint"></div>
+
+        <div class="strip">
+          <div class="lbl" style="margin-bottom:8px">TEST &mdash; CLICK A VELOCITY</div>
+          <div class="bars" id="bars"></div>
+          <div class="striplbl"><span>SOFT</span><span>HARD</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  </div>
+
+  <!-- ------------------------------------------------------- side notes -->
+  <div class="side">
+    <div class="card">
+      <h3>WHAT YAMAHA DOES</h3>
+      <p>Yamaha splits this in two, and we should copy that split &mdash; it is the
+      reason their keyboards feel adjustable without feeling broken.</p>
+      <table>
+        <tr><td class="k">CURVE</td><td>A global reshaping of the velocity
+          <i>number itself</i>, before the tone generator sees it. Normal, Soft&nbsp;1,
+          Soft&nbsp;2, Hard&nbsp;1, Hard&nbsp;2, Wide, Fixed.</td></tr>
+        <tr><td class="k">DEPTH</td><td>Per&nbsp;part. How much effort it takes to reach
+          full output. 64 is neutral.</td></tr>
+        <tr><td class="k">OFFSET</td><td>Per&nbsp;part. Shifts the whole response up or
+          down. 64 is neutral.</td></tr>
+        <tr><td class="k">FIXED</td><td>1&ndash;127. Only live when CURVE is Fixed.</td></tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3>WHERE IT LANDS IN OUR ENGINE</h3>
+      <div class="chain">
+        MIDI note on, velocity <b>v</b><br>
+        &nbsp;&nbsp;&darr;<br>
+        <span class="new">CURVE &mdash; reshapes v &nbsp;(NEW)</span><br>
+        &nbsp;&nbsp;&darr;<br>
+        <b>layerGains()</b> &mdash; which velocity layer<br>
+        <b>selectZone()</b> &mdash; which sample<br>
+        &nbsp;&nbsp;&darr;<br>
+        <span class="new">DEPTH / OFFSET &mdash; level only &nbsp;(NEW)</span><br>
+        &nbsp;&nbsp;&darr;<br>
+        <b>v-&gt;gain</b> &nbsp;<i>Sampler.h:390</i>
+      </div>
+      <p style="margin-top:12px">That ordering is the whole point. <b>CURVE changes
+      which sample you hit</b> &mdash; a soft curve genuinely reaches the loud layers
+      sooner. <b>DEPTH and OFFSET only change how loud it is</b>, so you can tame a
+      part without changing its character.</p>
+    </div>
+
+    <div class="card">
+      <h3>THE MATH</h3>
+      <p>Curve, on the velocity:
+        <code>out = 127 &middot; (v/127)<sup>g</sup></code>
+        with g = 0.55 / 0.75 / 1.0 / 1.35 / 1.80 for Soft&nbsp;1 &hellip; Hard&nbsp;1.
+        Wide is the same law mirrored about the middle, so it pushes soft playing
+        down and hard playing up.</p>
+      <p>Level, after layer selection:
+        <code>clamp(v &middot; Depth/64 + (Offset &minus; 64), 0, 127)</code></p>
+      <p><b>Honestly:</b> Yamaha does not publish the equation for Depth and Offset.
+      This formula is my reading of the behaviour their own worked examples describe,
+      and it reproduces three of their five published examples exactly. If it should
+      match a specific instrument of James's, we tune the constants by ear against
+      that instrument &mdash; they are four numbers in one place.</p>
+    </div>
+
+    <div class="card">
+      <h3>DECISIONS I NEED FROM YOU</h3>
+      <table>
+        <tr><td class="k">SCOPE</td><td>Mock shows CURVE as <b>global</b> (one setting
+          for the whole plug-in, like Yamaha's keyboard curve) and DEPTH/OFFSET as
+          <b>per world</b>. Or all three per world?</td></tr>
+        <tr><td class="k">PRESETS</td><td>Should DEPTH/OFFSET save into a preset?
+          I would say <b>yes</b> &mdash; it is part of the sound. CURVE should not:
+          it belongs to the player's keyboard, not the patch.</td></tr>
+        <tr><td class="k">GRAPH</td><td>Worth the pixels? It is the thing that makes
+          this understandable without the manual.</td></tr>
+      </table>
+    </div>
+  </div>
+  </div>
+</div>
+
+<script>
+// Five, as on the client's own Montage (the built UI matches this list).
+const CURVES = [
+  ['normal','NORMAL',  1.00, 'Straight through. What the plug-in does today.'],
+  ['soft'  ,'SOFT',    0.60, 'Lightest touch already gets a strong velocity. For light actions and for playing quietly late at night.'],
+  ['hard'  ,'HARD',    1.65, 'You have to dig in. Holds the loud layers back for when you really hit it.'],
+  ['wide'  ,'WIDE',    0.00, 'Pushes soft playing softer and hard playing harder. Widens the dynamic range of a weak action.'],
+  ['fixed' ,'FIXED',   0.00, 'Every note the same velocity, whatever you do. Set it with the FIXED knob.']
+];
+
+const st = { curve:'normal', fixed:100, depth:64, offset:64, played:0 };
+
+/* ---- the two stages, exactly as proposed for the C++ ---- */
+function shape(v){                       // CURVE: velocity -> velocity
+  if (st.curve === 'fixed') return st.fixed;
+  if (st.curve === 'wide'){
+    const t = v/127;
+    const y = t < 0.5 ? 0.5*Math.pow(2*t,1.7) : 1 - 0.5*Math.pow(2-2*t,1.7);
+    return Math.max(1, Math.round(127*y));
+  }
+  const g = CURVES.find(c=>c[0]===st.curve)[2];
+  return Math.max(1, Math.round(127*Math.pow(v/127, g)));
+}
+function level(v){                       // DEPTH / OFFSET: velocity -> level
+  // offset x2, as in engine_math::levelVelocity - it is what makes all five of
+  // Yamaha's published Depth/Offset examples come out right
+  return Math.min(127, Math.max(0, Math.round(v*st.depth/64 + (st.offset-64)*2)));
+}
+function gain(l){ return 0.35 + 0.65*l/127; }   // Sampler.h:390, unchanged
+
+/* ---- curve picker ---- */
+const pick = document.getElementById('pick');
+CURVES.forEach(c=>{
+  const d = document.createElement('div');
+  d.className = 'cv'; d.textContent = c[1]; d.dataset.id = c[0];
+  d.onclick = ()=>{ st.curve = c[0]; draw(); };
+  pick.appendChild(d);
+});
+
+/* ---- knobs ---- */
+document.querySelectorAll('.dial').forEach(d=>{
+  let y0=0, v0=0;
+  const max = d.dataset.p==='fixed' ? 127 : 127;
+  const min = d.dataset.p==='fixed' ? 1 : 0;
+  d.onpointerdown = e=>{
+    d.setPointerCapture(e.pointerId); y0=e.clientY; v0=st[d.dataset.p];
+    d.onpointermove = m=>{
+      st[d.dataset.p] = Math.min(max, Math.max(min, Math.round(v0 + (y0-m.clientY)*0.7)));
+      draw();
+    };
+    d.onpointerup = ()=>{ d.onpointermove=null; };
+  };
+});
+
+/* ---- test strip ---- */
+const bars = document.getElementById('bars');
+for (let i=0;i<64;i++){
+  const b = document.createElement('div');
+  b.className='bar'; b.style.height = (10 + i/63*36)+'px';
+  b.onclick = ()=>{ st.played = Math.round(1 + i/63*126); draw(); };
+  bars.appendChild(b);
+}
+
+/* ---- the graph ---- */
+const cv = document.getElementById('g'), cx = cv.getContext('2d');
+cv.onclick = e=>{
+  const r = cv.getBoundingClientRect();
+  st.played = Math.min(127, Math.max(1, Math.round((e.clientX-r.left)/r.width*127)));
+  draw();
+};
+
+function draw(){
+  document.querySelectorAll('.cv').forEach(d=>
+    d.classList.toggle('on', d.dataset.id===st.curve));
+  document.getElementById('kfix').classList.toggle('dim', st.curve!=='fixed');
+  document.querySelectorAll('.dial').forEach(d=>{
+    const v = st[d.dataset.p];
+    d.style.setProperty('--a', (-140 + v/127*280)+'deg');
+    d.parentElement.querySelector('.vl').textContent = v;
+  });
+  document.getElementById('hint').innerHTML =
+    '<b>' + CURVES.find(c=>c[0]===st.curve)[1] + '</b> &mdash; ' +
+    CURVES.find(c=>c[0]===st.curve)[3];
+
+  const W=300,H=300,P=1;
+  cx.clearRect(0,0,W,H);
+  // grid
+  cx.strokeStyle='#1d1610'; cx.lineWidth=1;
+  for(let i=1;i<4;i++){
+    cx.beginPath(); cx.moveTo(i*W/4,0); cx.lineTo(i*W/4,H); cx.stroke();
+    cx.beginPath(); cx.moveTo(0,i*H/4); cx.lineTo(W,i*H/4); cx.stroke();
+  }
+  // the identity line, so the shaping is visible as a departure from it
+  cx.strokeStyle='#2a2013'; cx.setLineDash([3,4]);
+  cx.beginPath(); cx.moveTo(0,H); cx.lineTo(W,0); cx.stroke(); cx.setLineDash([]);
+
+  // stage 2 FIRST - the resulting level (what you hear). Drawn under stage 1
+  // so that at the neutral 64/64 the two coincide and the gold one wins; the
+  // blue only appears as a separate line once DEPTH or OFFSET is moved, which
+  // is exactly when it means something.
+  cx.strokeStyle='#39B8FF'; cx.lineWidth=3.2; cx.beginPath();
+  for(let v=1;v<=127;v++){
+    const x=(v-1)/126*W, y=H-level(shape(v))/127*H;
+    v===1?cx.moveTo(x,y):cx.lineTo(x,y);
+  }
+  cx.stroke();
+
+  // stage 1 - the curve (what layer you hit)
+  cx.strokeStyle='#D9A648'; cx.lineWidth=2.2; cx.beginPath();
+  for(let v=1;v<=127;v++){
+    const x=(v-1)/126*W, y=H-shape(v)/127*H;
+    v===1?cx.moveTo(x,y):cx.lineTo(x,y);
+  }
+  cx.stroke();
+
+  // the played note
+  if(st.played){
+    const v=st.played, s=shape(v), l=level(s);
+    const x=(v-1)/126*W;
+    cx.strokeStyle='#F0722955'; cx.lineWidth=1;
+    cx.beginPath(); cx.moveTo(x,0); cx.lineTo(x,H); cx.stroke();
+    cx.fillStyle='#FFD77A';
+    cx.beginPath(); cx.arc(x,H-s/127*H,4,0,7); cx.fill();
+    cx.fillStyle='#39B8FF';
+    cx.beginPath(); cx.arc(x,H-l/127*H,3.5,0,7); cx.fill();
+  }
+
+  bars.querySelectorAll('.bar').forEach((b,i)=>
+    b.classList.toggle('hit', st.played>0 && Math.round(1+i/63*126) <= st.played));
+
+  const ro=document.getElementById('ro');
+  if(st.played){
+    const s=shape(st.played), l=level(s);
+    ro.innerHTML =
+      '<span class="big">PLAYED <b>'+st.played+'</b></span><br>'+
+      '<span style="color:#D9A648">&#9679;</span> after CURVE <b>'+s+'</b> '+
+        '&nbsp;&rarr;&nbsp; picks layer for '+s+'<br>'+
+      '<span style="color:#39B8FF">&#9679;</span> after DEPTH/OFFSET <b>'+l+'</b> '+
+        '&nbsp;&rarr;&nbsp; gain '+gain(l).toFixed(2);
+  } else {
+    ro.innerHTML='<span style="color:#D9A648">&#9679;</span> gold &mdash; velocity after CURVE<br>'+
+      '<span style="color:#39B8FF">&#9679;</span> blue &mdash; level after DEPTH/OFFSET<br>'+
+      'dashed &mdash; today\u2019s behaviour<br><br>Click the graph or the strip to play a note.';
+  }
+}
+draw();
+</script>
+</body>
+</html>

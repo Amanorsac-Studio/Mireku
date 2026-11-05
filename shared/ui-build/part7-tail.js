@@ -12,6 +12,7 @@ $('#btnBackup').onclick=()=>{ toast('Backing up…'); cmd('backup').then(p=>toas
 /* ═════════════════════════════ WIRING ═════════════════════════════ */
 function showView(v){
   view=v;
+  if(v!=='library') homeRig();          // the rig lives on the Rig page unless the Library is showing it
   document.querySelectorAll('.view').forEach(s=>s.classList.toggle('on',s.id==='view-'+v));
   document.querySelectorAll('#tabs button').forEach(t=>t.classList.toggle('on',t.dataset.view===v));
   learnShow(v==='learn');

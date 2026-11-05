@@ -15,6 +15,15 @@ namespace jm {
 enum class FxType : int {
     jmChorus = 0, tremoloAutoPan, phaser, flanger, epPreamp, vintageEq,
     compressor, tapeDelay, digitalDelay, plateReverb, hallShimmer, widener,
+    // Added 2026-10-29 at the client's request. APPEND ONLY: the integer value
+    // is what a saved rack's unit index means.
+    tapeMachine, ringMod,
+    // Added 2026-10-30: the MODULATION pedal (chorus / flanger / phaser /
+    // wow+flutter behind one intensity knob). Takes 14.
+    modPedal,
+    // Added 2026-11-02: the ROTARY speaker for organs (horn and drum, slow /
+    // fast / brake). Takes 15.
+    rotary,
     Count
 };
 constexpr int kNumFxTypes = (int) FxType::Count;
@@ -190,6 +199,51 @@ inline const std::array<FxSpec, kNumFxTypes>& fxRegistry()
         { FxType::widener, "widener", "Widener/Ensemble", {
             { "width", "Width", ParamKind::Float, 0, 200, 120 },
             { "ensemble", "Ensemble", ParamKind::Float, 0, 100, 0 } } },
+        // TAPE MACHINE WITH A DETUNER (client, 2026-10-29). Saturation, wow and
+        // flutter, an "age" high roll-off, hiss, and two copies micro-pitched
+        // up and down by DETUNE cents and spread left/right - the Eventide /
+        // Ensoniq detune on top of a tape pass.
+        { FxType::tapeMachine, "tapeMachine", "Tape Machine", {
+            { "drive", "Drive", ParamKind::Float, 0, 100, 30 },
+            { "wow", "Wow/Flutter", ParamKind::Float, 0, 100, 25 },
+            { "age", "Age", ParamKind::Float, 0, 100, 30 },
+            { "hiss", "Hiss", ParamKind::Float, 0, 100, 10 },
+            { "detune", "Detune", ParamKind::Float, 0, 30, 8, {}, "ct" },
+            { "mix", "Mix", ParamKind::Float, 0, 100, 100 } } },
+        // MODULATOR: ring modulation or single-sideband frequency shifting,
+        // with an LFO on the carrier.
+        { FxType::ringMod, "ringMod", "Modulator", {
+            { "mode", "Mode", ParamKind::Enum, 0, 1, 0, { "Ring", "Shift" } },
+            { "freq", "Freq", ParamKind::Float, 0.5f, 5000.0f, 100.0f, {}, "Hz", false, true },
+            { "lfoRate", "LFO Rate", ParamKind::Float, 0.05f, 10.0f, 0.5f, {}, "Hz", false, true },
+            { "lfoDepth", "LFO Depth", ParamKind::Float, 0, 100, 0 },
+            { "mix", "Mix", ParamKind::Float, 0, 100, 50 } } },
+        // MODULATION PEDAL (client, 2026-10-30, from a photo of the pedal he
+        // wanted): one big INTENSITY knob, RATE and MIX beside it, four mode
+        // buttons and a MONO switch. In WOW+FLUT the mix is locked full wet -
+        // a dry copy under a pitch warble is a chorus, not a tape - which is
+        // the padlock drawn beside the mix knob on the original.
+        { FxType::modPedal, "modPedal", "JM Modulation", {
+            { "mode", "Mode", ParamKind::Enum, 0, 3, 0, { "chorus", "flanger", "phaser", "wow+flut" } },
+            { "rate", "Rate", ParamKind::Float, 0.05f, 10.0f, 0.5f, {}, "Hz", false, true },
+            { "intensity", "Intensity", ParamKind::Float, 0, 100, 50 },
+            { "mix", "Mix", ParamKind::Float, 0, 100, 50 },
+            { "mono", "Mono", ParamKind::Bool, 0, 1, 0 } } },
+        // ROTARY SPEAKER (client, 2026-11-02, "a rotary for organs"). A horn
+        // and a bass drum behind an 800 Hz crossover, each spinning past two
+        // microphones. SPEED is the Leslie half-moon switch: slow (chorale),
+        // fast (tremolo) and brake; the horn is light and changes speed in
+        // about a second, the drum is heavy and takes several. DRIVE is the
+        // valve amplifier in front of the cabinet, HORN and DRUM are how hard
+        // each rotor moves the sound, MIC WIDTH is how far apart the two
+        // microphones sit (0 is one microphone, mono).
+        { FxType::rotary, "rotary", "JM Rotary", {
+            { "speed", "Speed", ParamKind::Enum, 0, 2, 0, { "slow", "fast", "brake" } },
+            { "drive", "Drive", ParamKind::Float, 0, 100, 20 },
+            { "horn", "Horn", ParamKind::Float, 0, 100, 60 },
+            { "drum", "Drum", ParamKind::Float, 0, 100, 50 },
+            { "mic", "Mic Width", ParamKind::Float, 0, 100, 70 },
+            { "mix", "Mix", ParamKind::Float, 0, 100, 100 } } },
     } };
     return reg;
 }
@@ -300,9 +354,9 @@ inline ParamValues defaultEngineParams (int world)
 // he reported "I don't see the name category changes".
 //
 //   world id (NEVER changes)   display name
-//   rhodes-ep                  JM Pianos
+//   rhodes-ep                  JM Set
 //   mks                        MKS
-//   fm                         FM Keys
+//   fm                         FM
 //   strings                    Strings      (the catch-all)
 //
 // The ids stay `rhodes-ep | mks | fm | strings`: they are in
@@ -322,7 +376,7 @@ inline ParamValues defaultEngineParams (int world)
 // cells do it inside drawTabCell; titles call .toUpperCase()).
 inline const char* worldName (int w)
 {
-    switch (w) { case 0: return "JM Pianos"; case 1: return "MKS"; case 2: return "FM Keys"; case 3: return "Strings"; }
+    switch (w) { case 0: return "JM Set"; case 1: return "MKS"; case 2: return "FM"; case 3: return "Strings"; }
     return "PERFORM";
 }
 

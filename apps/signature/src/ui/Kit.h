@@ -230,8 +230,27 @@ inline Img fxPlate (int family)      // 0 teal 1 orange 2 purple 3 blue 4 red 5 
 }
 
 /// Photoreal FX faceplate. The kit plate already carries screws, bevel and
-/// depth, so it replaces the V2 drawn plate wholesale. Native aspect is 0.764;
-/// the rack cells are laid out at that ratio so the art is never stretched.
+/// depth, so it replaces the V2 drawn plate wholesale. Native aspect is 0.764.
+///
+/// A UNIT WIDER THAN THAT IS DRAWN AS FOUR PATCHES, NOT STRETCHED. A rack unit
+/// is as wide as its parameters need (FxUnitPanel::naturalWidth), so the same
+/// plate has to cover 164 px and 238 px without the screws turning into ovals
+/// or the scrollwork smearing. The art is not a flat panel: it carries screws
+/// in the corners, an engraved border of vine scrollwork down each side, and a
+/// fleuron centred at the top and another at the bottom. Stretching it ruins
+/// all three. So the plate is drawn as
+///
+///   LEFT edge   source [0, kSideCut)        -> left of dest, native scale
+///   RIGHT edge  source (1 - kSideCut, 1]    -> right of dest, native scale
+///   MIDDLE      one flat column at kFlatX   -> stretched across the gap
+///   CENTREPIECE source band [kBandL, kBandR] -> stamped centred, native scale
+///
+/// The flat column is sampled from bare plate texture between the side
+/// scrollwork and the centre fleurons, so stretching it horizontally is
+/// invisible while still carrying the top and bottom frame lines. The band is
+/// stamped last, centred, so both fleurons stay whole and centred whatever the
+/// unit's width. Fractions, not pixels, so a re-rendered kit at another
+/// resolution still slices in the same places.
 inline void drawFxPlate (juce::Graphics& g, juce::Rectangle<float> dest, int family, float alpha = 1.0f)
 {
     auto& img = image (fxPlate (family));
@@ -241,11 +260,64 @@ inline void drawFxPlate (juce::Graphics& g, juce::Rectangle<float> dest, int fam
         g.fillRoundedRectangle (dest, 6.0f);
         return;
     }
+
     juce::Graphics::ScopedSaveState ss (g);
     g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
     g.setOpacity (alpha);
-    g.drawImage (img, dest.getX(), dest.getY(), dest.getWidth(), dest.getHeight(),
-                 0, 0, img.getWidth(), img.getHeight());
+
+    const float iw = (float) img.getWidth();
+
+    // THE REFERENCE IS THE UNIT, NOT THE FILE. The plates are not actually at
+    // 0.764 and not even at the same aspect as each other (teal is 378x596,
+    // orange 394x570), so they have ALWAYS been squeezed into the 164x215 cell.
+    // The reference width is therefore what one standard unit shows today, so a
+    // standard unit still renders exactly as the client approved it and only
+    // the extra width of a wide unit is new.
+    const float refW = dest.getHeight() * (float) Theme::L::fxUnitW / (float) Theme::L::fxUnitH;
+
+    if (dest.getWidth() <= refW + 1.0f)
+    {
+        g.drawImage (img, dest.getX(), dest.getY(), dest.getWidth(), dest.getHeight(),
+                     0, 0, img.getWidth(), img.getHeight());
+        return;
+    }
+
+    constexpr float kSideCut = 0.30f;   // screws and scrollwork end well inside this
+    constexpr float kBandL   = 0.30f;   // the centred fleurons live inside this band
+    constexpr float kBandR   = 0.70f;
+
+    const int sideSrc = juce::roundToInt (iw * kSideCut);
+    const float sideDst = refW * kSideCut;
+
+    g.drawImage (img, dest.getX(), dest.getY(), sideDst, dest.getHeight(),
+                 0, 0, sideSrc, img.getHeight());
+    g.drawImage (img, dest.getRight() - sideDst, dest.getY(), sideDst, dest.getHeight(),
+                 img.getWidth() - sideSrc, 0, sideSrc, img.getHeight());
+
+    // TWO fills, not one, each sampled from the column just INSIDE its own
+    // side patch. One fill taken from the left would meet the right patch with
+    // the plate's lighting gradient jumping across the join, and that join is a
+    // visible vertical line down a photoreal panel. Sampled this way every
+    // seam joins source columns that are a pixel apart. The two fills meet at
+    // the centre, which the band is stamped over. Two source pixels wide so
+    // the resampler interpolates rather than smearing one column.
+    const float midX = dest.getCentreX();
+    const int fillL = juce::roundToInt (iw * (kSideCut + 0.01f));
+    const int fillR = juce::roundToInt (iw * (1.0f - kSideCut - 0.01f)) - 2;
+    const float leftFillX = dest.getX() + sideDst;
+    if (midX > leftFillX)
+        g.drawImage (img, leftFillX, dest.getY(), midX - leftFillX, dest.getHeight(),
+                     fillL, 0, 2, img.getHeight());
+    const float rightFillR = dest.getRight() - sideDst;
+    if (rightFillR > midX)
+        g.drawImage (img, midX, dest.getY(), rightFillR - midX, dest.getHeight(),
+                     fillR, 0, 2, img.getHeight());
+
+    const int bandSrcX = juce::roundToInt (iw * kBandL);
+    const int bandSrcW = juce::roundToInt (iw * (kBandR - kBandL));
+    const float bandDstW = refW * (kBandR - kBandL);
+    g.drawImage (img, midX - bandDstW * 0.5f, dest.getY(), bandDstW, dest.getHeight(),
+                 bandSrcX, 0, bandSrcW, img.getHeight());
 }
 
 //====================================================================== meters

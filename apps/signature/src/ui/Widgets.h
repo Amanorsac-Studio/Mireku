@@ -410,6 +410,28 @@ struct OverlayHost
     }
 };
 
+//==============================================================================
+/// THE EDIT PAGE (client, 2026-11-03): Macros, Mod Matrix, LFO, Arp and the
+/// Super Knob no longer pop out as overlays. They open in the band where the
+/// effects rack lives, the way the keyboard does, and the rack returns when
+/// the page closes. Any control that used to open an overlay asks the nearest
+/// host for the page instead.
+struct EditPageHost
+{
+    enum Tab { macros = 0, matrix = 1, lfo = 2, arp = 3, superKnob = 4 };
+    virtual ~EditPageHost() = default;
+    /// Opens the page on `tab`; `macroIdx` selects a macro on the MACROS tab.
+    virtual void openEditPage (int tab, int macroIdx = -1) = 0;
+    virtual void closeEditPage() = 0;
+
+    static EditPageHost* find (juce::Component* c)
+    {
+        for (auto* p = c; p != nullptr; p = p->getParentComponent())
+            if (auto* h = dynamic_cast<EditPageHost*> (p)) return h;
+        return nullptr;
+    }
+};
+
 //====================================================== CLIENT REVIEW R3 (F)
 /// Drag-and-drop payload for "drag a parameter onto a macro knob".
 /// Format: "jm.macro.link|<router path>|<display caption>".
@@ -723,7 +745,14 @@ public:
         slider_.setRange (0.0, 1.0, 0.0);
         slider_.setDoubleClickReturnValue (true, (double) proc_.getParamNormalized (path_));
         slider_.setPopupMenuEnabled (false);
-        slider_.onValueChange = [this] { proc_.setParamNormalized (path_, (float) slider_.getValue()); updateValueText(); };
+        slider_.onValueChange = [this]
+        {
+            proc_.setParamNormalized (path_, (float) slider_.getValue());
+            updateValueText();
+            // For a panel that DRAWS something derived from this value - the
+            // velocity curve graph - rather than only showing the knob.
+            if (onEdit) onEdit();
+        };
         slider_.onSpecialMouseDown = [this] (const juce::MouseEvent& e)
         {
             // (macro knobs own their right-click: it opens the macro editor)
@@ -856,6 +885,11 @@ public:
         slider_.setValue ((double) proc_.getParamNormalized (path_), juce::dontSendNotification);
         updateValueText();
     }
+
+    /// Called after a drag has pushed the new value, for owners that draw
+    /// something derived from it. Not a parameter listener: it fires only for
+    /// edits made on THIS knob.
+    std::function<void()> onEdit;
 
     /// Index of the first macro this parameter is linked to, or -1.
     int macroIndex() const

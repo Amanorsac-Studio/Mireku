@@ -58,6 +58,20 @@ public:
             const char* names[] = { "User", "Factory", "Favorites" };
             for (int i = 0; i < 3; ++i)
                 m.addItem (i + 1, names[i], true, tabs_[(size_t) i].getToggleState());
+            // INTELLIGENT BROWSER (client, 2026-11-02): filter by INSTRUMENT,
+            // MOOD and USE. A tick narrows the list to sounds carrying that
+            // tag; several ticks must all be carried. The typed search also
+            // reads the tags, so "warm pad" finds a sound named neither.
+            m.addSeparator();
+            int id = 100;
+            for (auto& g : tags::groups())
+            {
+                juce::PopupMenu sub;
+                for (auto* w : g.words)
+                    sub.addItem (id++, w, true, tagFilter_.contains (w));
+                m.addSubMenu (g.name, sub, true, nullptr, false, 0);
+            }
+            if (! tagFilter_.isEmpty()) m.addItem (99, "Clear tags (" + tagFilter_.joinIntoString (", ") + ")");
             m.showMenuAsync (styledMenu (m, *filterBtn_), [this] (int r)
             {
                 if (r >= 1 && r <= 3)
@@ -65,9 +79,33 @@ public:
                     tabs_[(size_t) (r - 1)].setToggleState (true, juce::dontSendNotification);
                     rebuild();
                 }
+                else if (r == 99) { tagFilter_.clear(); rebuild(); }
+                else if (r >= 100)
+                {
+                    int id = 100;
+                    for (auto& g : tags::groups())
+                        for (auto* w : g.words)
+                            if (id++ == r)
+                            {
+                                if (tagFilter_.contains (w)) tagFilter_.removeString (w); else tagFilter_.add (w);
+                                rebuild();
+                            }
+                }
             });
         };
         addAndMakeVisible (*filterBtn_);
+        // one click clears the typed search AND the ticked tags (client,
+        // 2026-11-03: "easy way to remove filters in the search bar"); shown
+        // only while something is narrowing the list
+        clearBtn_.setFontHeight (10.0f);
+        clearBtn_.setTooltip ("Clear the search text and every ticked tag");
+        clearBtn_.onClick = [this]
+        {
+            search_.setText ({}, juce::dontSendNotification);
+            tagFilter_.clear();
+            rebuild();
+        };
+        addChildComponent (clearBtn_);
 
         addAndMakeVisible (tabStrip_);
         const char* names[] = { "USER", "FACTORY", "FAVORITES" };
@@ -152,35 +190,73 @@ public:
         auto filter = search_.getText().trim();
         const int page = proc_.state.currentPage;
         const int mode = tabs_[0].getToggleState() ? 0 : tabs_[2].getToggleState() ? 2 : 1;
+        // the well says what is narrowing the list when the field is empty
+        search_.setTextToShowWhenEmpty (tagFilter_.isEmpty() ? juce::String ("Search presets...")
+                                                             : tagFilter_.joinIntoString (" + "),
+                                        tagFilter_.isEmpty() ? Theme::muted.withAlpha (0.65f) : Theme::goldHi.withAlpha (0.8f));
         auto add = [&] (Row r)
         {
-            if (filter.isNotEmpty() && ! r.name.containsIgnoreCase (filter)) return;
+            if (filter.isNotEmpty() && ! tags::matches (filter, r.name, r.tags)) return;
+            for (auto& t : tagFilter_) if (! r.tags.contains (t)) return;
             if (mode == 2 && ! proc_.state.library.isFavorite (r.favKey())) return;
             rows_.push_back (std::move (r));
         };
+        auto ownTags = [page] (const juce::String& name)
+        { return tags::autoTags (page, name, {}, {}, false); };
+        const bool narrowing = filter.isNotEmpty() || ! tagFilter_.isEmpty();
+        if (narrowing != clearBtn_.isVisible()) { clearBtn_.setVisible (narrowing); resized(); }
         if (page >= 0 && page <= 3)
         {
             const int slot = slotForWorld (proc_.state, page);
-            if (mode != 0)
-                for (auto& b : proc_.state.library.bundlesForWorld (page))
-                    add ({ Row::Bundle, juce::String::fromUTF8 ("\xE2\x96\xA0 ") + b.name, b.dir, slot, -1 });
+            // One sound, one row. A bundle's presets sit INDENTED under their
+            // own bundle, and only when there is more than one: selecting a
+            // bundle already loads its first preset, so a lone preset listed
+            // again under another name read as a second sound (client,
+            // 2026-11-01: "VelvetPad and Mireku Velvet Pads vip?? confusing").
             if (mode != 0)
             {
-                if (auto lb = proc_.engines[(size_t) slot].bundle())
-                    for (size_t i = 0; i < lb->inst.presets.size(); ++i)
-                        add ({ Row::FactoryPreset, juce::String (lb->inst.presets[i].name), {}, slot, (int) i });
+                auto lb = proc_.engines[(size_t) slot].bundle();
+                for (auto& b : proc_.state.library.bundlesForWorld (page))
+                {
+                    add ({ Row::Bundle, b.name, b.dir, slot, -1, false, b.tags });
+                    if (lb != nullptr && lb->dir == b.dir && lb->inst.presets.size() > 1)
+                        for (size_t i = 0; i < lb->inst.presets.size(); ++i)
+                        {
+                            // a preset carries its instrument's tags plus its own name's
+                            auto nm = BundleInfo::cleanName (juce::String (lb->inst.presets[i].name));
+                            auto tg = b.tags;
+                            for (auto& t : ownTags (nm)) tg.addIfNotAlreadyThere (t);
+                            add ({ Row::FactoryPreset, nm, {}, slot, (int) i, true, tg });
+                        }
+                }
             }
             if (mode != 1)
-                for (auto& f : proc_.worldPresetDir (page).findChildFiles (juce::File::findFiles, false, "*.json"))
-                    add ({ Row::UserPreset, f.getFileNameWithoutExtension(), f, slot, -1 });
+                for (auto& f : sealed::listDocuments (proc_.worldPresetDir (page)))
+                    add ({ Row::UserPreset, f.getFileNameWithoutExtension(), f, slot, -1, false,
+                           ownTags (f.getFileNameWithoutExtension()) });
         }
         else
         {
             auto dir = JMSignatureProcessor::performancePresetDir();
-            for (auto& f : dir.getChildFile ("Factory").findChildFiles (juce::File::findFiles, false, "*.json"))
-                if (mode != 0) add ({ Row::Performance, f.getFileNameWithoutExtension(), f, -1, -1 });
-            for (auto& f : dir.findChildFiles (juce::File::findFiles, false, "*.json"))
-                if (mode != 1) add ({ Row::Performance, f.getFileNameWithoutExtension(), f, -1, -1 });
+            // FACTORY performances come from the app's Factory folder AND from
+            // the library's own Performance folders. One name, one row: the
+            // app's copy wins, so a save-over made here hides, never edits,
+            // the file James shipped in the library.
+            if (mode != 0)
+            {
+                juce::StringArray seen;
+                for (auto& pd : proc_.factoryPerformanceDirs())
+                    for (auto& f : sealed::listDocuments (pd))
+                    {
+                        const auto nm = f.getFileNameWithoutExtension();
+                        if (seen.contains (nm, true)) continue;
+                        seen.add (nm);
+                        add ({ Row::Performance, nm, f, -1, -1, false, proc_.state.library.performanceTags (f) });
+                    }
+            }
+            for (auto& f : sealed::listDocuments (dir))
+                if (mode != 1) add ({ Row::Performance, f.getFileNameWithoutExtension(), f, -1, -1, false,
+                                      proc_.state.library.performanceTags (f) });
         }
         refreshSaveBlock();
         list_.updateContent();
@@ -264,6 +340,11 @@ public:
         searchRow.removeFromRight (6);
         // R3(A): the icon now lives INSIDE the recessed well (drawn over the
         // field in paintOverChildren) instead of sitting beside a bare JUCE box.
+        if (clearBtn_.isVisible())
+        {
+            clearBtn_.setBounds (searchRow.removeFromRight (56).reduced (0, 3));
+            searchRow.removeFromRight (4);
+        }
         search_.setBounds (searchRow);
         searchIconArea_ = searchRow.withWidth (28).reduced (7);
         tabStrip_.setBounds (12, L::brTabsY, w - 24, L::brTabsH);
@@ -376,6 +457,14 @@ public:
     {
         return i >= 0 && i < (int) rows_.size() ? rows_[(size_t) i].name : juce::String();
     }
+    juce::StringArray rowTags (int i) const
+    {
+        return i >= 0 && i < (int) rows_.size() ? rows_[(size_t) i].tags : juce::StringArray();
+    }
+    /// Self-check hooks for the search well and the tag filter.
+    void setSearchText (const juce::String& s) { search_.setText (s, juce::dontSendNotification); rebuild(); }
+    void setTagFilter (const juce::StringArray& t) { tagFilter_ = t; rebuild(); }
+    juce::StringArray tagFilter() const { return tagFilter_; }
     bool rowIsBundle (int i) const
     {
         return i >= 0 && i < (int) rows_.size() && rows_[(size_t) i].kind == Row::Bundle;
@@ -426,7 +515,11 @@ public:
             return "No performance presets.\n\nArrange the slots on PERFORM,\nthen SAVE one below.";
         if (mode == 2) return "No favourites yet.\n\nRight-click a row and\n\"Toggle Favorite\" to star it.";
         if (search_.getText().trim().isNotEmpty())
-            return "Nothing matches\n\"" + search_.getText().trim() + "\"";
+            return "Nothing matches\n\"" + search_.getText().trim() + "\""
+                 + (tagFilter_.isEmpty() ? juce::String() : "\nwith " + tagFilter_.joinIntoString (" + "));
+        if (! tagFilter_.isEmpty())
+            return "Nothing here is tagged\n" + tagFilter_.joinIntoString (" + ")
+                 + ".\n\nClear the tags from the filter\nbutton, or tag a sound by\nright-clicking its row.";
         if (mode == 0) return "No user presets for " + juce::String (worldName (page)).toUpperCase()
                             + ".\n\nDial in a sound and SAVE it below.";
         return "No " + juce::String (worldName (page)).toUpperCase() + " instruments\nin your library.\n\n"
@@ -444,19 +537,18 @@ public:
     /// JM box / USB brand art panel at the foot of the column (approved ref).
     void drawBrandArt (juce::Graphics& g, juce::Rectangle<float> r)
     {
-        kit::drawNineSlice (g, kit::image (kit::Img::buttonMaster), r, 34, 34, 1.0f);
-        auto inner = r.reduced (18.0f, 22.0f);
-        if (shield_ != nullptr)
-            shield_->drawWithin (g, inner.removeFromTop (inner.getHeight() * 0.48f),
-                                 juce::RectanglePlacement::centred, 1.0f);
-        g.setColour (Theme::goldHi);
-        g.setFont (Theme::display (18.0f));
-        g.drawText ("MIREKU", inner.removeFromTop (24.0f), juce::Justification::centred, false);
-        g.setColour (Theme::muted);
-        g.setFont (Theme::ui (10.0f));
-        g.drawText ("SOUND LIBRARY", inner.removeFromTop (16.0f), juce::Justification::centred, false);
-        // single gold flourish accent (kit) — used once, never as wallpaper
-        kit::drawFlourish (g, inner.withTrimmedTop (6.0f).reduced (24.0f, 2.0f), 0.75f);
+        // A gold frame with the portrait flush inside it: the black of the
+        // artwork runs to the frame, no second border, no caption (the artwork
+        // carries its own MIREKU lettering). Client, 2026-11-01.
+        const float corner = 18.0f;
+        auto plaque = r.reduced (2.0f);
+        g.setColour (juce::Colours::black);
+        g.fillRoundedRectangle (plaque, corner);
+        ux::drawBrandPortrait (g, plaque.reduced (4.0f), corner - 4.0f, false);
+        g.setColour (Theme::goldDark);
+        g.drawRoundedRectangle (plaque, corner, 2.5f);
+        g.setColour (Theme::goldHi.withAlpha (0.8f));
+        g.drawRoundedRectangle (plaque.reduced (1.5f), corner - 1.5f, 1.0f);
     }
 
 private:
@@ -467,6 +559,8 @@ private:
         juce::File file;
         int slot;
         int presetIndex;
+        bool child = false;             // drawn indented under the row above it
+        juce::StringArray tags;         // INSTRUMENT / MOOD / USE words it is found under
         juce::String favKey() const { return juce::String ((int) kind) + "|" + name; }
     };
 
@@ -491,8 +585,17 @@ private:
             g.fillRect (6, h - 1, w - 12, 1);
         }
         g.setColour (selected ? Theme::goldHi : r.kind == Row::Bundle ? Theme::cream : Theme::muted.brighter (0.3f));
-        g.setFont (Theme::ui (14.0f));
-        g.drawText (r.name, 12, 0, w - 40, h, juce::Justification::centredLeft);
+        g.setFont (Theme::ui (r.child ? 13.0f : 14.0f));
+        const int x = r.child ? 30 : 12;
+        if (r.child)
+        {
+            g.setColour (Theme::goldDark.withAlpha (selected ? 0.9f : 0.5f));
+            g.fillRect (18, h / 2, 6, 1);
+            g.setColour (selected ? Theme::goldHi : Theme::muted.brighter (0.3f));
+        }
+        // (the tags are not drawn on the row: client, 2026-11-03, "it's making the whole
+        // thing look clumsy"; they still drive the search and the filter)
+        g.drawText (r.name, x, 0, w - x - 28, h, juce::Justification::centredLeft);
         if (proc_.state.library.isFavorite (r.favKey()) && starIcon_ != nullptr)
             starIcon_->drawWithin (g, juce::Rectangle<float> ((float) w - 26.0f, (float) h * 0.5f - 8.0f, 16.0f, 16.0f),
                                    juce::RectanglePlacement::centred, 1.0f);
@@ -512,8 +615,32 @@ private:
             // artist sent to Explorer to rename a folder; it is `meta.name`,
             // one guarded property, and nothing on disk moves — see
             // authoring::renameInstrument.
-            m.addItem (3, r.kind == Row::Bundle ? "Rename sound..." : "Rename...");
+            // An instrument is renamed only where its bundle can be written:
+            // the studio's authoring build. A sealed instrument cannot be.
+            if (r.kind != Row::Bundle || proc_.state.library.isAuthoring())
+                m.addItem (3, r.kind == Row::Bundle ? "Rename sound..." : "Rename...");
             if (r.kind == Row::UserPreset || r.kind == Row::Performance) m.addItem (2, "Delete preset");
+            // TAGS: what the sound is filed under for the search and the filter.
+            // Ticks toggle one tag at a time; the list is saved in settings.json
+            // against the bundle's folder name, never in the bundle.
+            if (r.kind == Row::Bundle || r.kind == Row::Performance)
+            {
+                juce::PopupMenu tg;
+                int id = 100;
+                for (auto& g : tags::groups())
+                {
+                    tg.addSectionHeader (g.name);
+                    for (auto* w : g.words) tg.addItem (id++, w, true, r.tags.contains (w));
+                }
+                if (proc_.state.library.tagsEditedFor (r.file))
+                {
+                    tg.addSeparator();
+                    tg.addItem (98, "Back to automatic tags");
+                }
+                m.addSubMenu ("Tags", tg);
+            }
+            if (r.kind == Row::Performance)
+                m.addItem (97, "Add to setlist as a song");
 
             // MOVE TO ANOTHER CATEGORY. Only for an instrument, and only in
             // AUTHORING mode: it edits the bundle's own instrument.json, which
@@ -532,6 +659,11 @@ private:
                                   w != currentWorld, w == currentWorld);
                 m.addSeparator();
                 m.addSubMenu ("Move to category", cats);
+                // MEASURE FOR ANCHORED PLAYBACK. Reads every sample, writes the
+                // measured level and anchor into instrument.json, switches the
+                // bundle to anchored velocity. Authoring only, for the same
+                // reason as the category move: it edits factory content.
+                m.addItem (4, "Measure levels (anchored playback)...");
             }
 
             // R3(A): targeted so it inherits the JM chrome LookAndFeel (an
@@ -539,8 +671,18 @@ private:
             m.showMenuAsync (styledMenu (m, list_), [this, r, row] (int res)
             {
                 if (res == 1) proc_.state.library.toggleFavorite (r.favKey());
+                else if (res == 98) proc_.state.library.resetTags (r.file);
+                else if (res == 97) proc_.setlistAdd (r.name, r.name);
+                else if (res >= 100)
+                {
+                    int id = 100;
+                    for (auto& g : tags::groups())
+                        for (auto* w : g.words)
+                            if (id++ == res) proc_.state.library.toggleTag (r.file, w);
+                }
                 else if (res == 2) { r.file.moveToTrash(); }
                 else if (res == 3) { promptRename (row); return; }
+                else if (res == 4) { startMeasure (row); return; }
                 else if (res >= 10 && res <= 13) { applyRecategorise (row, res - 10); return; }
                 rebuild();
             });
@@ -704,6 +846,63 @@ private:
             }), false);
     }
 
+    //================================================ MEASURE FOR ANCHORED PLAYBACK
+    // The same shape as the X7L import: a ThreadWithProgressWindow that owns
+    // itself, launchThread() (no modal loop in a plugin), the result handed
+    // back on the message thread through a SafePointer. Measuring reads the
+    // whole bundle - hundreds of megabytes for a real piano - so it cannot run
+    // inline; writing is a message-thread act and stays in the processor.
+    struct MeasureTask : public juce::ThreadWithProgressWindow
+    {
+        MeasureTask (juce::File dir, std::function<void (authoring::MeasuredLevels)> done)
+            : juce::ThreadWithProgressWindow ("Measuring " + dir.getFileNameWithoutExtension(), true, true),
+              bundleDir (std::move (dir)), onDone (std::move (done))
+        {
+            setStatusMessage ("Reading samples...");
+        }
+        void run() override
+        {
+            result = authoring::measureBundleLevels (
+                bundleDir,
+                [this] { return threadShouldExit(); },
+                [this] (int zone, int count)
+                {
+                    setProgress (count > 0 ? (double) zone / (double) count : 0.0);
+                    setStatusMessage ("Zone " + juce::String (zone + 1) + " of " + juce::String (count));
+                });
+        }
+        void threadComplete (bool userCancelled) override
+        {
+            if (userCancelled) result.aborted = true;
+            if (onDone) onDone (std::move (result));
+            delete this;
+        }
+        juce::File bundleDir;
+        std::function<void (authoring::MeasuredLevels)> onDone;
+        authoring::MeasuredLevels result;
+    };
+
+    void startMeasure (int index)
+    {
+        if (index < 0 || index >= (int) rows_.size()) return;
+        auto r = rows_[(size_t) index];
+        if (r.kind != Row::Bundle) return;
+        juce::Component::SafePointer<PresetBrowserPanel> safe (this);
+        auto* task = new MeasureTask (r.file, [safe] (authoring::MeasuredLevels m)
+        {
+            if (auto* self = safe.getComponent())
+            {
+                auto out = self->proc_.applyBundleLevels (m);
+                self->rebuild();
+                self->resultIsGood_ = out.ok;
+                self->destLine_ = out.ok ? out.message : juce::String ("NOT MEASURED. ") + out.message;
+                if (out.note.isNotEmpty()) self->destLine_ += "  (" + out.note + ")";
+                self->repaint();
+            }
+        });
+        task->launchThread();
+    }
+
     //================================================== MOVE TO ANOTHER CATEGORY
     bool applyRecategorise (int index, int world)
     {
@@ -736,12 +935,13 @@ private:
     juce::uint32 overArmedAtMs_ = 0;
     static constexpr juce::uint32 kArmWindowMs = 6000;
     std::unique_ptr<juce::DrawableButton> filterBtn_;
+    ux::PlateButton clearBtn_ { "CLEAR" };
     std::unique_ptr<juce::Drawable> searchIcon_ { assets::makeIcon (assets::Icon::search, Theme::muted) };
     std::unique_ptr<juce::Drawable> starIcon_ { ux::makePackIcon (ux::PackIcon::star, Theme::gold) };
-    std::unique_ptr<juce::Drawable> shield_ { ux::makeShield() };
     juce::Rectangle<int> searchIconArea_, artArea_, infoArea_, warnArea_;
     juce::ListBox list_;
     std::vector<Row> rows_;
+    juce::StringArray tagFilter_;                   // ticked in the filter menu; all must be carried
 };
 
 //==============================================================================
@@ -787,10 +987,10 @@ public:
         removeBtn_.onClick = [this] { removeSelf(); };
         addAndMakeVisible (removeBtn_);
 
-        // The grid in resized() packs 5+ parameters into 3 columns, which makes
-        // each cell 52 px rather than 74 — so a dense unit's captions take the
-        // smaller of the two type sizes. (See the grid note in resized().)
-        const float capHeight = spec.params.size() <= 4 ? 10.0f : 9.0f;
+        // A dense unit asks for the wider plate (naturalWidth), so its three
+        // columns are the same 74 px as a sparse unit's two and its captions no
+        // longer have to take the smaller type size to fit.
+        const float capHeight = 10.0f;
         for (auto& ps : spec.params)
         {
             auto path = prefix_ + ".fx" + juce::String (idx_) + "." + ps.id;
@@ -833,6 +1033,18 @@ public:
         };
         addAndMakeVisible (bypass_);
         if (type_ == FxType::widener) startTimerHz (10);
+        // The modulation pedal's MIX is locked full wet in WOW+FLUT (the
+        // padlock on the client's photo): the knob greys out while that mode
+        // is chosen, and the DSP ignores it there regardless.
+        if (type_ == FxType::modPedal) { startTimerHz (10); lockMixForWowFlutter(); }
+    }
+
+    void lockMixForWowFlutter()
+    {
+        if (type_ != FxType::modPedal || knobs_.size() < 3) return;
+        const bool wowFlutter = proc_.getParamNormalized (prefix_ + ".fx" + juce::String (idx_) + ".mode") >= 0.99f;
+        auto* mix = knobs_[2];                       // rate, intensity, MIX in registry order
+        if (mix->isEnabled() == wowFlutter) mix->setEnabled (! wowFlutter);
     }
 
     // FX personality mapping (unchanged from V1/V2, logged in DECISIONS) — the
@@ -853,6 +1065,10 @@ public:
             case FxType::digitalDelay:   return 3;
             case FxType::compressor:     return 4;
             case FxType::plateReverb:    return 5;
+            case FxType::tapeMachine:    return 1;   // orange, beside the tape delay
+            case FxType::ringMod:        return 2;   // purple, with the modulations
+            case FxType::modPedal:       return 2;   // purple, with the modulations
+            case FxType::rotary:         return 1;   // orange, a cabinet, beside the EP preamp
             default:                     return 5;   // widener
         }
     }
@@ -878,10 +1094,28 @@ public:
         }
     }
 
+    /// How wide this unit wants to be, at the rack's standard 215 px height.
+    ///
+    /// A UNIT IS AS WIDE AS ITS PARAMETERS NEED. Every unit used to be 164 px,
+    /// which is two 74 px cells, so a five- or nine-parameter unit had to fold
+    /// into three columns of 52 px: a 33 px knob under a caption like
+    /// "Wow/Flutter" with nowhere to put it. The widener has two parameters and
+    /// was given the same 164 px to spread them over. Width now follows the
+    /// column count, and the rack shares out what it has (FxRackStrip).
+    static int naturalWidth (FxType t)
+    {
+        const int n = (int) fxSpec (t).params.size();
+        return n <= 4 ? Theme::L::fxUnitW : Theme::L::fxUnitWide;
+    }
+    int naturalWidth() const { return naturalWidth (type_); }
+
     void resized() override
     {
         auto r = getLocalBounds();
-        const float u = (float) r.getWidth() / 164.0f;
+        // HEIGHT drives the chrome, not width. It used to be width/164, which
+        // was the same thing while every unit was 164 wide; the moment one is
+        // wider, a width-scaled S(189) puts BYPASS below the bottom edge.
+        const float u = (float) r.getHeight() / 215.0f;
         auto S = [u] (int v) { return juce::roundToInt ((float) v * u); };
         auto head = r.withY (S (8)).withHeight (S (20));
         power_.setBounds (r.getRight() - S (28), S (9), S (20), S (20));
@@ -907,27 +1141,35 @@ public:
         // the chorus, the plate, the hall and both delays (they all carry mix
         // last), and it would have swallowed the new phaser/flanger MIX too.
         //
-        // The grid is now driven by the parameter COUNT, so every registry
-        // parameter has a cell. The cell geometry is chosen so the knob art
-        // does not shrink until it has to: ParamKnob with a label below takes
-        // `min(w, h - 13)` as its diameter, so the 2-column cell (74x58) and
-        // the 3-column cell (52x58) both yield a 45 px knob — only the 7-to-9
-        // parameter units (the two delays) drop to three rows and a 33 px knob.
+        // The grid is driven by the parameter COUNT, so every registry
+        // parameter has a cell.
+        //
+        // THE COLUMNS NOW DIVIDE THE UNIT'S ACTUAL WIDTH rather than sitting at
+        // fixed offsets measured on a 164 px plate. A five-parameter unit asks
+        // the rack for the wider plate and gets three 74 px cells instead of
+        // three 52 px ones, which is the difference between "Wow/Flutter" or
+        // "Pre-Delay" fitting under its knob and being clipped. When the rack
+        // is full and the strip has to shrink everything back towards 164, the
+        // same arithmetic simply yields narrower cells: no second code path.
         const int n = items.size();
         const int cols = n <= 4 ? 2 : 3;
         const int rows = n <= (cols * 2) ? 2 : 3;
-        const int cellW = cols == 2 ? S (74) : S (52);
+        // Only the WIDTH is new. The row height stays at the approved 58 (two
+        // rows) or 46 (three), centred in the band between the title plaque and
+        // BYPASS, so knob diameters are exactly what the client signed off:
+        // dividing the full band instead would have quietly grown a sparse
+        // unit's knobs from 45 px to 52.
         const int cellH = rows == 2 ? S (58) : S (46);
-        const int cx2[2] = { S (44), S (120) };
-        const int cx3[3] = { S (30), S (82), S (134) };
-        const int cy2[2] = { S (72), S (134) };
-        const int cy3[3] = { S (57), S (103), S (149) };
+        const int bandTop = S (34), bandBottom = S (176);
+        auto grid = juce::Rectangle<int> (S (6), 0, r.getWidth() - S (12), cellH * rows)
+                        .withCentre ({ r.getCentreX(), (bandTop + bandBottom) / 2 });
+        const int cellW = grid.getWidth() / cols;
         for (int i = 0; i < n; ++i)
         {
             const int col = i % cols, row = juce::jmin (rows - 1, i / cols);
-            const int x = cols == 2 ? cx2[col] : cx3[col];
-            const int y = rows == 2 ? cy2[row] : cy3[row];
-            items[i]->setBounds (juce::Rectangle<int> (cellW, cellH).withCentre ({ x, y }));
+            items[i]->setBounds (juce::Rectangle<int> (cellW, cellH)
+                                     .withCentre ({ grid.getX() + cellW * col + cellW / 2,
+                                                    grid.getY() + cellH * row + cellH / 2 }));
             items[i]->setVisible (i < cols * rows);
         }
     }
@@ -937,7 +1179,7 @@ public:
         auto r = getLocalBounds().toFloat();
         kit::drawFxPlate (g, r, plateFamily (type_));
         // opaque local plaque behind the title — never trade contrast for pattern
-        const float u = r.getWidth() / 164.0f;
+        const float u = r.getHeight() / 215.0f;          // height, as in resized()
         auto plaque = juce::Rectangle<float> (r.getX() + 26 * u, r.getY() + 6 * u,
                                               r.getWidth() - 52 * u, 24 * u);
         g.setColour (juce::Colour (0xff0B0A08).withAlpha (0.80f));
@@ -966,6 +1208,7 @@ public:
 
     int rackIndex() const { return idx_; }
     const juce::String& rackPrefix() const { return prefix_; }
+    FxType fxType() const { return type_; }
 
     //=================================================== CLIENT REVIEW R7 (3)
     // Drag to reorder, spec §4. The gesture is armed ONLY from the header
@@ -999,7 +1242,7 @@ public:
     void mouseUp (const juce::MouseEvent&) override { dragArmed_ = false; dragging_ = false; }
 
 private:
-    void timerCallback() override { repaint(); }
+    void timerCallback() override { lockMixForWowFlutter(); repaint(); }
 
     /// R7 (item 2). Shared by the remove chip and the menu's "Remove" item so
     /// the two routes cannot drift.
@@ -1080,45 +1323,19 @@ private:
 class MasterFxColumn : public juce::Component
 {
 public:
-    explicit MasterFxColumn (JMSignatureProcessor& p) : proc_ (p) { rebuild(); }
+    // OUTPUT COLUMN (client, 2026-11-01: "remove the master FX, we are not
+    // utilizing it, just leave the box as a decoration"). The plate stays at
+    // the right of the rack as the output meter with its dB ladder; the master
+    // rack's menu and knobs are gone from the UI. The engine's master rack
+    // itself is untouched and stays empty, so nothing is processed here.
+    explicit MasterFxColumn (JMSignatureProcessor& p) : proc_ (p) {}
 
-    void rebuild()
-    {
-        knobs_.clear();
-        auto& rack = proc_.state.masterRack;
-        unitName_.clear();
-        if (! rack.empty())
-        {
-            auto& spec = fxSpec (rack.front().type);
-            unitName_ = juce::String (spec.name).toUpperCase();
-            int n = 0;
-            for (auto& ps : spec.params)
-            {
-                if (ps.kind != ParamKind::Float) continue;
-                if (n >= 3) break;
-                auto* k = new ParamKnob (proc_, "master.fx0." + juce::String (ps.id), ps.label, &ps);
-                k->setShowValue (false);
-                k->setLabelBelow (true, 10.0f);
-                knobs_.add (k);
-                addAndMakeVisible (k);
-                ++n;
-            }
-        }
-        if (menuBtn_ == nullptr)
-        {
-            menuBtn_ = ux::makePackIconButton ("mfx", ux::PackIcon::kebab, Theme::muted);
-            menuBtn_->onClick = [this] { showMenu(); };
-            addAndMakeVisible (*menuBtn_);
-        }
-        resized();
-        repaint();
-    }
+    void rebuild() {}
 
     void refresh()
     {
-        for (auto* k : knobs_) k->refresh();
-        const float pk = juce::jmax (proc_.masterPeakL.load(), proc_.masterPeakR.load());
-        if (std::abs (pk - pk_) > 1.0e-3f) { pk_ = pk; repaint(); }
+        const float l = proc_.masterPeakL.load(), r = proc_.masterPeakR.load();
+        if (std::abs (l - pkL_) > 1.0e-3f || std::abs (r - pkR_) > 1.0e-3f) { pkL_ = l; pkR_ = r; repaint(); }
     }
 
     void resized() override
@@ -1126,84 +1343,45 @@ public:
         auto r = getLocalBounds();
         const float u = (float) r.getWidth() / 196.0f;
         auto S = [u] (int v) { return juce::roundToInt ((float) v * u); };
-        menuBtn_->setBounds (r.getRight() - S (26), S (8), S (18), S (18));
-        const int cx[3] = { S (46), S (104), S (46) };
-        const int cy[3] = { S (78), S (78), S (156) };
-        for (int i = 0; i < knobs_.size(); ++i)
-            knobs_[i]->setBounds (juce::Rectangle<int> (S (58), S (58))
-                                      .withCentre ({ cx[juce::jmin (i, 2)], cy[juce::jmin (i, 2)] }));
-        meterArea_ = juce::Rectangle<int> (S (148), S (48), S (22), S (146));
+        // The plate's frame is part of the nine-slice; the title sits INSIDE
+        // the frame, under the top rail. Two ladders, left and right (client,
+        // 2026-11-02: "make the output 2 instead of one meter"), side by side
+        // under it, with the dB ticks read off the right one and the L / R
+        // letters beneath.
+        meterL_ = juce::Rectangle<int> (S (62), S (62), S (16), S (122));
+        meterR_ = juce::Rectangle<int> (S (84), S (62), S (16), S (122));
     }
 
     void paint (juce::Graphics& g) override
     {
         auto r = getLocalBounds().toFloat();
+        const float u = r.getWidth() / 196.0f;
         kit::drawNineSlice (g, kit::image (kit::Img::panelMaster), r, 48, 48, 1.0f);
         g.setColour (Theme::goldHi);
-        g.setFont (Theme::display (15.0f));
-        g.drawText ("MASTER FX", r.withTrimmedTop (8.0f).withHeight (20.0f), juce::Justification::centred, false);
-        if (unitName_.isNotEmpty())
+        g.setFont (Theme::display (15.0f * u));
+        g.drawText ("OUTPUT", r.withTrimmedTop (34.0f * u).withHeight (20.0f * u), juce::Justification::centred, false);
+        for (int k = 0; k < 2; ++k)
         {
-            g.setColour (Theme::muted);
-            g.setFont (Theme::ui (9.0f));
-            g.drawText (unitName_, r.withTrimmedTop (28.0f).withHeight (12.0f), juce::Justification::centred, false);
+            auto m = (k == 0 ? meterL_ : meterR_).toFloat();
+            kit::drawLedMeterV (g, m, LevelMeter::norm (k == 0 ? pkL_ : pkR_));
+            g.setColour (Theme::muted.withAlpha (0.8f));
+            g.setFont (Theme::value (8.0f));
+            g.drawText (k == 0 ? "L" : "R", m.withY (m.getBottom() + 3.0f).withHeight (10.0f),
+                        juce::Justification::centred, false);
         }
-        else
-        {
-            g.setColour (Theme::muted);
-            g.setFont (Theme::ui (11.0f));
-            g.drawFittedText ("RACK EMPTY\nADD VIA MENU",
-                              r.reduced (44.0f, 70.0f).toNearestInt(), juce::Justification::centred, 2);
-        }
-        // dB ladder + kit LED meter
-        auto m = meterArea_.toFloat();
-        kit::drawLedMeterV (g, m, LevelMeter::norm (pk_));
+        auto m = meterR_.toFloat();
         g.setColour (Theme::muted.withAlpha (0.8f));
         g.setFont (Theme::value (8.0f));
         const char* ticks[] = { "0", "-12", "-24", "-36", "-60" };
         for (int i = 0; i < 5; ++i)
-            g.drawText (ticks[i], m.getRight() + 2.0f, m.getY() + m.getHeight() * (float) i / 4.6f - 5.0f,
+            g.drawText (ticks[i], m.getRight() + 4.0f, m.getY() + m.getHeight() * (float) i / 4.6f - 5.0f,
                         24.0f, 10.0f, juce::Justification::centredLeft, false);
     }
 
 private:
-    void showMenu()
-    {
-        juce::PopupMenu m, add, repl;
-        for (auto& s : fxRegistry()) add.addItem (100 + (int) s.type, s.name);
-        m.addSubMenu ("Add unit", add, (int) proc_.state.masterRack.size() < FxRackDsp::kMaxSlots);
-        if (! proc_.state.masterRack.empty())
-        {
-            for (auto& s : fxRegistry()) repl.addItem (300 + (int) s.type, s.name);
-            m.addSubMenu ("Replace first unit", repl);
-            m.addItem (2, "Remove first unit");
-        }
-        m.showMenuAsync (styledMenu (m, *menuBtn_), [this] (int r)
-        {
-            // R7 (item 1): the master rack is EMPTY by default and every unit it
-            // gains from here is an explicit act, so those arrive active; what
-            // it must never do is build itself a default rack that is on. It
-            // goes through the same clickless two-step as the slot racks.
-            auto next = proc_.state.masterRack;
-            if (r >= 300) { if (next.empty()) return;
-                            next.front() = defaultUnitState ((FxType) (r - 300), false); }
-            else if (r >= 100) { if ((int) next.size() >= FxRackDsp::kMaxSlots) return;
-                                 next.push_back (defaultUnitState ((FxType) (r - 100), false)); }
-            else if (r == 2 && ! next.empty()) next.erase (next.begin());
-            else return;
-            proc_.state.masterRack = next;
-            proc_.masterRack.applyStructuralChange (next);
-            rebuild();
-            proc_.stateChanged.sendChangeMessage();
-        });
-    }
-
     JMSignatureProcessor& proc_;
-    juce::String unitName_;
-    juce::OwnedArray<ParamKnob> knobs_;
-    std::unique_ptr<juce::DrawableButton> menuBtn_;
-    juce::Rectangle<int> meterArea_;
-    float pk_ = 0;
+    juce::Rectangle<int> meterL_, meterR_;
+    float pkL_ = 0, pkR_ = 0;
 };
 
 //==============================================================================
@@ -1235,7 +1413,9 @@ public:
         rackDsp_ = &proc_.slotRacks[(size_t) slot];
         slotLabel_ = juce::String::charToString ((juce::juce_wchar) ('A' + slot))
                      + "  (" + worldName (proc_.state.slots[(size_t) slot].world) + ")";
-        const int shown = juce::jmin (6, (int) rackState_->size());
+        // WIDE SCREENS: a wider strip shows more of the rack, never fewer than six.
+        const int capacity = juce::jmax (6, (stripRight() - Theme::L::fxUnitX) / (Theme::L::fxUnitW + Theme::L::fxUnitGap));
+        const int shown = juce::jmin (capacity, (int) rackState_->size());
         for (int i = 0; i < shown; ++i)
         {
             auto* pn = new FxUnitPanel (proc_, prefix_, i, (*rackState_)[(size_t) i], rackState_, rackDsp_);
@@ -1243,7 +1423,7 @@ public:
             panels_.add (pn);
             addAndMakeVisible (pn);
         }
-        addBtn_.setVisible (shown < 6 && (int) rackState_->size() < FxRackDsp::kMaxSlots);
+        addBtn_.setVisible (shown < capacity && (int) rackState_->size() < FxRackDsp::kMaxSlots);
         master_->rebuild();
         resized();
         repaint();
@@ -1296,16 +1476,87 @@ public:
         proc_.stateChanged.sendChangeMessage();
     }
 
+    /// Where each unit sits, and how wide it is.
+    ///
+    /// Units are no longer on a uniform pitch, so the x of unit i is not
+    /// arithmetic any more — resized(), the drop indicator and the drop-gap hit
+    /// test all read this one table instead of each recomputing it from the
+    /// pitch and drifting apart.
+    ///
+    /// Each unit asks for its natural width. If the rack wants more than the
+    /// strip has, every unit is scaled by the same factor down to fxUnitMinW:
+    /// a full rack of dense units therefore lands back on roughly the old
+    /// uniform 164, which is what it has always looked like.
+    void layOutUnits()
+    {
+        using L = Theme::L;
+        unitX_.clearQuick();
+        unitW_.clearQuick();
+        const int n = panels_.size();
+        if (n == 0) return;
+
+        int want = 0;
+        for (auto* p : panels_) want += p->naturalWidth();
+        const int avail = stripRight() - L::fxUnitX - (n + 1) * L::fxUnitGap;   // +1 leaves room for ADD
+        const double k = want > avail ? (double) avail / (double) want : 1.0;
+
+        int total = 0;
+        for (int i = 0; i < n; ++i)
+        {
+            const int w = juce::jmax (L::fxUnitMinW,
+                                      juce::roundToInt (panels_[i]->naturalWidth() * k));
+            unitW_.add (w);
+            total += w;
+        }
+
+        // CLAMPING BREAKS THE BUDGET, so pay the difference back. Scaling alone
+        // is not enough: a full rack of three wide and three narrow units
+        // scales to 194 and 134, the narrow ones are then lifted to the 140
+        // minimum, and the rack runs ten pixels under the MASTER column. Take
+        // the overshoot a pixel at a time off whichever unit is widest, which
+        // leaves the narrow ones at their minimum and never produces a unit
+        // narrower than one it started wider than. Six units at the minimum
+        // always fit, so this terminates with room to spare.
+        while (total > avail)
+        {
+            int widest = -1;
+            for (int i = 0; i < n; ++i)
+                if (unitW_[i] > L::fxUnitMinW && (widest < 0 || unitW_[i] > unitW_[widest]))
+                    widest = i;
+            if (widest < 0) break;
+            unitW_.set (widest, unitW_[widest] - 1);
+            --total;
+        }
+
+        int x = L::fxUnitX;
+        for (int i = 0; i < n; ++i)
+        {
+            unitX_.add (x);
+            x += unitW_[i] + L::fxUnitGap;
+        }
+        addX_ = x;
+    }
+
     void resized() override
     {
         using L = Theme::L;
+        layOutUnits();
         for (int i = 0; i < panels_.size(); ++i)
-            panels_[i]->setBounds (L::fxUnitX + i * L::fxUnitPitch, L::fxUnitY, L::fxUnitW, L::fxUnitH);
+            panels_[i]->setBounds (unitX_[i], L::fxUnitY, unitW_[i], L::fxUnitH);
         if (addBtn_.isVisible())
             addBtn_.setBounds (juce::Rectangle<int> (110, 30)
-                                   .withCentre ({ L::fxUnitX + panels_.size() * L::fxUnitPitch + L::fxUnitW / 2,
+                                   .withCentre ({ addX_ + L::fxUnitW / 2,
                                                   L::fxUnitY + L::fxUnitH / 2 }));
-        master_->setBounds (L::fxMasterX, L::fxMasterY, L::fxMasterW, L::fxMasterH);
+        master_->setBounds (stripRight(), L::fxMasterY, L::fxMasterW, L::fxMasterH);
+    }
+
+    /// Where the units end and the output column begins: the column is anchored
+    /// to the strip's right edge (4 px in, as on the 3:2 layout), so a wider
+    /// strip gives the units the room.
+    int stripRight() const
+    {
+        using L = Theme::L;
+        return juce::jmax (L::fxStripRight, getWidth() - (L::rackW - L::fxMasterX));
     }
 
     void paint (juce::Graphics& g) override
@@ -1366,7 +1617,9 @@ public:
         // Drawn in the gap between units so it never covers a control.
         if (dropGap_ >= 0)
         {
-            const float x = (float) (L::fxUnitX + dropGap_ * L::fxUnitPitch) - 4.0f;
+            // From the layout table, not the pitch: units have different widths.
+            const float x = (float) (dropGap_ < unitX_.size() ? unitX_[dropGap_] : addX_)
+                          - (float) L::fxUnitGap * 0.5f;
             auto bar = juce::Rectangle<float> (x - 1.5f, (float) L::fxUnitY - 4.0f,
                                                3.0f, (float) L::fxUnitH + 8.0f);
             g.setColour (Theme::gold.withAlpha (0.35f));
@@ -1383,12 +1636,14 @@ private:
     /// Insertion GAP (0..units) nearest to a pointer x in strip coordinates.
     int gapForX (int x) const
     {
-        using L = Theme::L;
-        const int n = panels_.size();
+        // Each unit's OWN midpoint, from the layout table. Computing it from a
+        // uniform pitch put the drop line in the wrong gap the moment the
+        // units stopped being the same width.
+        const int n = juce::jmin (panels_.size(), unitX_.size());
         int gap = 0;
         for (int i = 0; i < n; ++i)
-            if (x > L::fxUnitX + i * L::fxUnitPitch + L::fxUnitW / 2) gap = i + 1;
-        return juce::jlimit (0, n, gap);
+            if (x > unitX_[i] + unitW_[i] / 2) gap = i + 1;
+        return juce::jlimit (0, panels_.size(), gap);
     }
 
     void showAddMenu()
@@ -1417,6 +1672,10 @@ private:
     ux::PlateButton addBtn_;
     juce::OwnedArray<FxUnitPanel> panels_;
     std::unique_ptr<MasterFxColumn> master_;
+    /// Unit geometry, rebuilt by layOutUnits(). The single source for resized(),
+    /// the drop indicator and gapForX.
+    juce::Array<int> unitX_, unitW_;
+    int addX_ = Theme::L::fxUnitX;
     /// insertion point while a reorder drag is over the strip; -1 = no drag
     int dropGap_ = -1;
 };
@@ -1451,6 +1710,175 @@ public:
     }
 private:
     float lvl_ = 0;
+};
+
+//==============================================================================
+// VELOCITY RESPONSE — the SETTINGS block.
+//
+// Two stages, drawn as two lines over the same graph, because the whole design
+// only makes sense if you can see that they are different things:
+//
+//   GOLD  the CURVE. Global. It reshapes the velocity number BEFORE the engine
+//         picks a sample layer, so it changes which sample you hit.
+//   BLUE  DEPTH and OFFSET. Per world. Level only, applied after the layer is
+//         already chosen, so a world can be tamed without losing its character.
+//
+// The dashed diagonal is the behaviour the plugin had before any of this, so
+// "how far am I from normal" is readable at a glance rather than by arithmetic.
+class VelocityPanel : public juce::Component,
+                      private juce::ChangeListener
+{
+public:
+    VelocityPanel (JMSignatureProcessor& p, int slot) : proc_ (p), slot_ (slot)
+    {
+        head_.setText ("VELOCITY RESPONSE", juce::dontSendNotification);
+        head_.setFont (Theme::display (13.0f));
+        head_.setColour (juce::Label::textColourId, Theme::muted);
+        addAndMakeVisible (head_);
+
+        for (int i = 0; i < kVelCurveCount; ++i)
+        {
+            auto* b = new ux::PlateButton (velCurveName ((VelCurve) i));
+            b->setFontHeight (10.0f);
+            b->onClick = [this, i]
+            {
+                proc_.setVelocityCurve ((VelCurve) i, proc_.state.library.fixedVelocity());
+                refresh();
+            };
+            addAndMakeVisible (b);
+            chips_.add (b);
+        }
+
+        const auto s = "slot" + juce::String (slot_) + ".vel.";
+        fixed_ = std::make_unique<ParamKnob> (proc_, "velocity.fixed", "FIXED", &fixedSpec());
+        depth_ = std::make_unique<ParamKnob> (proc_, s + "depth", "DEPTH", &depthSpec());
+        offset_ = std::make_unique<ParamKnob> (proc_, s + "offset", "OFFSET", &depthSpec());
+        for (auto* k : { fixed_.get(), depth_.get(), offset_.get() })
+        {
+            k->onEdit = [this] { repaint(); };
+            addAndMakeVisible (k);
+        }
+
+        proc_.stateChanged.addChangeListener (this);
+        refresh();
+    }
+    ~VelocityPanel() override { proc_.stateChanged.removeChangeListener (this); }
+
+    /// The two knob specs are static because ParamKnob keeps a POINTER to the
+    /// spec it was handed and reads it for every value redraw.
+    static const ParamSpec& depthSpec()
+    {
+        static const ParamSpec s { "depth", "DEPTH", ParamKind::Float, 0.0f, 127.0f, 64.0f, {}, "" };
+        return s;
+    }
+    static const ParamSpec& fixedSpec()
+    {
+        static const ParamSpec s { "fixed", "FIXED", ParamKind::Float, 1.0f, 127.0f, 100.0f, {}, "" };
+        return s;
+    }
+
+    void refresh()
+    {
+        const auto cur = velCurveFromId (proc_.state.library.velocityCurveId());
+        for (int i = 0; i < chips_.size(); ++i)
+            chips_[i]->setToggleState (i == (int) cur, juce::dontSendNotification);
+        // FIXED means nothing unless the curve is Fixed, so it is disabled
+        // rather than merely ignored - a live knob that does nothing is worse
+        // than one that says it does nothing.
+        fixed_->setEnabled (cur == VelCurve::fixed);
+        fixed_->setAlpha (cur == VelCurve::fixed ? 1.0f : 0.35f);
+        for (auto* k : { fixed_.get(), depth_.get(), offset_.get() }) k->refresh();
+        repaint();
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto r = graphBounds().toFloat();
+        g.setColour (Theme::black.withAlpha (0.55f));
+        g.fillRoundedRectangle (r, 4.0f);
+        g.setColour (Theme::line.withAlpha (0.8f));
+        g.drawRoundedRectangle (r.reduced (0.5f), 4.0f, 1.0f);
+
+        for (int i = 1; i < 4; ++i)
+        {
+            const float fx = r.getX() + r.getWidth() * (float) i / 4.0f;
+            const float fy = r.getY() + r.getHeight() * (float) i / 4.0f;
+            g.setColour (Theme::line.withAlpha (0.35f));
+            g.drawLine (fx, r.getY(), fx, r.getBottom());
+            g.drawLine (r.getX(), fy, r.getRight(), fy);
+        }
+
+        // what it did before any of this
+        g.setColour (Theme::muted.withAlpha (0.35f));
+        g.drawLine (r.getX(), r.getBottom(), r.getRight(), r.getY(), 1.0f);
+
+        const auto curve = velCurveFromId (proc_.state.library.velocityCurveId());
+        const int fixedV = proc_.state.library.fixedVelocity();
+        auto& vs = proc_.state.slots[(size_t) slot_].vel;
+
+        auto plot = [&] (bool levelled)
+        {
+            juce::Path p;
+            for (int v = 1; v <= 127; ++v)
+            {
+                const int sv = engine_math::shapeVelocity (v, curve, fixedV);
+                const int y = levelled ? engine_math::levelVelocity (sv, vs.depth, vs.offset) : sv;
+                const float px = r.getX() + r.getWidth() * (float) (v - 1) / 126.0f;
+                const float py = r.getBottom() - r.getHeight() * (float) y / 127.0f;
+                if (v == 1) p.startNewSubPath (px, py); else p.lineTo (px, py);
+            }
+            return p;
+        };
+        // The level line is drawn FIRST and thicker: at the neutral 64/64 the
+        // two coincide exactly, and the one worth looking at then is the curve.
+        g.setColour (Theme::fmAccent.withAlpha (0.9f));
+        g.strokePath (plot (true), juce::PathStrokeType (3.0f));
+        g.setColour (Theme::gold);
+        g.strokePath (plot (false), juce::PathStrokeType (2.0f));
+
+        g.setFont (Theme::ui (10.0f));
+        g.setColour (Theme::muted);
+        g.drawText ("PLAYED  1", r.getX(), r.getBottom() + 2, 70, 12, juce::Justification::left);
+        g.drawText ("127", r.getRight() - 40, r.getBottom() + 2, 40, 12, juce::Justification::right);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds();
+        head_.setBounds (r.removeFromTop (18));
+        r.removeFromTop (6);
+
+        auto right = r.withTrimmedLeft (graphBounds().getWidth() + 20);
+        // Five chips on one row - the same five, in the same order, as the
+        // client's own keyboard lists them.
+        auto chipRow = right.removeFromTop (26);
+        const int cw = juce::jmin (64, (chipRow.getWidth() - 5 * (chips_.size() - 1)) / juce::jmax (1, chips_.size()));
+        for (int i = 0; i < chips_.size(); ++i)
+        {
+            chips_[i]->setBounds (chipRow.removeFromLeft (cw));
+            chipRow.removeFromLeft (5);
+        }
+        right.removeFromTop (14);
+        auto knobRow = right.removeFromTop (juce::jmin (96, right.getHeight()));
+        const int kw = juce::jmin (84, knobRow.getWidth() / 3);
+        fixed_->setBounds (knobRow.removeFromLeft (kw));
+        depth_->setBounds (knobRow.removeFromLeft (kw));
+        offset_->setBounds (knobRow.removeFromLeft (kw));
+    }
+
+private:
+    juce::Rectangle<int> graphBounds() const
+    {
+        const int side = juce::jmax (60, juce::jmin (getHeight() - 42, 170));
+        return { 0, 24, side, side };
+    }
+    void changeListenerCallback (juce::ChangeBroadcaster*) override { refresh(); }
+
+    JMSignatureProcessor& proc_;
+    int slot_;
+    juce::Label head_;
+    juce::OwnedArray<ux::PlateButton> chips_;
+    std::unique_ptr<ParamKnob> fixed_, depth_, offset_;
 };
 
 //==============================================================================
@@ -1556,12 +1984,11 @@ public:
             int i = 0;
             for (auto& spec : ctrls)
             {
-                const int* ctr = six ? L::mpSix[juce::jmin (i, 5)] : L::mpFive[juce::jmin (i, 4)];
                 auto* k = new ParamKnob (proc_, "slot" + slotStr + ".engine." + spec.id, spec.label, &spec);
                 k->setMotif (i % 5);
                 k->setAccent (Theme::worldAccent (world_));
                 k->setV2 (d, L::mpLabelOff, L::mpValueOff, 16.0f, 16.0f);
-                k->setBounds (juce::Rectangle<int> (d + 70, d + 100).withCentre ({ ctr[0], ctr[1] }));
+                k->setBounds (juce::Rectangle<int> (d + 70, d + 100).withCentre (heroKnobCentre (i, six)));
                 knobs_.add (k);
                 addAndMakeVisible (k);
                 ++i;
@@ -1578,6 +2005,10 @@ public:
                     auto* k = new ParamKnob (proc_, "slot" + slotStr + ".ampenv." + ids[i], labels[i]);
                     knobs_.add (k);
                     addAndMakeVisible (k);
+                    // resized() lays out `order_`, not knobs_. A tab that adds a
+                    // widget without adding it here gets no bounds at all and the
+                    // page comes up EMPTY - which is exactly what AMP ENV did.
+                    order_.add (k);
                 }
             }
             else if (tab_ == 2) // EQ — the slot rack's Vintage EQ unit
@@ -1666,7 +2097,16 @@ public:
                                     "Existing instruments are never overwritten.");
                 import->onClick = [this] { chooseX7lFiles(); };
                 addAndMakeVisible (import);
+#if MIREKU_PLAYER_BUILD
+                import->setVisible (false);        // the player's library is sealed; it imports nothing
+#endif
                 settingsWidgets_.add (import);
+
+                // Velocity response lives below the library row, as index 5.
+                // resized() keys off that index, so it must stay last.
+                auto* vel = new VelocityPanel (proc_, slot_);
+                addAndMakeVisible (vel);
+                settingsWidgets_.add (vel);
             }
             else                // INFO — bundle meta (incl. sound type: metadata only)
             {
@@ -1713,13 +2153,16 @@ public:
     // threadComplete on the message thread when it finishes or is cancelled, and
     // deletes itself afterwards - so the completion handler is a callback rather
     // than code after a blocking call.
+    /// (file path, plan instrument index) -> world 0..3 the artist chose.
+    using WorldChoices = std::map<std::pair<juce::String, int>, int>;
+
     struct ImportTask : public juce::ThreadWithProgressWindow
     {
-        ImportTask (juce::Array<juce::File> f, juce::File dest, juce::String who,
+        ImportTask (juce::Array<juce::File> f, juce::File dest, juce::String who, WorldChoices worlds,
                     std::function<void (bool, x7l::ImportReport)> done)
             : juce::ThreadWithProgressWindow ("Importing libraries", true, true),
               files (std::move (f)), destDir (std::move (dest)), author (std::move (who)),
-              onDone (std::move (done))
+              choices (std::move (worlds)), onDone (std::move (done))
         {
             setStatusMessage ("Reading...");
         }
@@ -1733,6 +2176,11 @@ public:
                 {
                     setProgress (p);
                     setStatusMessage (what);
+                },
+                [this] (const juce::File& f, int idx)
+                {
+                    auto it = choices.find ({ f.getFullPathName(), idx });
+                    return it == choices.end() ? -1 : it->second;
                 });
         }
 
@@ -1745,8 +2193,173 @@ public:
         juce::Array<juce::File> files;
         juce::File destDir;
         juce::String author;
+        WorldChoices choices;
         std::function<void (bool, x7l::ImportReport)> onDone;
         x7l::ImportReport report;
+    };
+
+    /// The read-and-plan pass that runs before the chooser: same shape as
+    /// ImportTask, writes nothing.
+    struct PreviewTask : public juce::ThreadWithProgressWindow
+    {
+        PreviewTask (juce::Array<juce::File> f, std::function<void (bool, std::vector<x7l::LibraryPreview>)> done)
+            : juce::ThreadWithProgressWindow ("Reading libraries", true, true),
+              files (std::move (f)), onDone (std::move (done))
+        {
+            setStatusMessage ("Reading...");
+        }
+        void run() override
+        {
+            previews = x7l::previewLibraries (files,
+                [this] { return threadShouldExit(); },
+                [this] (const juce::String& what, double p) { setProgress (p); setStatusMessage (what); });
+        }
+        void threadComplete (bool userCancelled) override
+        {
+            if (onDone) onDone (! userCancelled, previews);
+            delete this;
+        }
+        juce::Array<juce::File> files;
+        std::function<void (bool, std::vector<x7l::LibraryPreview>)> onDone;
+        std::vector<x7l::LibraryPreview> previews;
+    };
+
+    //================================================ WHERE SHOULD THESE GO?
+    // Between reading and writing: one row per instrument the import would make,
+    // each with a world menu defaulting to the importer's guess from the name.
+    // The artist asked for this after the Full Expansion import filed his
+    // sounds by their waveform names - he knows where his own pianos belong.
+    struct WorldChooser : public juce::Component
+    {
+        WorldChooser (std::vector<x7l::LibraryPreview> p, std::function<void (WorldChoices)> onImport)
+            : previews (std::move (p)), go (std::move (onImport))
+        {
+            title.setText ("Where should these go?", juce::dontSendNotification);
+            title.setFont (Theme::display (17.0f));
+            title.setColour (juce::Label::textColourId, Theme::gold);
+            addAndMakeVisible (title);
+
+            hint.setText ("Each instrument is filed under the world the importer guessed from its name. "
+                          "Change any of them, or set them all at once.", juce::dontSendNotification);
+            hint.setFont (Theme::ui (12.0f));
+            hint.setColour (juce::Label::textColourId, Theme::muted);
+            addAndMakeVisible (hint);
+
+            allLabel.setText ("ALL", juce::dontSendNotification);
+            allLabel.setFont (Theme::ui (11.0f));
+            allLabel.setColour (juce::Label::textColourId, Theme::cream);
+            addAndMakeVisible (allLabel);
+            all.addItem ("Each its own", 1);
+            for (int w = 0; w < 4; ++w) all.addItem (worldName (w), w + 2);
+            all.setSelectedId (1, juce::dontSendNotification);
+            all.onChange = [this]
+            {
+                const int id = all.getSelectedId();
+                if (id < 2) return;
+                for (auto& r : rows) r->box.setSelectedId (id - 1, juce::dontSendNotification);
+            };
+            addAndMakeVisible (all);
+
+            for (auto& lp : previews)
+            {
+                if (! lp.ok) continue;
+                for (auto& in : lp.instruments)
+                {
+                    auto* r = rows.add (new Row());
+                    r->key = { lp.file.getFullPathName(), in.index };
+                    r->name.setText (in.name, juce::dontSendNotification);
+                    r->name.setFont (Theme::ui (13.0f));
+                    r->name.setColour (juce::Label::textColourId, Theme::cream);
+                    r->detail.setText (juce::String (in.sampleCount) + " samples, "
+                                       + juce::String ((double) in.bytes / 1048576.0, 0) + " MB"
+                                       + (previews.size() > 1 ? " - " + lp.file.getFileName() : juce::String()),
+                                       juce::dontSendNotification);
+                    r->detail.setFont (Theme::ui (11.0f));
+                    r->detail.setColour (juce::Label::textColourId, Theme::muted);
+                    for (int w = 0; w < 4; ++w) r->box.addItem (worldName (w), w + 1);
+                    r->box.setSelectedId (juce::jlimit (0, 3, in.world) + 1, juce::dontSendNotification);
+                    r->box.onChange = [this] { all.setSelectedId (1, juce::dontSendNotification); };
+                    r->addAndMakeVisible (r->name);
+                    r->addAndMakeVisible (r->detail);
+                    r->addAndMakeVisible (r->box);
+                    list.addAndMakeVisible (r);
+                }
+            }
+            view.setViewedComponent (&list, false);
+            view.setScrollBarsShown (true, false);
+            addAndMakeVisible (view);
+
+            importBtn.onClick = [this]
+            {
+                WorldChoices out;
+                for (auto* r : rows) out[r->key] = r->box.getSelectedId() - 1;
+                auto fn = go;
+                dismiss();
+                if (fn) fn (std::move (out));
+            };
+            cancelBtn.onClick = [this] { dismiss(); };
+            addAndMakeVisible (importBtn);
+            addAndMakeVisible (cancelBtn);
+
+            setSize (560, juce::jlimit (260, 620, 150 + rows.size() * kRowH + 56));
+        }
+
+        void dismiss()
+        {
+            if (auto* dw = findParentComponentOfClass<juce::DialogWindow>()) dw->exitModalState (0);
+        }
+
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (juce::Colour (0xff0B0A09));
+            g.setColour (Theme::gold.withAlpha (0.25f));
+            g.drawRect (getLocalBounds(), 1);
+        }
+
+        void resized() override
+        {
+            auto b = getLocalBounds().reduced (18);
+            title.setBounds (b.removeFromTop (26));
+            hint.setBounds (b.removeFromTop (34));
+            auto allRow = b.removeFromTop (28);
+            allLabel.setBounds (allRow.removeFromLeft (40));
+            all.setBounds (allRow.removeFromLeft (170));
+            b.removeFromTop (8);
+            auto buttons = b.removeFromBottom (36);
+            cancelBtn.setBounds (buttons.removeFromRight (120).reduced (0, 4));
+            buttons.removeFromRight (10);
+            importBtn.setBounds (buttons.removeFromRight (120).reduced (0, 4));
+            b.removeFromBottom (10);
+            view.setBounds (b);
+            list.setSize (b.getWidth() - 10, rows.size() * kRowH);
+            int y = 0;
+            for (auto* r : rows)
+            {
+                r->setBounds (0, y, list.getWidth(), kRowH);
+                auto rb = r->getLocalBounds().reduced (0, 4);
+                r->box.setBounds (rb.removeFromRight (150));
+                rb.removeFromRight (10);
+                r->name.setBounds (rb.removeFromTop (rb.getHeight() / 2));
+                r->detail.setBounds (rb);
+                y += kRowH;
+            }
+        }
+
+        static constexpr int kRowH = 44;
+        struct Row : public juce::Component
+        {
+            std::pair<juce::String, int> key;
+            juce::Label name, detail;
+            juce::ComboBox box;
+        };
+        std::vector<x7l::LibraryPreview> previews;
+        std::function<void (WorldChoices)> go;
+        juce::Label title, hint, allLabel;
+        juce::ComboBox all;
+        juce::Viewport view;
+        juce::Component list;
+        juce::OwnedArray<Row> rows;
+        ux::PlateButton importBtn { "IMPORT" }, cancelBtn { "CANCEL" };
     };
 
     void chooseX7lFiles()
@@ -1777,9 +2390,44 @@ public:
             return;
         }
         // The panel can be rebuilt or destroyed while the import runs, so the
-        // completion handler holds a SafePointer and checks it.
+        // completion handlers hold a SafePointer and check it.
         juce::Component::SafePointer<ModelPagePanel> safe (this);
-        auto* task = new ImportTask (files, dest, "James Mireku",
+
+        // 1. read and plan; 2. ask where each instrument goes; 3. write.
+        auto* preview = new PreviewTask (files,
+            [safe, files, dest] (bool finished, std::vector<x7l::LibraryPreview> previews)
+            {
+                auto* self = safe.getComponent();
+                if (self == nullptr || ! finished) return;
+                int instruments = 0;
+                for (auto& p : previews) instruments += (int) p.instruments.size();
+                if (instruments == 0)
+                {
+                    // Nothing to place: run the import anyway so its report
+                    // says exactly why each file was refused.
+                    self->launchX7lImport (files, dest, {});
+                    return;
+                }
+                juce::DialogWindow::LaunchOptions o;
+                o.dialogTitle = "Import libraries";
+                o.dialogBackgroundColour = juce::Colour (0xff0B0A09);
+                o.escapeKeyTriggersCloseButton = true;
+                o.useNativeTitleBar = false;
+                o.resizable = false;
+                o.content.setOwned (new WorldChooser (std::move (previews),
+                    [safe, files, dest] (WorldChoices choices)
+                    {
+                        if (auto* s = safe.getComponent()) s->launchX7lImport (files, dest, std::move (choices));
+                    }));
+                o.launchAsync();
+            });
+        preview->launchThread();
+    }
+
+    void launchX7lImport (const juce::Array<juce::File>& files, const juce::File& dest, WorldChoices choices)
+    {
+        juce::Component::SafePointer<ModelPagePanel> safe (this);
+        auto* task = new ImportTask (files, dest, "James Mireku", std::move (choices),
             [safe] (bool finished, x7l::ImportReport report) mutable
             {
                 auto lines = report.summaryLines();
@@ -1820,6 +2468,24 @@ public:
         for (auto* c : choices_) c->setVisible (v);
     }
 
+    /// WIDE SCREENS: the stage can be wider than its 3:2 width. The knob
+    /// surface takes the extra, the meter rides on its right, the tab strip
+    /// spans the stage, and the hero knobs spread across the surface in the
+    /// same proportions as on the approved layout.
+    int extraW() const { return juce::jmax (0, getWidth() - Theme::L::centerW); }
+    juce::Rectangle<int> surfaceRect() const
+    {
+        using L = Theme::L;
+        return { L::mpSurfX, L::mpSurfY, L::mpSurfW + extraW(), L::mpSurfH };
+    }
+    juce::Point<int> heroKnobCentre (int i, bool six) const
+    {
+        using L = Theme::L;
+        const int* ctr = six ? L::mpSix[juce::jmin (i, 5)] : L::mpFive[juce::jmin (i, 4)];
+        const float sx = (float) (L::mpSurfW + extraW()) / (float) L::mpSurfW;
+        return { L::mpSurfX + juce::roundToInt ((float) (ctr[0] - L::mpSurfX) * sx), ctr[1] };
+    }
+
     void resized() override
     {
         using L = Theme::L;
@@ -1828,17 +2494,24 @@ public:
         prevBtn_->setBounds (cx - 242, L::mpTitleY + 4, 26, 26);
         nextBtn_->setBounds (cx + 216, L::mpTitleY + 4, 26, 26);
         heartBtn_->setBounds (cx + 254, L::mpTitleY + 4, 26, 26);
-        meter_.setBounds (L::mpMeterX, L::mpMeterY, L::mpMeterW, L::mpMeterH);
+        meter_.setBounds (L::mpMeterX + extraW(), L::mpMeterY, L::mpMeterW, L::mpMeterH);
 
-        tabStrip_.setBounds (L::mpTabsX, L::mpTabsY, L::mpTabsW, L::mpTabsH);
+        tabStrip_.setBounds (L::mpTabsX, L::mpTabsY, L::mpTabsW + extraW(), L::mpTabsH);
         {
             auto tr = tabStrip_.getBounds().reduced (4, 4);
             const int tw = tr.getWidth() / 5;
             for (int i = 0; i < 5; ++i)
                 tabs_[(size_t) i].setBounds (tr.removeFromLeft (i == 4 ? tr.getWidth() : tw));
         }
+        if (tab_ == 0)
+        {
+            const bool six = knobs_.size() == 6;
+            for (int i = 0; i < knobs_.size(); ++i)
+                knobs_[i]->setBounds (juce::Rectangle<int> (L::mpKnobD + 70, L::mpKnobD + 100)
+                                          .withCentre (heroKnobCentre (i, six)));
+        }
 
-        const juce::Rectangle<int> surface (L::mpSurfX, L::mpSurfY, L::mpSurfW, L::mpSurfH);
+        const juce::Rectangle<int> surface = surfaceRect();
         if (browser_ != nullptr) browser_->setBounds (surface.reduced (60, 16));
 
         auto area = surface.reduced (40);
@@ -1857,6 +2530,11 @@ public:
                 row.removeFromLeft (12);
                 settingsWidgets_[4]->setBounds (row.removeFromLeft (180));
             }
+            if (settingsWidgets_.size() > 5)
+            {
+                r.removeFromTop (18);
+                settingsWidgets_[5]->setBounds (r);
+            }
             return;
         }
         if (infoText_ != nullptr) { infoText_->setBounds (area.reduced (16)); return; }
@@ -1867,6 +2545,11 @@ public:
             // parameter list read in two different orders depending on which
             // panel it was drawn in.
             const juce::Array<juce::Component*>& items = order_;
+            // Widgets but no layout order means a tab built its controls and
+            // forgot to register them: every one would sit at zero size and the
+            // page would look empty. Catch it in development rather than in a
+            // screenshot from the artist.
+            jassert (! (items.isEmpty() && (knobs_.size() + choices_.size()) > 0));
             if (items.isEmpty()) return;
             const int perRow = juce::jmin (3, items.size());
             const int rows = (items.size() + perRow - 1) / perRow;
@@ -1920,8 +2603,7 @@ public:
 
         if (tab_ != 0 || browser_ != nullptr)   // overlay plaque over the surface
         {
-            auto surf = juce::Rectangle<float> ((float) L::mpSurfX, (float) L::mpSurfY,
-                                                (float) L::mpSurfW, (float) L::mpSurfH);
+            auto surf = surfaceRect().toFloat();
             g.setColour (juce::Colour (0xff0A0805).withAlpha (0.96f));
             g.fillRoundedRectangle (surf, 12.0f);
             g.setColour (Theme::goldDark);
@@ -1963,8 +2645,12 @@ public:
         g.setColour (Theme::gold.withAlpha (0.62f));
         g.drawRoundedRectangle (r.reduced (0.5f), 10.0f, 1.8f);
 
+        // the knob surface spans the stage: its right margin is the one the
+        // 3:2 layout has, whatever the stage's width (WIDE SCREENS)
+        using L = Theme::L;
         auto surf = juce::Rectangle<float> (r.getX() + L::mpSurfX, r.getY() + L::mpSurfY,
-                                            (float) L::mpSurfW, (float) L::mpSurfH);
+                                            r.getWidth() - L::mpSurfX - (L::centerW - L::mpSurfX - L::mpSurfW),
+                                            (float) L::mpSurfH);
         g.setColour (juce::Colours::black.withAlpha (0.5f));
         g.fillRoundedRectangle (surf.translated (0.0f, 4.0f), 14.0f);
         g.setColour (juce::Colour (0xff080604).withAlpha (0.93f));

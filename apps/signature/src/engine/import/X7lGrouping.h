@@ -284,7 +284,7 @@ inline std::vector<std::vector<const Waveform*>> findKeySplitGroups (const std::
     {
         if (wf.keyzones.empty()) continue;
         const auto key = velocitySplitKey (wf) + "|" + juce::String (wf.channels) + "|"
-                       + juce::String ((int) wf.keyzones[0].sampleRate);
+                       + juce::String ((int) nominalSampleRate (wf.keyzones[0].sampleRate));
         int at = poolKeys.indexOf (key);
         if (at < 0) { poolKeys.add (key); pools.push_back ({ &wf }); }
         else pools[(size_t) at].push_back (&wf);
@@ -561,12 +561,12 @@ inline DpfmPlan dpfmPlan (const Library& lib, const DpfmDecode& decode)
         for (int i : body) if (splits[(size_t) i] != 1) return false;
         const auto& w0 = lib.waveforms[(size_t) body[0]];
         const int ch = w0.channels;
-        const auto sr = w0.keyzones[0].sampleRate;
+        const auto sr = nominalSampleRate (w0.keyzones[0].sampleRate);
         for (int i : body)
         {
             const auto& w = lib.waveforms[(size_t) i];
             if (w.channels != ch) return false;
-            for (auto& z : w.keyzones) if (z.sampleRate != sr) return false;
+            for (auto& z : w.keyzones) if (nominalSampleRate (z.sampleRate) != sr) return false;
         }
         return true;
     };

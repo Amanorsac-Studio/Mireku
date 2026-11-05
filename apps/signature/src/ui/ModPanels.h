@@ -225,6 +225,35 @@ public:
 
     void contentResized (juce::Rectangle<int> area) override
     {
+        if (docked_)
+        {
+            // THE EDIT PAGE: wide and short. The LFO tabs and the scope take
+            // the left, the knobs and the menus sit to their right in two rows.
+            auto left = area.removeFromLeft (juce::jmin (470, area.getWidth() / 2));
+            strip_.setBounds (left.removeFromTop (30).withWidth (300));
+            const int cw = strip_.getWidth() / kNumLfos;
+            for (int i = 0; i < kNumLfos; ++i) tabs_[i]->setBounds (i * cw, 0, cw, strip_.getHeight());
+            left.removeFromTop (10);
+            scope_.setBounds (left.withTrimmedBottom (22));
+            area.removeFromLeft (34);
+            area.removeFromTop (16);
+            auto row = area.removeFromTop (96);
+            auto cell = [&] (int w) { auto c = row.removeFromLeft (w); row.removeFromLeft (10); return c; };
+            rate_->setBounds (cell (104));
+            phase_->setBounds (cell (104));
+            fade_->setBounds (cell (104));
+            area.removeFromTop (28);
+            auto r1 = area.removeFromTop (30);
+            shape_.setBounds (r1.removeFromLeft (150));
+            r1.removeFromLeft (12);
+            sync_.setBounds (r1.removeFromLeft (56).withSizeKeepingCentre (52, 22));
+            r1.removeFromLeft (16);
+            div_.setBounds (r1.removeFromLeft (110));
+            r1.removeFromLeft (12);
+            retrig_.setBounds (r1.removeFromLeft (128));
+            labelRow_ = { shape_.getX(), shape_.getY() - 14, area.getWidth(), 12 };
+            return;
+        }
         strip_.setBounds (area.removeFromTop (34));
         const int cw = strip_.getWidth() / kNumLfos;
         for (int i = 0; i < kNumLfos; ++i)
@@ -270,7 +299,7 @@ public:
         g.setColour (Theme::muted.withAlpha (0.75f));
         g.setFont (Theme::ui (10.5f));
         g.drawText ("GLOBAL - ONE PHASE SHARED BY EVERY VOICE. DEPTH LIVES ON EACH MATRIX ROW.",
-                    16, getHeight() - 26, getWidth() - 32, 14, juce::Justification::centredLeft, false);
+                    16, noteY (docked_ ? 20 : 26), getWidth() - 32, 14, juce::Justification::centredLeft, false);
     }
 
 private:
@@ -503,6 +532,12 @@ public:
             for (auto* e : rows_) e->refresh();
         };
         addAndMakeVisible (clear_);
+        // the rows scroll inside the band when the panel is docked; as an
+        // overlay the panel is tall enough that nothing scrolls
+        view_.setViewedComponent (&holder_, false);
+        view_.setScrollBarsShown (true, false);
+        view_.setScrollBarThickness (8);
+        addAndMakeVisible (view_);
         rebuild();
     }
 
@@ -514,7 +549,7 @@ public:
         {
             auto* e = new MatrixRowEditor (proc_, i, [this] { repaint(); });
             rows_.add (e);
-            addAndMakeVisible (e);
+            holder_.addAndMakeVisible (e);
         }
         resized();
         repaint();
@@ -524,8 +559,14 @@ public:
     {
         auto head = area.removeFromTop (26);
         clear_.setBounds (head.removeFromRight (100).reduced (0, 1));
-        area.removeFromTop (10);
-        for (auto* e : rows_) e->setBounds (area.removeFromTop (kRowH));
+        noteY_ = head.getY() + 4;
+        area.removeFromTop (docked_ ? 6 : 10);
+        view_.setBounds (area);
+        const bool scrolls = rows_.size() * kRowH > area.getHeight();
+        const int w = area.getWidth() - (scrolls ? 10 : 0);
+        holder_.setSize (w, juce::jmax (area.getHeight(), rows_.size() * kRowH));
+        int y = 0;
+        for (auto* e : rows_) { e->setBounds (0, y, w, kRowH); y += kRowH; }
     }
 
     void paint (juce::Graphics& g) override
@@ -537,12 +578,15 @@ public:
         // say it (research §1.1): our depth is TOTAL SWING, not swing per side.
         g.drawText ("DEPTH IS TOTAL SWING: A BIPOLAR SOURCE AT 50% MOVES THE KNOB BY +-25%. "
                     "ROWS SHARING A DESTINATION ADD, THEN CLAMP.",
-                    18, 56, getWidth() - 140, 16, juce::Justification::centredLeft, false);
+                    18, noteY_, getWidth() - 140, 16, juce::Justification::centredLeft, false);
     }
 
 private:
     JMSignatureProcessor& proc_;
     ux::PlateButton clear_;
+    juce::Viewport view_;
+    juce::Component holder_;
+    int noteY_ = 56;
     juce::OwnedArray<MatrixRowEditor> rows_;
 };
 
@@ -707,6 +751,54 @@ public:
 
     void contentResized (juce::Rectangle<int> area) override
     {
+        if (docked_)
+        {
+            // THE EDIT PAGE: two rows across the band. Row one: on / slots /
+            // hold, then the mode and timing menus. Row two: the knobs and the
+            // velocity controls. The two footnotes sit at the band's foot.
+            area.removeFromTop (14);
+            auto head = area.removeFromTop (30);
+            power_.setBounds (head.removeFromLeft (60).withSizeKeepingCentre (52, 24));
+            head.removeFromLeft (26);
+            for (int i = 0; i < 4; ++i)
+            {
+                slot_[(size_t) i].setBounds (head.removeFromLeft (40).reduced (2, 1));
+                head.removeFromLeft (4);
+            }
+            head.removeFromLeft (30);
+            hold_.setBounds (head.removeFromLeft (56).withSizeKeepingCentre (52, 24));
+            head.removeFromLeft (44);
+            mode_.setBounds (head.removeFromLeft (150));
+            head.removeFromLeft (14);
+            turn_.setBounds (head.removeFromLeft (140));
+            head.removeFromLeft (24);
+            div_.setBounds (head.removeFromLeft (100));
+            head.removeFromLeft (12);
+            sync_.setBounds (head.removeFromLeft (56).withSizeKeepingCentre (52, 22));
+            head.removeFromLeft (24);
+            oct_.setBounds (head.removeFromLeft (60));
+            head.removeFromLeft (12);
+            octDir_.setBounds (head.removeFromLeft (100));
+
+            area.removeFromTop (22);
+            auto knobs = area.removeFromTop (104);
+            auto cell = [&] (int w) { auto c = knobs.removeFromLeft (w); knobs.removeFromLeft (12); return c; };
+            rate_->setBounds (cell (110));
+            gate_->setBounds (cell (110));
+            swing_->setBounds (cell (150));
+            knobs.removeFromLeft (40);
+            fixed_->setBounds (knobs.removeFromLeft (104));
+            knobs.removeFromLeft (18);
+            auto vr = knobs.withSizeKeepingCentre (knobs.getWidth(), 28).translated (0, 8);
+            vel_.setBounds (vr.removeFromLeft (150));
+            vr.removeFromLeft (24);
+            for (int i = 0; i < 4; ++i)
+            {
+                accent_[(size_t) i].setBounds (vr.removeFromLeft (36));
+                vr.removeFromLeft (5);
+            }
+            return;
+        }
         auto head = area.removeFromTop (30);
         power_.setBounds (head.removeFromLeft (60).withSizeKeepingCentre (52, 24));
         head.removeFromLeft (26);
@@ -782,19 +874,20 @@ public:
         g.setColour (Theme::muted.withAlpha (0.8f));
         g.setFont (Theme::ui (10.5f));
         g.drawText ("SWING: OFFBEAT SITS AT 0.5 + SWING/300 OF THE PAIR - 0% STRAIGHT, 50% TRIPLET, 75% MAX.",
-                    18, getHeight() - 44, getWidth() - 36, 14, juce::Justification::centredLeft, false);
+                    18, noteY (docked_ ? 36 : 44), getWidth() - 36, 14, juce::Justification::centredLeft, false);
         g.drawText ("SUSTAIN PEDAL LATCHES THE ARP (IT HOLDS THE KEYS, NOT THE SOUND). "
                     "SLOTS WITH THE ARP OFF PLAY THE CHORD AS PLAYED AND SUSTAIN NORMALLY.",
-                    18, getHeight() - 28, getWidth() - 36, 14, juce::Justification::centredLeft, false);
+                    18, noteY (docked_ ? 20 : 28), getWidth() - 36, 14, juce::Justification::centredLeft, false);
 
         // live lamp: lit while the arp is actually generating notes
         const bool live = proc_.arp.patternLength() > 0 && arpConst().enabled != 0;
+        const float lampY = docked_ ? 16.0f : 60.0f;
         g.setColour (live ? Theme::okGreen : Theme::goldDark.withAlpha (0.6f));
-        g.fillEllipse ((float) getWidth() - 128.0f, 60.0f, 9.0f, 9.0f);
+        g.fillEllipse ((float) getWidth() - 128.0f, lampY, 9.0f, 9.0f);
         g.setColour (live ? Theme::goldHi : Theme::muted);
         g.setFont (Theme::value (11.0f));
         g.drawText (proc_.arp.latchIsActive() ? "LATCHED" : (live ? "RUNNING" : "IDLE"),
-                    getWidth() - 114, 54, 96, 20, juce::Justification::centredLeft, false);
+                    getWidth() - 114, (int) lampY - 6, 96, 20, juce::Justification::centredLeft, false);
     }
 
 private:

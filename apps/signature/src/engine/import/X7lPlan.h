@@ -86,10 +86,17 @@ struct InstrumentPlan
     bool fromDpfm = false;
 };
 
+/// An instrument the planner could not lay out; the rest of the library still imports.
+struct SkippedInstrument
+{
+    juce::String name, reason;
+};
+
 struct ImportPlan
 {
     juce::String version;
     std::vector<InstrumentPlan> instruments;
+    std::vector<SkippedInstrument> skipped;
     juce::int64 totalPcmBytes = 0;
     juce::StringArray notes;
 };
@@ -226,6 +233,52 @@ struct PlanError : public std::runtime_error
 };
 
 /// Lay out one instrument: its velocity windows, key map and zones.
+namespace planDetail {
+
+/// Velocity windows stated by the waveform names (see planInstrument).
+struct NamedBounds
+{
+    std::vector<const Unit*> order;      ///< quietest window first
+    std::vector<VelWindow> windows;      ///< one per unit, tiling 1..127
+};
+
+/// Every unit must be a single waveform whose name ends in an integer; the
+/// integers must be distinct, lie in 1..127, and the largest must be 127 (the
+/// top window always reaches the top). Sorted ascending they are the windows'
+/// upper bounds; each lower bound is the previous upper bound plus one. Two to
+/// sixteen layers (the schema's limit).
+inline bool namedVelocityBounds (const std::vector<const Unit*>& units, NamedBounds& out)
+{
+    if (units.size() < 2 || units.size() > 16) return false;
+    std::vector<std::pair<int, const Unit*>> tagged;
+    for (auto* u : units)
+    {
+        if (u->members.size() != 1) return false;
+        const auto name = u->members[0]->name.trimEnd();
+        int digits = 0;
+        while (digits < name.length() && digits < 3
+               && juce::CharacterFunctions::isDigit (name[name.length() - 1 - digits])) ++digits;
+        if (digits == 0) return false;
+        const int hi = name.getLastCharacters (digits).getIntValue();
+        if (hi < 1 || hi > 127) return false;
+        tagged.push_back ({ hi, u });
+    }
+    std::sort (tagged.begin(), tagged.end(), [] (auto& a, auto& b) { return a.first < b.first; });
+    for (size_t i = 1; i < tagged.size(); ++i) if (tagged[i].first == tagged[i - 1].first) return false;
+    if (tagged.back().first != 127) return false;
+    out = {};
+    int lo = 1;
+    for (auto& [hi, u] : tagged)
+    {
+        out.order.push_back (u);
+        out.windows.push_back ({ lo, hi });
+        lo = hi + 1;
+    }
+    return true;
+}
+
+} // namespace planDetail
+
 inline InstrumentPlan planInstrument (const std::vector<const planDetail::Unit*>& unitGroup,
                                       const std::vector<double>& levelsDb, int index,
                                       juce::StringArray& usedNames, const Library& lib,
@@ -283,8 +336,36 @@ inline InstrumentPlan planInstrument (const std::vector<const planDetail::Unit*>
         if (! haveDpfmOrder) dpfmOrdered.clear();
     }
 
+    // Failing a DPFM split, the waveform NAMES may state the windows: "EP2C
+    // Velocity 15" .. "EP2C Velocity 127" is eight layers whose names end in
+    // each layer's top velocity. Those numbers are the library author's
+    // windows, not an inference, so they are used as given and the four-window
+    // cap on invented bands does not apply.
+    NamedBounds named;
+    const bool haveNamed = ! haveDpfmOrder && namedVelocityBounds (unitGroup, named);
+
     std::vector<const Unit*> byLevel;
     if (haveDpfmOrder) byLevel = dpfmOrdered;
+    else if (haveNamed)
+    {
+        byLevel = named.order;
+        juce::StringArray tops, spans;
+        for (auto& w : named.windows)
+        {
+            tops.add (juce::String (w.hi));
+            spans.add (juce::String (w.lo) + "-" + juce::String (w.hi));
+        }
+        notes.add ("Velocity windows were taken from the waveform names, which end in each layer's top "
+                   "velocity (" + tops.joinIntoString (", ") + "): " + spans.joinIntoString (", ") + ".");
+        auto measured = byLevel;
+        std::stable_sort (measured.begin(), measured.end(), [&] (const Unit* a, const Unit* b)
+                          { return unitLevel (a) < unitLevel (b); });
+        bool differs = false;
+        for (size_t i = 0; i < measured.size(); ++i) if (measured[i] != byLevel[i]) differs = true;
+        if (differs)
+            notes.add ("The measured peak levels of these waveforms do not rise in the order their names put "
+                       "them in. The named order was kept: it is what the library author built.");
+    }
     else
     {
         byLevel = unitGroup;
@@ -366,6 +447,11 @@ inline InstrumentPlan planInstrument (const std::vector<const planDetail::Unit*>
                                 lib.waveforms[(size_t) dpfm->windows[i].waveformIndex].name + " vel "
                                     + juce::String (dpfm->windows[i].lo) + "-"
                                     + juce::String (dpfm->windows[i].hi) });
+    else if (haveNamed)
+        for (size_t i = 0; i < named.order.size(); ++i)
+            layers.push_back ({ named.order[i], false, {},
+                                unitLabel (named.order[i]) + " vel " + juce::String (named.windows[i].lo) + "-"
+                                    + juce::String (named.windows[i].hi) });
     else
         for (auto* u : byLevel) layers.push_back ({ u, false, {}, unitLabel (u) });
 
@@ -400,6 +486,11 @@ inline InstrumentPlan planInstrument (const std::vector<const planDetail::Unit*>
     {
         for (size_t i = 0; i < dpfm->windows.size(); ++i)
             rawWindows.push_back ({ dpfm->windows[i].lo, dpfm->windows[i].hi, { (int) i } });
+    }
+    else if (haveNamed)
+    {
+        for (size_t i = 0; i < named.windows.size(); ++i)
+            rawWindows.push_back ({ named.windows[i].lo, named.windows[i].hi, { (int) i } });
     }
     else if (splitsUsable)
     {
@@ -580,7 +671,7 @@ inline InstrumentPlan planInstrument (const std::vector<const planDetail::Unit*>
                              + (out.channels == 2 ? "stereo" : "mono")
                              + "; a .jmi bundle has one channel count for every sample in it.");
         for (auto& z : wf->keyzones)
-            if (z.sampleRate != templateUnit->members[0]->keyzones[0].sampleRate)
+            if (nominalSampleRate (z.sampleRate) != nominalSampleRate (templateUnit->members[0]->keyzones[0].sampleRate))
                 throw PlanError ("Key-off waveform \"" + wf->name + "\" is "
                                  + juce::String ((int) z.sampleRate) + " Hz but \"" + name + "\" is "
                                  + juce::String ((int) templateUnit->members[0]->keyzones[0].sampleRate)
@@ -593,7 +684,36 @@ inline InstrumentPlan planInstrument (const std::vector<const planDetail::Unit*>
     out.keyzoneCount = (int) roots.size();
     out.keyRangeLo = lo;
     out.keyRangeHi = hi;
-    out.sampleRate = templateUnit->members[0]->keyzones[0].sampleRate;
+    // The bundle's rate is the schema rate nearest the source's. Keyzones tuned
+    // by rate (see plausibleSampleRate) keep their true rate in their own WAV.
+    out.sampleRate = nominalSampleRate (templateUnit->members[0]->keyzones[0].sampleRate);
+    {
+        juce::uint32 lo = 0, hi = 0;
+        int tuned = 0;
+        for (auto* wf : allWaveforms)
+            for (auto& z : wf->keyzones)
+                if (z.sampleRate != out.sampleRate)
+                {
+                    ++tuned;
+                    lo = lo == 0 ? z.sampleRate : juce::jmin (lo, z.sampleRate);
+                    hi = juce::jmax (hi, z.sampleRate);
+                }
+        for (auto* wf : releaseWaveforms)
+            for (auto& z : wf->keyzones)
+                if (z.sampleRate != out.sampleRate)
+                {
+                    ++tuned;
+                    lo = lo == 0 ? z.sampleRate : juce::jmin (lo, z.sampleRate);
+                    hi = juce::jmax (hi, z.sampleRate);
+                }
+        if (tuned > 0)
+            out.notes.add (juce::String (tuned) + " sample(s) are tuned by rate in the source ("
+                           + juce::String ((int) lo) + ".." + juce::String ((int) hi) + " Hz, within "
+                           + juce::String (1200.0 * std::log2 ((double) juce::jmax (hi, out.sampleRate) / (double) juce::jmin (lo, out.sampleRate)), 1)
+                           + " cents of " + juce::String ((int) out.sampleRate)
+                           + "); each keeps its true rate in its own WAV, which the player honours, and the "
+                             "bundle is declared at the nominal rate.");
+    }
     out.bundleName = bundleFolderName (name);
     out.world = inferWorld (name);
     for (auto& l : layers) out.layerNames.add (l.label);
@@ -679,13 +799,42 @@ inline ImportPlan planImport (const Library& lib, const DpfmDecode& decode,
         return keys.size() == 1 ? keys[0] : juce::String();
     };
 
+    // Names ending in each layer's top velocity ("EP2C Velocity 15" .. "127")
+    // group as one instrument even without a DPFM. Left to the stem rule they
+    // would not: it strips a one- or two-digit tail but not "111" or "127", so
+    // the eight would come out as three instruments.
+    std::map<const Unit*, juce::String> namedKey;
+    {
+        std::map<juce::String, std::vector<const Unit*>> byBase;
+        for (auto& u : units)
+        {
+            if (u.members.size() != 1 || dpfmKeyFor (u).isNotEmpty()) continue;
+            const auto name = u.members[0]->name.trimEnd();
+            int digits = 0;
+            while (digits < name.length() && digits < 3
+                   && juce::CharacterFunctions::isDigit (name[name.length() - 1 - digits])) ++digits;
+            if (digits == 0) continue;
+            const auto base = name.dropLastCharacters (digits).trim().toLowerCase();
+            byBase[u.signature + "||" + base].push_back (&u);
+        }
+        for (auto& [k, list] : byBase)
+        {
+            NamedBounds nb;
+            if (namedVelocityBounds (list, nb))
+                for (auto* u : list) namedKey[u] = "named:" + k;
+        }
+    }
+
     juce::StringArray groupKeys;
     std::vector<std::vector<const Unit*>> groups;
     std::map<juce::String, const DpfmInstrument*> groupDpfm;
     for (auto& u : units)
     {
         const auto dk = dpfmKeyFor (u);
-        const auto key = dk.isNotEmpty() ? dk : (u.signature + "||" + u.stem.toLowerCase());
+        const auto nk = namedKey.find (&u);
+        const auto key = dk.isNotEmpty() ? dk
+                       : nk != namedKey.end() ? nk->second
+                       : (u.signature + "||" + u.stem.toLowerCase());
         if (dk.isNotEmpty())
         {
             auto it = dpfm.groups.find (dk);
@@ -698,13 +847,24 @@ inline ImportPlan planImport (const Library& lib, const DpfmDecode& decode,
 
     juce::StringArray usedNames;
     int index = 0;
+    // One instrument that cannot be laid out does not sink the library: it is
+    // reported and the rest still plan. The 2026 "Full Expansion" library would
+    // otherwise have lost 26 waveforms to one unplannable eight-layer set.
     for (size_t gi = 0; gi < groups.size(); ++gi)
     {
         auto it = groupDpfm.find (groupKeys[(int) gi]);
         const DpfmInstrument* gd = it == groupDpfm.end() ? nullptr : it->second;
-        plan.instruments.push_back (
-            planInstrument (groups[gi], levelsDb, index, usedNames, lib, gd));
-        ++index;
+        try
+        {
+            plan.instruments.push_back (planInstrument (groups[gi], levelsDb, index, usedNames, lib, gd));
+            ++index;
+        }
+        catch (const std::exception& e)
+        {
+            juce::StringArray names;
+            for (auto* u : groups[gi]) names.addIfNotAlreadyThere (u->stem.isNotEmpty() ? u->stem : u->members[0]->name);
+            plan.skipped.push_back ({ names.joinIntoString (" + "), e.what() });
+        }
     }
     return plan;
 }

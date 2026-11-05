@@ -21,6 +21,10 @@ on:
         description: "Build a TEST package (asks for a test key; never sell it)"
         type: boolean
         default: true
+      windows_only:
+        description: "Skip the macOS package (it bills ~10x; a Windows-only tester update does not need it)"
+        type: boolean
+        default: false
   push:
     tags: ["mireku-v*"]
 
@@ -32,6 +36,12 @@ jobs:
   windows-installer:
     runs-on: windows-2025
     timeout-minutes: 90
+    env:
+      # The STUDIO key the sealed library is opened with (engine/Sealed.h): 64 hex
+      # characters, the same key ~/.amanorsac/studio-keys.json holds on the studio
+      # machine. Without it the configure compiles the TEST key and the installer
+      # script refuses to package.
+      AOFAS_STUDIO_KEY: ${{ secrets.AOFAS_STUDIO_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -68,10 +78,13 @@ jobs:
           if-no-files-found: error
 
   macos-pkg:
+    # A tag build always makes both. A hand-started build can leave macOS out.
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.windows_only }}
     runs-on: macos-14
     timeout-minutes: 120
     env:
       MIREKU_TESTER: ${{ inputs.tester && '1' || '0' }}
+      AOFAS_STUDIO_KEY: ${{ secrets.AOFAS_STUDIO_KEY }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}

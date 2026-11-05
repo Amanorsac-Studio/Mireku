@@ -15,7 +15,7 @@
 ; Documents, so an install or an uninstall never touches them.
 
 #define AppName      "MIREKU"
-#define AppVersion   "1.0.0"
+#define AppVersion   "1.1.0"
 #define Publisher    "Amanorsac Studio"
 
 ; A TEST build (build-windows-installer.ps1 -Tester) differs in exactly three
@@ -58,6 +58,8 @@ VersionInfoDescription={#AppName} {#AppVersion} Setup
 OutputDir={#OutDir}
 OutputBaseFilename=Mireku-{#AppVersion}{#FileTag}-Windows
 WizardStyle=modern dark
+SetupIconFile=..\resources\brand\MIREKU-rounded.ico
+UninstallDisplayIcon={app}\MIREKU.exe
 LicenseFile={#LicenceSrc}
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -104,6 +106,9 @@ ButtonInstall=&Install
 [Files]
 ; ---- documents
 Source: "{#ReadmeSrc}";  DestDir: "{app}"; DestName: "README.txt"; Flags: ignoreversion
+; MIT notices for Signalsmith Stretch / signalsmith-linear (the shimmer's pitch
+; shifter). The licence requires the notice to accompany every copy.
+Source: "THIRD-PARTY-LICENCES.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 ; ---- standalone application
 Source: "{#BuildDir}\Standalone\MIREKU.exe"; DestDir: "{app}"; Flags: ignoreversion signonce; Check: WantApp

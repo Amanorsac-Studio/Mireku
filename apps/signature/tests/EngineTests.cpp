@@ -7,6 +7,7 @@
 #include <cmath>
 #include "engine/Sampler.h"
 #include "engine/AppState.h"
+#include "engine/Tags.h"
 #include "engine/Limiter.h"
 #include "../../../shared/tester-gate/TesterGate.h"
 
@@ -30,7 +31,7 @@ static juce::File testdataDir()
 static void testFxRegistry()
 {
     std::printf ("\n== FX parameter registry (mirrors fx-params.ts) ==\n");
-    CHECK ((int) fxRegistry().size() == 12, "12 FX units registered");
+    CHECK ((int) fxRegistry().size() == 16, "16 FX units registered (12 + Tape Machine + Modulator + Modulation pedal + Rotary)");
     auto& tape = fxSpec (FxType::tapeDelay);
     CHECK (findParam (tape, "wowFlutter") != nullptr, "tapeDelay has wowFlutter");
     CHECK (findParam (tape, "time")->def == 375.0f, "tapeDelay time default 375 ms (3/16 @ 120)");
@@ -1619,6 +1620,26 @@ static void testArpStateRoundTrip()
 #include "TesterGateTests.inc"
 // X7L READER (C++) - the in-app importer, against the TypeScript reference.
 #include "X7lReaderTests.inc"
+#include "X7lPairedMono.inc"
+// VELOCITY RESPONSE - the Yamaha-style two-stage curve, added 2026-10-29.
+#include "VelocityResponse.inc"
+// ANCHORED PLAYBACK - level-matched recorded layers, hard switching, the
+// measurement pass. Held to the TypeScript reference by generated vectors.
+#include "AnchoredVelocity.inc"
+// HALL/SHIMMER feedback runaway - the client's "crashes with a weird frequency".
+#include "ShimmerRunaway.inc"
+// FDN REVERB - the replacement for juce::Reverb, held to measured figures.
+#include "FdnReverb.inc"
+// TAPE MACHINE + MODULATOR - the two units added 2026-10-29.
+#include "TapeAndModulator.inc"
+// MODULATION PEDAL + the wow/flutter engine it shares with the tape machine.
+#include "ModPedal.inc"
+// ROTARY SPEAKER - the organ cabinet added 2026-11-02.
+#include "Rotary.inc"
+// WORLD VOICING - the per-world tone controls, measured.
+#include "WorldVoicing.inc"
+// SEALED LIBRARY - encrypted instruments and documents (2026-11-04).
+#include "Sealed.inc"
 
 //==============================================================================
 //==============================================================================
@@ -1917,8 +1938,40 @@ static void testFxMixDefaultIdentity()
            "widener has no mix (width is the blend)");
 }
 
+//==============================================================================
+// INTELLIGENT BROWSER: the automatic tags read James's own names right.
+static void testAutoTags()
+{
+    std::printf ("\n== auto tags from the library's names ==\n");
+    auto t = [] (int world, const char* folder, const char* meta, juce::StringArray presets)
+    {
+        auto out = tags::autoTags (world, folder, meta, presets);
+        std::printf ("  %-28s -> %s\n", folder, out.joinIntoString (", ").toRawUTF8());
+        return out;
+    };
+    auto velvet = t (3, "Mireku VelvetPad", "Mireku VelvetPad", { "Mireku Velvet Pads vip" });
+    CHECK (velvet.contains ("Pad") && velvet.contains ("Warm") && velvet.contains ("Layer"), "Velvet Pads: Pad, Warm, Layer");
+    auto gospel = t (0, "Gospel_Grand", "Gospel Grand", { "JM Attack" });
+    CHECK (gospel.contains ("Piano") && gospel.contains ("Gospel") && gospel.contains ("Worship"), "Gospel Grand: Piano, Gospel, Worship");
+    auto organ = t (3, "JM JOHANUS", "JM JOHANUS", { "JM JOHANUS" });
+    CHECK (organ.contains ("Organ") && organ.contains ("Worship"), "JOHANUS: Organ, Worship");
+    auto sfx = t (3, "Ambient_SFX05c", "Ambient SFX05c", { "Default", "With FX" });
+    CHECK (sfx.contains ("SFX") && sfx.contains ("Ambient") && ! sfx.contains ("Pad"), "Ambient SFX: SFX, Ambient, and no world fallback");
+    auto mks = t (1, "JM MKS EP 3", "JM MKS EP 3", { "JM MKS EP 3" });
+    CHECK (mks.contains ("Electric Piano") && mks.contains ("Vintage") && ! mks.contains ("Piano"), "MKS EP 3: Electric Piano, Vintage, not Piano");
+    auto choir = t (3, "Mireku Sacred Voices", "Mireku Sacred Voices", { "Mireku Sacred Voices" });
+    CHECK (choir.contains ("Choir") && choir.contains ("Worship"), "Sacred Voices: Choir, Worship");
+    auto plain = t (2, "Plain", "Plain", {});
+    CHECK (plain == juce::StringArray { "Electric Piano" }, "a nameless FM world sound is an Electric Piano and nothing else");
+    CHECK (tags::canonical ("warm") == "Warm" && tags::canonical ("nothing").isEmpty(), "canonical spelling, unknown words refused");
+    CHECK (tags::matches ("warm pad", "Mireku VelvetPad", velvet) && ! tags::matches ("warm organ", "Mireku VelvetPad", velvet),
+           "a search matches when every word is in the name or a tag");
+}
+
 int main()
 {
+    std::setvbuf (stdout, nullptr, _IONBF, 0);     // a crash must not swallow the lines before it
+    testAutoTags();
     std::printf ("MIREKU engine tests\n=========================\n");
     testFxDefaultsAreOff();
     testFxRackStructuralEdits();
@@ -1960,6 +2013,41 @@ int main()
     testX7lReader();
     testX7lConvert();
     testX7lImportGuards();
+    testX7lHardPannedPairs();
+    testX7lNamedWindowsAndSkips();
+    testX7lImportWorldChoice();
+    // VELOCITY RESPONSE
+    testVelocityCurveShapes();
+    testVelocityDepthAndOffset();
+    testVelocityStateAndPresetRoundTrip();
+    // ANCHORED PLAYBACK
+    testAnchoredPlanMatchesTypeScript();
+    testAnchoredPlanProperties();
+    testMeasurePassWritesAnchoredBundle();
+    testMeasureHandlesSamplesShorterThanTheWindow();
+    testShimmerFeedbackIsBounded();
+    // FDN REVERB
+    testFdnDecayMeansSeconds();
+    testFdnLevelDoesNotFollowDecay();
+    testFdnKeepsStereo();
+    testShimmerIsAudible();
+    // TAPE MACHINE + MODULATOR
+    testTapeMachineDetunes();
+    testModulatorSidebands();
+    testTapeMachineLatencyIsSmall();
+    // MODULATION PEDAL
+    testWowFlutterMovesPitch();
+    testWowFlutterLatencyIsBounded();
+    testModPedalMixLockAndMono();
+    // ROTARY SPEAKER
+    testRotaryTurns();
+    testRotaryDrumLagsHorn();
+    testRotaryMicWidth();
+    testSealedDocuments();
+    testSealedInstrument();
+    testFdnEchoDensity();
+    // WORLD VOICING
+    testWorldVoicingControls();
     // DSP STANDARDS PASS
     testAliasSuppression();
     testToneBeforeAfter();

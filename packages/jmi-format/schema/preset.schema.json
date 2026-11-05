@@ -26,7 +26,8 @@
             "enum": [
               "jmChorus", "tremoloAutoPan", "phaser", "flanger", "epPreamp",
               "vintageEq", "compressor", "tapeDelay", "digitalDelay",
-              "plateReverb", "hallShimmer", "widener", "svFilter"
+              "plateReverb", "hallShimmer", "widener", "svFilter",
+              "tapeMachine", "ringMod", "modPedal"
             ]
           },
           "bypassed": { "type": "boolean" },
@@ -35,6 +36,16 @@
             "additionalProperties": { "type": ["number", "string", "boolean", "integer"] }
           }
         }
+      }
+    },
+    "velocity": {
+      "description": "Per-slot velocity response: level only, applied after layer selection. 64/64 is neutral. OPTIONAL - a preset written before this existed is still valid and loads neutral.",
+      "type": "object",
+      "required": ["depth", "offset"],
+      "additionalProperties": false,
+      "properties": {
+        "depth": { "type": "integer", "minimum": 0, "maximum": 127 },
+        "offset": { "type": "integer", "minimum": 0, "maximum": 127 }
       }
     },
     "ampEnvelope": {

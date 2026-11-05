@@ -122,7 +122,11 @@ export type FxType =
   | 'plateReverb'
   | 'hallShimmer'
   | 'widener'
-  | 'svFilter';
+  | 'svFilter'
+  | 'tapeMachine'
+  | 'ringMod'
+  | 'modPedal'
+  | 'rotary';
 
 export interface FxUnitState {
   type: FxType;

@@ -41,7 +41,8 @@ k1 = edit(k1, [
 ], 'K1');
 
 //---------------------------------------------------------------- K2 preset menus
-const k2 = slice('/* ═════════════════════════════ PRESET MENU', '/* ═════════════════════════════ STATE / TICK');
+// openPresetMenu now lives in part4-lib.js (rows open out to show the pedals)
+const k2 = slice('/* ═════════════════════════════ PRESET MENU', 'function openPresetMenu(){');
 
 //---------------------------------------------------------------- K3 learn core
 let k3 = slice('const NN_SHARP=', '/*──────────────── analysis lookups ────────────────*/');
@@ -195,7 +196,6 @@ html = html.replace('#view-learn.on{grid-template-rows', '#view-learn{position:r
 // no chat. Every entry must be found, so a reworded source fails the build.
 const all = (s, a, b) => s.split(a).join(b);
 const COPY = [
-  ["' — it starts with an empty board'", "'. The board is empty.'"],
   ["' — add presets with +'", "'. Add presets with +.'"],
   ["' — you can keep playing'", "'. Playing continues.'"],
   ['MIDI Learn: move a control on your device', 'MIDI Learn: move a control on the device.'],
@@ -207,8 +207,8 @@ const COPY = [
   ['Stems work on songs you import, not on YouTube.', 'Stems are available for imported songs, not for YouTube.'],
   ['That is not a Top End test key. Check that you pasted the whole key.', 'Not a valid Top End test key. Paste the complete key.'],
   ['That key was not issued for Top End. Check that you pasted the whole key.', 'This key was issued for another product. Paste a Top End key.'],
-  ['The knobs keep their settings when you change model, the way a modelling amp should. Captures of your own amps (NAM) are not supported yet; cabinet impulse files are, under Cab › Your IR.',
-   'Knob settings are kept when the model changes. Amp captures (NAM) are not supported. Cabinet impulse files load under Cab › Your IR.'],
+  ['The knobs keep their settings when you change model, the way a modelling amp should. To play a capture of your own amp, add the Your Amp pedal (or drop a .nam file on the window); cabinet impulse files go under Cab › Your IR. The AMP switch on the panel takes the amp out altogether, so the pedals go straight to the output.',
+   'Knob settings are kept when the model changes. To play your own amp capture, add the Your Amp pedal or drop a .nam file on the window. Cabinet impulse files load under Cab › Your IR. The AMP switch takes the amp out of the path, so the pedals go straight to the output.'],
   ['This computer’s clock is behind the date the key was issued. Correct the clock and try again.', 'The system clock is set before the issue date of the key. Correct the clock, then enter the key again.'],
   ['Feels like standing next to the amp', 'Imperceptible'],
   ['Fine for most playing', 'Suitable for most playing'],
@@ -237,7 +237,6 @@ const COPY = [
   ['The device would not take that setting. Choose another.', 'The device rejected this setting.'],
   ["'Nothing to export yet'", "'Nothing to export.'"],
   ["'The backup could not be written'", "'Backup failed.'"],
-  ["'Could not export'", "'Export failed.'"],
   ['No takes yet. Press record to play over the song.', 'No takes. Press Record to record over the song.'],
 ];
 for (const [a, b] of COPY) { if (!html.includes(a)) throw new Error('copy not found: ' + a); html = all(html, a, b); }

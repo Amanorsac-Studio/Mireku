@@ -10,10 +10,32 @@ const fmtWhen=ms=>{ if(!ms) return ''; const d=new Date(ms), now=new Date(), min
 function libRows(){ const h=$('#libList').clientHeight||400; return Math.max(3,Math.floor(h/52)); }
 function libItems(){
   const q=(lib.q||'').trim().toLowerCase(), hit=n=>!q||String(n).toLowerCase().includes(q);
-  if(lib.tab==='presets') return (S.presets||[]).filter(p=>hit(p.name));
+  if(lib.tab==='presets') return (S.presets||[]).filter(p=>(hit(p.name)||hit(p.category||'')||hit(p.packName||''))
+    &&(!lib.cat||lib.cat==='All'||p.category===lib.cat)&&srcHit(p));
+  if(lib.tab==='packs') return packList().filter(p=>hit(p.name)||hit(p.author));
   if(lib.tab==='sets') return (S.songs||[]).filter(s=>hit(s.name));
   if(lib.tab==='songs') return (L.lessons||[]).filter(s=>hit(s.name));
-  return (S.irs||[]).map((f,i)=>({id:String(i),name:String(f).split(/[\\/]/).pop(),path:f})).filter(x=>hit(x.name));
+  return [...(S.captures||[]).map(c=>({id:'nam:'+c.key,key:c.key,name:c.name,kind:'nam'})),
+          ...(S.irs||[]).map((f,i)=>({id:String(i),name:String(f).split(/[\\/]/).pop(),path:f,kind:'ir'}))].filter(x=>hit(x.name));
+}
+/** Where a preset came from: the factory, a pack the player installed, or their own. */
+const srcOf=p=>p.packId?'pack:'+p.packId:p.factory?'factory':'mine';
+const srcHit=p=>!lib.src||lib.src==='all'||srcOf(p)===lib.src;
+/** The packs to list: the factory library, every installed pack, and the player's own presets. */
+function packList(){
+  const pr=S.presets||[], n=f=>pr.filter(f).length;
+  return [{id:'factory',name:'Factory',author:'Amanorsac Studio',colour:0xffe3a447,count:n(p=>p.factory&&!p.packId),builtin:true,
+           description:'Every preset that comes with '+PRODUCT.name+'.'},
+    ...(S.packs||[]).map(p=>Object.assign({},p,{count:n(x=>x.packId===p.id)})),
+    {id:'mine',name:'My Presets',author:'You',colour:0xff5d636b,count:n(p=>!p.factory&&!p.packId),mine:true,
+     description:'The presets you have made or saved yourself.'}];
+}
+const packHex=c=>'#'+((c>>>0)&0xffffff).toString(16).padStart(6,'0');
+function packCover(p,big){
+  const c=packHex(p.colour||0xff2a8fa8), u=el('span','pcover'+(big?' big':''));
+  u.style.background='linear-gradient(150deg,'+c+','+c+'aa 60%,#0009)';
+  u.appendChild(el('b','',esc((p.name||'?').trim().charAt(0).toUpperCase())));
+  return u;
 }
 function chainSwatches(p){
   const all=[...(p.pre||[]),...(p.post||[])].slice(0,6);
@@ -21,9 +43,32 @@ function chainSwatches(p){
   for(let i=0;i<6;i++){ const b=all[i]; s+='<i'+(b?' style="background:'+(PAINT[b.id]||CATC[b.category]||'#5d636b')+(b.off?';opacity:.35':'')+'"':'')+'></i>'; }
   return s+'</span>';
 }
+/** Category filters, with how many presets each holds (only categories in use). */
+function renderLibFilters(){
+  const box=$('#libFilters'); box.innerHTML=''; box.hidden=lib.tab!=='presets';
+  if(lib.tab!=='presets') return;
+  const pr=(S.presets||[]).filter(srcHit), cats=['All',...(S.categories||[])];
+  pr.forEach(p=>{ if(p.category&&cats.indexOf(p.category)<0) cats.push(p.category); });
+  const chips=el('div','cchips');
+  cats.forEach(c=>{ const n=c==='All'?pr.length:pr.filter(p=>p.category===c).length; if(!n&&c!=='All') return;
+    const b=el('button','cchip'+((lib.cat||'All')===c?' on':''),esc(c)+'<i>'+n+'</i>');
+    b.onclick=()=>{ lib.cat=c; lib.page=0; lib.id=null; renderLibrary(); }; chips.appendChild(b); });
+  box.appendChild(chips);
+  const row=el('div','csrc'); row.appendChild(el('span','cap','Showing'));
+  const s=el('select'); s.setAttribute('aria-label','Which presets');
+  [['all','All presets'],['factory','Factory'],['mine','My presets'],...(S.packs||[]).map(p=>['pack:'+p.id,p.name])]
+    .forEach(([v,t])=>{ const o=el('option'); o.value=v; o.textContent=t; if((lib.src||'all')===v) o.selected=true; s.appendChild(o); });
+  s.onchange=()=>{ lib.src=s.value; lib.page=0; lib.id=null; renderLibrary(); };
+  row.appendChild(s); box.appendChild(row);
+}
 function renderLibrary(){
+  libSig=libSignature();
   [...$('#libSeg').children].forEach(b=>b.classList.toggle('on',b.dataset.k===lib.tab));
-  $('#libNewSet').hidden=false;
+  const nr=$('#libNewRow'); nr.innerHTML='';
+  const nb=(label,kind,fn)=>{ const b=el('button','btn'+(kind?' '+kind:''),esc(label)); b.onclick=fn; nr.appendChild(b); };
+  if(lib.tab==='packs'){ nb('Install a pack…','primary',chooseAndReadPack); nb('Make a pack','',()=>openMakePack()); }
+  else { nb('+ New preset','',newPresetHere); nb('+ New set','',()=>newSet()); nb('Make a pack','',()=>openMakePack()); }
+  renderLibFilters();
   const items=libItems(), per=libRows(), pages=Math.max(1,Math.ceil(items.length/per));
   if(!lib.id || !items.find(x=>x.id===lib.id)){
     lib.id = lib.tab==='presets' ? (items.find(x=>x.id===S.presetId)||items[0]||{}).id
@@ -38,70 +83,41 @@ function renderLibrary(){
     let html='';
     if(lib.tab==='presets'){
       const sg=song(), at=sg?sg.scenes.findIndex(sc=>sc.id===x.id):-1;
-      html=chainSwatches(x)+'<span style="min-width:0"><span class="t">'+esc(x.name)+'</span><span class="s">'+esc(((AMPS[x.amp]||{}).name||'')+' · '+((n=>n+(n===1?' pedal':' pedals'))((x.pre||[]).length+(x.post||[]).length)))+'</span></span>'+
-           (edited(x.id)?'<span class="k" style="color:var(--amber);border-color:var(--amber-deep)">EDITED</span>':at>=0&&at<6?'<span class="k">'+L2[at]+'</span>':(x.id===S.presetId?'<span class="live"></span>':'<span></span>'));
+      const tag=edited(x.id)?'<span class="k" style="color:var(--amber);border-color:var(--amber-deep)">EDITED</span>'
+        :at>=0&&at<6?'<span class="k">'+L2[at]+'</span>'
+        :x.packId?'<span class="k pk">'+esc(String(x.packName||'').toUpperCase())+'</span>'
+        :x.category?'<span class="k">'+esc(x.category.toUpperCase())+'</span>':(x.id===S.presetId?'<span class="live"></span>':'<span></span>');
+      html=chainSwatches(x)+'<span style="min-width:0"><span class="t">'+esc(x.name)+(x.id===S.presetId?' <span class="live" style="display:inline-block;vertical-align:middle"></span>':'')+'</span><span class="s">'+esc(((AMPS[x.amp]||{}).name||'')+' · '+((n=>n+(n===1?' pedal':' pedals'))((x.pre||[]).length+(x.post||[]).length)))+'</span></span>'+tag;
+    } else if(lib.tab==='packs'){
+      const r=el('button','li pli'+(x.id===lib.id?' on':''));
+      r.appendChild(packCover(x));
+      r.insertAdjacentHTML('beforeend','<span style="min-width:0"><span class="t">'+esc(x.name)+'</span><span class="s">'+esc(x.author)+' · '+x.count+(x.count===1?' preset':' presets')+'</span></span><span class="k'+(x.builtin||x.mine?'':' pk')+'">'+(x.builtin?'BUILT IN':x.mine?'YOURS':'INSTALLED')+'</span>');
+      r.onclick=()=>{ lib.id=x.id; renderLibrary(); };
+      list.appendChild(r); return;
     } else if(lib.tab==='sets'){
       html='<span class="sw6"><i style="background:var(--amber)"></i><i></i><i></i></span><span style="min-width:0"><span class="t">'+esc(x.name)+'</span><span class="s">'+x.scenes.length+' SCENES · '+Math.round(x.tempo)+' BPM</span></span>'+(x.id===S.songId?'<span class="live"></span>':'<span></span>');
     } else if(lib.tab==='songs'){
       html='<span class="sw6"><i style="background:var(--d6)"></i><i style="background:var(--d1)"></i><i style="background:var(--d5)"></i></span><span style="min-width:0"><span class="t">'+esc(x.name)+'</span><span class="s">'+(x.kind==='video'?'VIDEO':'AUDIO')+'</span></span>'+(L.lesson&&x.id===L.lesson.id?'<span class="live"></span>':'<span></span>');
     } else {
-      html='<span class="sw6"><i style="background:#8ea6b4"></i></span><span style="min-width:0"><span class="t">'+esc(x.name)+'</span><span class="s">IMPULSE RESPONSE</span></span><span></span>';
+      html='<span class="sw6"><i style="background:'+(x.kind==='nam'?'#22394a':'#8ea6b4')+'"></i></span><span style="min-width:0"><span class="t">'+esc(x.name)+'</span><span class="s">'+(x.kind==='nam'?'AMP CAPTURE':'IMPULSE RESPONSE')+'</span></span><span></span>';
     }
     const r=el('button','li'+(x.id===lib.id?' on':''),html);
     r.onclick=()=>{ lib.id=x.id; renderLibrary(); };
     list.appendChild(r);
   });
   if(!items.length) list.appendChild(el('div','empty',lib.q?'Nothing matches “'+esc(lib.q)+'”.':
-    lib.tab==='songs'?'No songs yet. Import one on the Learn tab.':lib.tab==='captures'?'No impulse files yet. Put .wav IRs in the IRs folder, then Rescan.':'Nothing here yet.'));
+    lib.tab==='songs'?'No songs yet. Import one on the Learn tab.':lib.tab==='captures'?'No captures yet. Drop a .nam amp capture or a .wav cab IR on the app.':'Nothing here yet.'));
   const pg=$('#libPager'); pg.innerHTML=''; pg.hidden=pages<2;
   for(let i=0;i<pages;i++){ const b=el('button',i===lib.page?'on':'','<i></i>'); b.setAttribute('aria-label','Page '+(i+1)); b.onclick=()=>{ lib.page=i; renderLibrary(); }; pg.appendChild(b); }
   renderLibDetail(items.find(x=>x.id===lib.id));
 }
 function libActs(btns){ const a=el('div','acts'); btns.forEach(([label,kind,fn])=>{ const b=el('button','btn'+(kind?' '+kind:''),esc(label)); b.onclick=fn; a.appendChild(b); }); return a; }
 function renderLibDetail(x){
+  homeRig();                            // take the rig back before the page is rebuilt
   const d=$('#libDetail'); d.innerHTML='';
   if(!x){ d.appendChild(el('div','empty','Choose something on the left.')); return; }
-  if(lib.tab==='presets'){
-    const loaded=x.id===S.presetId, dirty=edited(x.id);
-    const h=el('div','lhead');
-    const t=el('div'); t.innerHTML='<span class="cap">Preset'+(x.history&&x.history[0]?' · saved '+esc(fmtWhen(x.history[0].t)):'')+(dirty?' · changes not saved':'')+'</span><h1>'+esc(x.name)+'</h1>';
-    h.appendChild(t);
-    h.appendChild(libActs([
-      [loaded?'Loaded':'Load', loaded?'':'primary', ()=>cmd('loadPreset',{id:x.id})],
-      ['Rename','',()=>ask('Rename preset',x.name,'Rename').then(n=>{ if(n) cmd('renamePreset',{id:x.id,name:n}); })],
-      ['Duplicate','',()=>cmd('duplicatePreset',{id:x.id}).then(id=>{ if(id){ lib.id=id; toast('Duplicated'); } })],
-      ['Export','',()=>cmd('exportPreset',{id:x.id}).then(p=>toast(p?'Exported to Documents › Amanorsac Studio › '+PRODUCT.name+' › Exports':'Could not export'))],
-      ['Delete','danger',()=>{ const usedIn=(S.songs||[]).filter(s=>s.scenes.some(sc=>sc.id===x.id)).map(s=>s.name);
-        confirmBox('Delete “'+x.name+'”?',usedIn.length?'It will also come out of '+usedIn.join(', ')+'.':'This cannot be undone.').then(ok=>{ if(ok){ lib.id=null; cmd('deletePreset',{id:x.id}); } }); }]]
-      .concat(dirty&&loaded?[['Save','primary',e=>saveLive(e&&e.currentTarget)]]:[])));
-    d.appendChild(h);
-    // the chain at a glance
-    const mc=el('div','minichain'), st=AMPS[x.amp]||AMPS[0];
-    const unit=(cls,styleFn,label,off)=>{ const u=el('div','mc'+(cls?' '+cls:'')+(off?' off':'')); const i=el('i'); styleFn(u,i); u.appendChild(i); const s=el('span'); s.textContent=label; u.appendChild(s); return u; };
-    const parts=[];
-    (x.pre||[]).forEach(b=>parts.push(unit('',(u,i)=>u.style.setProperty('--c',PAINT[b.id]||CATC[b.category]),b.name,b.off)));
-    parts.push(unit('amp',(u)=>styleAmp(u,st),st.name));
-    parts.push(unit('cab',(u)=>u.style.setProperty('--g',st.g),(CABS[x.cab]||CABS[1]).name));
-    (x.post||[]).forEach(b=>parts.push(unit('',(u,i)=>u.style.setProperty('--c',PAINT[b.id]||CATC[b.category]),b.name,b.off)));
-    parts.forEach((u,i)=>{ if(i) mc.appendChild(el('span','arrow')); mc.appendChild(u); });
-    d.appendChild(mc);
-    const g=el('div','libgrid');
-    const a=el('div'); a.appendChild(el('h3',null,'Used in'));
-    const used=el('div','used'), L2='ABCDEF';
-    const sets=(S.songs||[]).filter(s=>s.scenes.some(sc=>sc.id===x.id));
-    sets.slice(0,4).forEach(s=>{ const i=s.scenes.findIndex(sc=>sc.id===x.id);
-      const b=el('button',null,esc(s.name)+'<span>SCENE '+(i<6?L2[i]+' · FOOTSWITCH '+(i+1):String(i+1))+'</span>');
-      b.onclick=()=>{ lib={tab:'sets',id:s.id,page:0,q:''}; renderLibrary(); }; used.appendChild(b); });
-    if(!sets.length) used.appendChild(el('div','help','Not in any set yet. Add it from a set’s + tile.'));
-    a.appendChild(used); g.appendChild(a);
-    const hb=el('div'); hb.appendChild(el('h3',null,'History'));
-    const hist=el('div','hist');
-    (x.history||[]).slice(0,5).forEach((c,i)=>{ const r=el('div','hr'+(i===0?' cur':'')); r.innerHTML='<i></i><span style="font-family:var(--font-ui);font-size:13px;color:var(--muted)">'+esc(c.x)+'</span><span>'+esc(fmtWhen(c.t))+'</span>'; hist.appendChild(r); });
-    if(!(x.history||[]).length) hist.appendChild(el('div','help','Each save is noted here, with what changed.'));
-    hb.appendChild(hist); g.appendChild(hb);
-    d.appendChild(g);
-    return;
-  }
+  if(lib.tab==='presets'){ presetDetail(d,x); return; }
+  if(lib.tab==='packs'){ packDetail(d,x); return; }
   if(lib.tab==='sets'){
     const h=el('div','lhead');
     const t=el('div'); t.innerHTML='<span class="cap">Set · '+x.scenes.length+' scenes · '+Math.round(x.tempo)+' BPM</span><h1>'+esc(x.name)+'</h1>';
@@ -143,34 +159,56 @@ function renderLibDetail(x){
     return;
   }
   const h=el('div','lhead');
-  const t=el('div'); t.innerHTML='<span class="cap">Capture · impulse response</span><h1>'+esc(x.name)+'</h1>';
+  const t=el('div');
+  if(x.kind==='nam'){
+    t.innerHTML='<span class="cap">Capture · your amp (NAM)</span><h1>'+esc(x.name)+'</h1>';
+    h.appendChild(t);
+    h.appendChild(libActs([['Use on this rig','primary',()=>useCapture(x)],['Add a capture…','',()=>chooseCapture()],
+      ['Open folder','',()=>cmd('showCaptures')],
+      ['Remove','danger',()=>confirmBox('Remove “'+x.name+'”?','The file goes to the Recycle Bin. Presets that use it play straight through until you add it again.')
+        .then(ok=>{ if(ok){ lib.id=null; cmd('removeCapture',{key:x.key}); } })]]));
+    d.appendChild(h);
+    d.appendChild(el('div','help','A Neural Amp Modeler capture is a learned copy of a real amp. It plays on the Your Amp pedal, with the built-in amp switched off. Every capture is checked, and timed on this computer, before it is used.'));
+    return;
+  }
+  t.innerHTML='<span class="cap">Capture · impulse response</span><h1>'+esc(x.name)+'</h1>';
   h.appendChild(t);
-  h.appendChild(libActs([['Use on this rig','primary',()=>{ send('cab.model',3); send('cab.ir',+x.id); toast('Cab › Your IR: '+x.name); }],['Open folder','',()=>cmd('openFolder')],['Rescan','',()=>cmd('rescan')]]));
+  h.appendChild(libActs([['Use on this rig','primary',()=>{ send('cab.model',PRODUCT.cabIr); send('cab.ir',+x.id); toast('Cab › Your IR: '+x.name); }],['Open folder','',()=>cmd('openFolder')],['Rescan','',()=>cmd('rescan')]]));
   d.appendChild(h);
-  d.appendChild(el('div','help','An impulse response is a recording of a real cabinet and microphone. Put .wav files in the IRs folder, then Rescan. Amp captures (NAM) are not supported yet.'));
+  d.appendChild(el('div','help','An impulse response is a recording of a real cabinet and microphone. Put .wav files in the IRs folder, then Rescan.'));
+}
+/* ───────────── YOUR AMP CAPTURES ─────────────
+   Like a pack, the page reads the file and hands its text to the engine, which
+   builds and times it before copying it into the Amp Captures folder. */
+const CAPTURE_MAX=32*1024*1024;
+function readCaptureFile(file,then){
+  if(!file) return;
+  if(!/\.nam$/i.test(String(file.name||''))){ toast('That is not an amp capture (.nam file)'); return; }
+  if(file.size>CAPTURE_MAX){ toast('That file is too big to be an amp capture'); return; }
+  const fr=new FileReader();
+  toast('Checking '+file.name+'…');
+  fr.onload=()=>cmd('importCapture',{name:file.name,text:String(fr.result||'')}).then(r=>{
+    if(!r||!r.ok){ toast((r&&r.error)||'That capture could not be read'); if(then) then(null); return; }
+    toast('Added '+r.name+(r.rate&&Math.abs(r.rate-48000)>1?' ('+Math.round(r.rate/100)/10+' kHz capture)':''));
+    if(then) then(r); });
+  fr.onerror=()=>toast('That file could not be read');
+  fr.readAsText(file);
+}
+function chooseCapture(then){
+  const i=document.createElement('input'); i.type='file'; i.accept='.nam';
+  i.onchange=()=>readCaptureFile(i.files&&i.files[0],then||(r=>{ if(r){ lib={tab:'captures',id:'nam:'+r.key,page:0,q:''}; if(view==='library') renderLibrary(); } }));
+  i.click();
+}
+/** Put a capture on the rig: on the Your Amp pedal if there is one, else a new one first on the board. */
+function useCapture(x){
+  const at=(S.pre||[]).find(b=>b.type==='nam');
+  const set=b=>{ const p=(b.params||[]).find(q=>q.id==='capture'); if(p) cmd('set',{path:p.path,value:x.key}); };
+  if(at){ set(at); toast('Your Amp › '+x.name); return; }
+  if((S.pre||[]).length>=8){ toast('The board is full. Remove a pedal first.'); return; }
+  cmd('addBlock',{chain:'pre',type:'nam',index:(S.pre||[]).length}).then(()=>setTimeout(()=>{ const b=(S.pre||[]).find(q=>q.type==='nam'); if(b) set(b); toast('Added Your Amp with '+x.name); },120));
 }
 $('#libSeg').addEventListener('click',e=>{ const k=e.target.dataset&&e.target.dataset.k; if(k){ lib={tab:k,id:null,page:0,q:lib.q}; renderLibrary(); } });
 $('#libSearch').addEventListener('input',e=>{ lib.q=e.target.value; lib.page=0; lib.id=null; renderLibrary(); });
-/** Beta: choose presets to send back to the studio. They are copied into the
- *  Beta Presets folder with a note on how to send them; nothing is uploaded. */
-function openShareSheet(){
-  const body=el('div');
-  body.appendChild(el('p','help','Choose the presets to send back. They are copied into Documents › Amanorsac Studio › '+esc(PRODUCT.name)+' › Beta Presets, with a note on how to send them. Nothing is sent automatically.'));
-  const credit=el('input','field'); credit.placeholder='Your name for the credit (optional)'; credit.maxLength=60; credit.setAttribute('aria-label','Name for the credit');
-  body.appendChild(credit);
-  const list=el('div','sharelist'), picks=new Set();
-  (S.presets||[]).forEach(p=>{ const row=el('label','sharerow'); const cb=el('input'); cb.type='checkbox';
-    cb.onchange=()=>{ if(cb.checked) picks.add(p.id); else picks.delete(p.id); go.disabled=!picks.size; go.textContent=picks.size?'Copy '+picks.size+(picks.size===1?' preset':' presets'):'Copy presets'; };
-    row.appendChild(cb); row.appendChild(el('span',null,esc(p.name))); list.appendChild(row); });
-  body.appendChild(list);
-  openSheet({title:'Share presets', body, actions:[
-    {label:'Cancel', onClick:closeSheet},
-    {label:'Copy presets', kind:'primary', onClick:()=>{ if(!picks.size) return; cmd('sharePresets',{ids:[...picks],credit:credit.value.trim()}).then(n=>{ closeSheet(); toast(n>0?n+(n===1?' preset copied.':' presets copied.')+' Send them as the note in the folder says.':'Nothing was copied.'); }); }}]});
-  const go=[...document.querySelectorAll('#sheet .sf button')].pop(); go.disabled=true;
-}
-$('#libShare').onclick=openShareSheet;
-$('#libNewPreset').onclick=()=>ask('New preset','New Rig','Create').then(n=>{ if(n) cmd('newPreset',{name:n}).then(id=>{ lib={tab:'presets',id,page:0,q:''}; toast('Created '+n+' — it starts with an empty board'); }); });
-$('#libNewSet').onclick=()=>newSet();
 function newSet(){ return ask('New set','Sunday','Create').then(n=>{ if(!n) return;
   cmd('newSong',{name:n,empty:true}).then(id=>{ lib={tab:'sets',id,page:0,q:''}; toast(n+' — add presets with +'); }); }); }
 
@@ -238,9 +276,15 @@ function applyState(st){
   ytSync();
   if(st.learning) toast('MIDI Learn: move a control on your device');
   /* A drag in progress must not be rebuilt out from under the finger. */
-  if(document.querySelector('.dial:active,.akn:active,.rng:active')) return;
-  renderBoard(); renderStage(); renderLibrary(); renderSettings();
+  if(dnd||document.querySelector('.dial:active,.akn:active,.rng:active,.pkn:active')) return;
+  renderBoard(); renderStage(); renderSettings();
+  /* The engine sends state about once a second. Rebuilding the Library each time moved the
+     rig out and back and re-fitted it, which made the page shake; only redraw on a change. */
+  if(view==='library'&&libSignature()!==libSig) renderLibrary();
+  if(presetMenuOpen()&&pmSignature()!==pm.sig) renderPresetMenu();
 }
+let libSig='';
+const libSignature=()=>S?JSON.stringify([S.presets,S.packs,S.songs,S.irs,S.categories,S.presetId,S.songId,S.name,S.dirty,S.edits]):'';
 
 const DASH=2*Math.PI*42;
 const dbOf=v=>v>0.0001?20*Math.log10(v):-80;
@@ -307,3 +351,294 @@ function applyTick(t){
     [...$('#tStrings').children].forEach((s,i)=>{ s.classList.toggle('on',i===near&&!tn.inTune); s.classList.toggle('ok',i===near&&!!tn.inTune); });
   }
 }
+
+/* ═════════════════════════════ THE RIG, IN THE LIBRARY ═════════════════════════════
+   The loaded preset is edited in the Library with the very same board and amp
+   as the Rig page: the nodes themselves are moved here while the Library shows
+   it, and put back when it does not, so the two can never look or behave
+   differently. A preset that is not loaded shows its pedals at rest, with Load. */
+const rigParts=()=>[$('.card.board'),$('#ampBox'),$('#pBrowse')].filter(Boolean);
+function homeRig(){
+  const home=$('#view-rig .rigL'), parts=rigParts();
+  if(!home||!parts.length||parts[0].parentElement===home) return;
+  const first=home.firstChild; parts.forEach(n=>home.insertBefore(n,first));
+  requestAnimationFrame(fitBoard);
+}
+function mountRig(box){
+  box.classList.add('rigL'); rigParts().forEach(n=>box.appendChild(n));
+  requestAnimationFrame(()=>{ fitBoard(); });
+}
+/** A preset that is not loaded: its pedals and amp as they sit on the board. */
+function rigPreview(x){
+  const wrap=el('div','libprev'), fit=el('div','boardfit'), c=el('div','chain');
+  const face=b=>{ const cat=(S.catalog||[]).find(k=>k.type===b.id)||{params:[]};
+    return pedalFace({type:b.id,name:b.name,category:b.category,params:cat.params},b.off?'off':''); };
+  (x.pre||[]).forEach(b=>c.appendChild(face(b)));
+  const st=AMPS[x.amp]||AMPS[0], a=el('div','ampmini'); styleAmp(a,st);
+  a.innerHTML='<div class="pl"><i></i><i></i><i></i><i></i></div><div class="gr"></div><b>'+esc(st.name)+'</b>';
+  c.appendChild(a);
+  (x.post||[]).forEach(b=>c.appendChild(face(b)));
+  fit.appendChild(c); wrap.appendChild(fit);
+  const cta=el('div','libcta');
+  cta.appendChild(el('span','cap',esc(st.name)+' · '+esc((CABS[x.cab]||CABS[1]).name)+' · knobs shown at rest'));
+  const go=el('button','btn primary','Load to hear and edit'); go.onclick=()=>cmd('loadPreset',{id:x.id});
+  cta.appendChild(go); wrap.appendChild(cta);
+  requestAnimationFrame(()=>{ c.style.transform='none'; const s=Math.min(1,(fit.clientWidth-8)/Math.max(1,c.scrollWidth),(fit.clientHeight-8)/Math.max(1,c.offsetHeight));
+    c.style.transformOrigin='0 0'; c.style.transform='scale('+s.toFixed(3)+')'; });
+  return wrap;
+}
+/* ───────────── PRESET MENU (the name at the top of the Rig) ─────────────
+   Tap a name to open it out: its pedals and amp shown small, with Load. */
+const pm={open:null,q:'',sig:''};
+const pmSignature=()=>JSON.stringify([S.presets,S.presetId,pm.open,pm.q]);
+function miniChain(x){
+  const fit=el('div','pmfit'), c=el('div','chain');
+  const face=b=>{ const cat=(S.catalog||[]).find(k=>k.type===b.id)||{params:[]};
+    return pedalFace({type:b.id,name:b.name,category:b.category,params:cat.params},b.off?'off':''); };
+  (x.pre||[]).forEach(b=>c.appendChild(face(b)));
+  const st=AMPS[x.amp]||AMPS[0], a=el('div','ampmini'); styleAmp(a,st);
+  a.innerHTML='<div class="pl"><i></i><i></i><i></i><i></i></div><div class="gr"></div><b>'+esc(st.name)+'</b>';
+  c.appendChild(a);
+  (x.post||[]).forEach(b=>c.appendChild(face(b)));
+  fit.appendChild(c);
+  requestAnimationFrame(()=>{ const s=Math.min(.5,(fit.clientWidth-4)/Math.max(1,c.scrollWidth));
+    c.style.transformOrigin='0 0'; c.style.transform='scale('+s.toFixed(3)+')'; fit.style.height=Math.ceil(c.offsetHeight*s+4)+'px'; });
+  return fit;
+}
+const presetMenuOpen=()=>$('#scrim').classList.contains('on')&&!!$('#sheet .pmenu');
+function renderPresetMenu(){
+  const list=$('#sheet .pmenu .plist'); if(!list) return;
+  pm.sig=pmSignature();
+  const q=pm.q.trim().toLowerCase(), keep=list.scrollTop;
+  const items=(S.presets||[]).filter(p=>!q||[p.name,p.category,p.packName].some(s=>String(s||'').toLowerCase().includes(q)));
+  list.innerHTML='';
+  items.forEach(p=>{
+    const open=pm.open===p.id, loaded=p.id===S.presetId;
+    const r=el('div','pmrow'+(open?' open':'')+(loaded?' on':''));
+    const n=(p.pre||[]).length+(p.post||[]).length;
+    const head=el('button','li'+(loaded?' on':''),chainSwatches(p)+'<span style="min-width:0"><span class="t">'+esc(p.name)
+      +(loaded?' <span class="live" style="display:inline-block;vertical-align:middle"></span>':'')+'</span><span class="s">'
+      +esc(((AMPS[p.amp]||{}).name||'')+' · '+n+(n===1?' pedal':' pedals'))+'</span></span>'
+      +(p.category?'<span class="k">'+esc(p.category.toUpperCase())+'</span>':'<span></span>'));
+    head.setAttribute('aria-expanded',open);
+    head.onclick=()=>{ pm.open=open?null:p.id; renderPresetMenu(); };
+    r.appendChild(head);
+    if(open){
+      const body=el('div','pmbody');
+      body.appendChild(miniChain(p));
+      const acts=el('div','pmacts');
+      const go=el('button','btn'+(loaded?'':' primary'),loaded?'Loaded':'Load');
+      go.onclick=()=>{ closeSheet(); if(!loaded) cmd('loadPreset',{id:p.id}); };
+      const lb=el('button','btn','Open in Library');
+      lb.onclick=()=>{ closeSheet(); lib={tab:'presets',id:p.id,page:0,q:'',cat:'All',src:'all'}; showView('library'); };
+      acts.appendChild(go); acts.appendChild(lb); body.appendChild(acts);
+      r.appendChild(body);
+    }
+    list.appendChild(r);
+  });
+  if(!items.length) list.appendChild(el('div','empty','Nothing matches “'+esc(pm.q)+'”.'));
+  list.scrollTop=keep;
+}
+function openPresetMenu(){
+  pm.open=S.presetId; pm.q='';
+  const body=el('div','pmenu');
+  const f=el('input','field'); f.placeholder='Search presets'; f.setAttribute('aria-label','Search presets');
+  f.oninput=()=>{ pm.q=f.value; renderPresetMenu(); };
+  body.appendChild(f);
+  body.appendChild(el('div','plist'));
+  openSheet({title:'Presets', body, actions:[
+    {label:'New', onClick:()=>ask('New preset','New Rig','Create').then(n=>{ if(n) cmd('newPreset',{name:n}); })},
+    {label:'Duplicate', onClick:()=>{ closeSheet(); cmd('duplicatePreset',{id:S.presetId}).then(()=>toast('Duplicated')); }},
+    {label:'Rename', onClick:()=>ask('Rename preset',S.name,'Rename').then(n=>{ if(n&&S.presetId) cmd('renamePreset',{id:S.presetId,name:n}); })},
+    {label:'Save as…', onClick:()=>ask('Save as new preset',S.name,'Save').then(n=>{ if(n) cmd('savePreset',{name:n,asNew:true}).then(()=>toast('Saved')); })},
+    {label:'Save', kind:'primary', onClick:()=>{ closeSheet(); cmd('savePreset',{}).then(()=>toast('Saved')); }}]});
+  renderPresetMenu();
+  const on=$('#sheet .pmrow.on'); if(on) on.scrollIntoView({block:'center'});
+}
+function chooseCategory(x,anchor){
+  const r=anchor.getBoundingClientRect();
+  openMenu(r.left,r.bottom+4,[...(S.categories||[]),'None'].map(c=>({label:(x.category===c||(!x.category&&c==='None')?'✓ ':'')+c,
+    onClick:()=>cmd('setCategory',{id:x.id,category:c==='None'?'':c}).then(()=>toast(c==='None'?'No category':'Moved to '+c))})));
+}
+function newPresetHere(){
+  ask('New preset','New Rig','Create').then(n=>{ if(n) cmd('newPreset',{name:n}).then(id=>{ lib={tab:'presets',id,page:0,q:'',cat:'All',src:'all'};
+    toast('Created '+n+'. Build it here: + adds a pedal.'); }); });
+}
+function presetDetail(d,x){
+  const loaded=x.id===S.presetId, dirty=edited(x.id);
+  const h=el('div','lhead');
+  const t=el('div');
+  t.innerHTML='<span class="cap">Preset'+(x.history&&x.history[0]?' · saved '+esc(fmtWhen(x.history[0].t)):'')+(dirty?' · changes not saved':'')+'</span><h1>'+esc(x.name)+'</h1>'
+    +'<div class="ptags">'+(x.category?'<span class="k">'+esc(x.category.toUpperCase())+'</span>':'')
+    +(x.packId?'<span class="k pk">FROM '+esc(String(x.packName||'').toUpperCase())+' · '+esc(String(x.packAuthor||'').toUpperCase())+'</span>':x.factory?'<span class="k">FACTORY</span>':'<span class="k">YOURS</span>')+'</div>';
+  h.appendChild(t);
+  const acts=libActs([
+    [loaded?'Loaded':'Load', loaded?'':'primary', ()=>cmd('loadPreset',{id:x.id})],
+    ['Rename','',()=>ask('Rename preset',x.name,'Rename').then(n=>{ if(n) cmd('renamePreset',{id:x.id,name:n}); })],
+    ['Category ▾','',e=>chooseCategory(x,e.currentTarget)],
+    ['Duplicate','',()=>cmd('duplicatePreset',{id:x.id}).then(id=>{ if(id){ lib.id=id; toast('Duplicated'); } })],
+    ['Add to a pack','',()=>openMakePack({ids:[x.id]})],
+    ['Delete','danger',()=>{ const usedIn=(S.songs||[]).filter(s=>s.scenes.some(sc=>sc.id===x.id)).map(s=>s.name);
+      confirmBox('Delete “'+x.name+'”?',usedIn.length?'It will also come out of '+usedIn.join(', ')+'.':'This cannot be undone.').then(ok=>{ if(ok){ lib.id=null; cmd('deletePreset',{id:x.id}); } }); }]]
+    .concat(dirty&&loaded?[['Save','primary',e=>saveLive(e&&e.currentTarget)]]:[]));
+  h.appendChild(acts);
+  d.appendChild(h);
+  const body=el('div','libbody');
+  const rig=el('div','librig');
+  body.appendChild(rig);
+  const side=el('div','libside');
+  side.appendChild(el('h3',null,'Used in'));
+  const used=el('div','used'), L2='ABCDEF';
+  const sets=(S.songs||[]).filter(s=>s.scenes.some(sc=>sc.id===x.id));
+  sets.slice(0,3).forEach(s=>{ const i=s.scenes.findIndex(sc=>sc.id===x.id);
+    const b=el('button',null,esc(s.name)+'<span>SCENE '+(i<6?L2[i]:String(i+1))+'</span>');
+    b.onclick=()=>{ lib={tab:'sets',id:s.id,page:0,q:''}; renderLibrary(); }; used.appendChild(b); });
+  if(!sets.length) used.appendChild(el('div','help','Not in any set yet. Add it from a set’s + tile.'));
+  side.appendChild(used);
+  side.appendChild(el('h3',null,'History'));
+  const hist=el('div','hist');
+  (x.history||[]).slice(0,4).forEach((c,i)=>{ const r=el('div','hr'+(i===0?' cur':'')); r.innerHTML='<i></i><span style="font-family:var(--font-ui);font-size:12.5px;color:var(--muted)">'+esc(c.x)+'</span><span>'+esc(fmtWhen(c.t))+'</span>'; hist.appendChild(r); });
+  if(!(x.history||[]).length) hist.appendChild(el('div','help','Each save is noted here, with what changed.'));
+  side.appendChild(hist);
+  body.appendChild(side);
+  d.appendChild(body);
+  if(loaded) mountRig(rig); else rig.appendChild(rigPreview(x));
+}
+
+/* ═════════════════════════════ PACKS ═════════════════════════════ */
+const packPresets=p=>(S.presets||[]).filter(x=>p.builtin?(x.factory&&!x.packId):p.mine?(!x.factory&&!x.packId):x.packId===p.id);
+function packDetail(d,p){
+  const h=el('div','lhead phead');
+  h.appendChild(packCover(p,true));
+  const t=el('div'); t.style.cssText='flex:1;min-width:0';
+  t.innerHTML='<span class="cap">Preset pack</span><h1>'+esc(p.name)+'</h1><div class="ptags"><span class="k">BY '+esc(String(p.author||'').toUpperCase())+'</span><span class="k">'+p.count+(p.count===1?' PRESET':' PRESETS')+'</span></div>'
+    +(p.description?'<p class="help" style="margin:8px 0 0;max-width:560px">'+esc(p.description)+'</p>':'');
+  h.appendChild(t);
+  const btns=[];
+  if(!p.builtin) btns.push(['Share this pack','primary',()=>sharePack(p)]);
+  if(!p.builtin&&!p.mine) btns.push(['Remove pack','danger',()=>confirmBox('Remove “'+p.name+'”?','Its '+p.count+' presets come out of the Library and any set that uses them. You can install the pack again from its file.')
+    .then(ok=>{ if(ok) cmd('removePack',{id:p.id}).then(n=>{ lib.id=null; toast('Removed '+n+' presets'); }); })]);
+  h.appendChild(libActs(btns));
+  d.appendChild(h);
+  d.appendChild(el('h3','pinh','In this pack'));
+  const grid=el('div','pgrid'); d.appendChild(grid);
+  const list=packPresets(p), per=Math.max(3,Math.floor(((d.clientHeight||500)-260)/48))*3;
+  list.slice(0,per).forEach(x=>{ const b=el('button','pgi',esc(x.name)+'<span>'+esc((x.category||'').toUpperCase())+'</span>');
+    b.onclick=()=>{ lib={tab:'presets',id:x.id,page:0,q:'',cat:'All',src:p.builtin?'factory':p.mine?'mine':'pack:'+p.id}; renderLibrary(); }; grid.appendChild(b); });
+  if(list.length>per) d.appendChild(el('div','help','+ '+(list.length-per)+' more on the Presets tab.'));
+  if(!p.builtin) d.appendChild(el('div','sharehow','<b>How sharing works</b><ol><li><b>Share this pack</b> saves it as one file in Documents › Amanorsac Studio › '+esc(PRODUCT.name)+' › Packs and shows it to you.</li><li>Send the file any way you like: WhatsApp, email, Discord, a drive.</li><li>Whoever gets it drags it onto '+esc(PRODUCT.name)+'. Nothing goes online from the app.</li></ol>'));
+}
+function sharePack(p){
+  const ids=packPresets(p).map(x=>x.id);
+  if(!ids.length){ toast('This pack has no presets yet'); return; }
+  writePack({id:p.mine?'':p.id,name:p.mine?'My Presets':p.name,author:p.mine?'':p.author,description:p.description||'',colour:p.colour,ids});
+}
+function writePack(o){
+  cmd('writePack',o).then(r=>{
+    if(!r||!r.file){ toast('Could not write the pack'); return; }
+    const body=el('div','packdone');
+    body.appendChild(packCover(o,true));
+    body.appendChild(el('div','','<p style="margin:0 0 6px"><b>'+esc(r.file)+'</b> is in Documents › Amanorsac Studio › '+esc(PRODUCT.name)+' › Packs.</p><p class="help">Send it any way you like. Anyone with '+esc(PRODUCT.name)+' drags it onto the app to install it. '+o.ids.length+(o.ids.length===1?' preset, ':' presets, ')+Math.max(1,Math.round(r.bytes/1024))+' KB.</p>'));
+    openSheet({title:'Pack saved', body, actions:[{label:'Done',onClick:closeSheet},{label:'Show the file',kind:'primary',onClick:()=>{ closeSheet(); cmd('showPackFile'); }}]});
+  });
+}
+/** Make a pack: name, who made it, a few words, a cover colour, and the presets. */
+function openMakePack(pre){
+  const COLS=[0xff2a8fa8,0xff9c4a3f,0xffe3a447,0xff6f9f5a,0xff7b3fa0,0xff5d636b,0xffd9789b,0xff3f7fa0];
+  const st={ids:new Set((pre&&pre.ids)||[]),colour:COLS[0],cat:'All',page:0};
+  const body=el('div','makepack');
+  const L1=el('div');
+  const field=(label,node)=>{ const f=el('div','fld'); f.appendChild(el('span','cap',label)); f.appendChild(node); L1.appendChild(f); return node; };
+  const nm=field('Pack name',el('input','field')); nm.maxLength=60; nm.placeholder='Sunday Pads';
+  const au=field('Made by',el('input','field')); au.maxLength=60; au.placeholder='Your name';
+  try{ au.value=localStorage.getItem(PRODUCT.prefix+'.packAuthor')||''; }catch(_){}
+  const de=field('About it',el('textarea','field')); de.maxLength=500; de.rows=3; de.placeholder='What these presets are for';
+  const cols=el('div','pcols');
+  COLS.forEach(c=>{ const b=el('button','pcol'+(c===st.colour?' on':'')); b.style.background=packHex(c); b.setAttribute('aria-label','Cover colour');
+    b.onclick=()=>{ st.colour=c; [...cols.children].forEach(x=>x.classList.toggle('on',x===b)); }; cols.appendChild(b); });
+  field('Cover colour',cols);
+  L1.appendChild(el('div','okmsg','✓ Your audio interface, MIDI and settings never go in a pack — only sounds.'));
+  body.appendChild(L1);
+  const R1=el('div'); body.appendChild(R1);
+  const draw=()=>{
+    R1.innerHTML='';
+    const top=el('div','pkbar'); top.appendChild(el('b','','Choose presets'));
+    ['All','Mine',...(S.categories||[])].forEach(c=>{ const n=c==='All'?1:c==='Mine'?(S.presets||[]).filter(p=>!p.factory&&!p.packId).length:(S.presets||[]).filter(p=>p.category===c).length; if(!n) return;
+      const b=el('button','cchip'+(st.cat===c?' on':''),esc(c)); b.onclick=()=>{ st.cat=c; st.page=0; draw(); }; top.appendChild(b); });
+    R1.appendChild(top);
+    const all=(S.presets||[]).filter(p=>st.cat==='All'||(st.cat==='Mine'?(!p.factory&&!p.packId):p.category===st.cat));
+    const per=16, pages=Math.max(1,Math.ceil(all.length/per)); st.page=Math.min(st.page,pages-1);
+    const g=el('div','pick');
+    all.slice(st.page*per,st.page*per+per).forEach(p=>{ const on=st.ids.has(p.id);
+      const b=el('button','ck'+(on?' on':''),'<span class="box">'+(on?'✓':'')+'</span><span class="n">'+esc(p.name)+'</span><small>'+esc((p.category||'').toUpperCase())+'</small>');
+      b.onclick=()=>{ if(st.ids.has(p.id)) st.ids.delete(p.id); else if(st.ids.size<200) st.ids.add(p.id); draw(); }; g.appendChild(b); });
+    R1.appendChild(g);
+    const foot=el('div','pkfoot'); foot.appendChild(el('span','help',st.ids.size+' chosen · up to 200 in a pack'));
+    const pg=el('div','pager');
+    if(pages>1) for(let i=0;i<pages;i++){ const b=el('button',i===st.page?'on':'','<i></i>'); b.setAttribute('aria-label','Page '+(i+1)); b.onclick=()=>{ st.page=i; draw(); }; pg.appendChild(b); }
+    foot.appendChild(pg); R1.appendChild(foot);
+  };
+  draw();
+  openSheet({title:'Make a pack', body, wide:true, actions:[{label:'Cancel',onClick:closeSheet},{label:'Save pack file',kind:'primary',onClick:()=>{
+    const name=nm.value.trim();
+    if(!name){ nm.focus(); toast('Give the pack a name'); return; }
+    if(!st.ids.size){ toast('Choose at least one preset'); return; }
+    try{ localStorage.setItem(PRODUCT.prefix+'.packAuthor',au.value.trim()); }catch(_){}
+    closeSheet(); writePack({name,author:au.value.trim(),description:de.value.trim(),colour:st.colour,ids:[...st.ids]}); }}]});
+  setTimeout(()=>nm.focus(),50);
+}
+
+/* Installing: the file is read here, by the page, and its text is handed to the
+   engine, which checks every part of it before anything is added. */
+const PACK_MAX=8*1024*1024;
+function readPackFile(file){
+  if(!file) return;
+  const ext=(S.packExt||'.tepack').toLowerCase(), nm=String(file.name||'');
+  if(!/\.(tepack|lepack)$/i.test(nm)){ toast('That is not a preset pack ('+ext+' file)'); return; }
+  if(file.size>PACK_MAX){ toast('That file is too big to be a preset pack'); return; }
+  const fr=new FileReader();
+  fr.onload=()=>{ const text=String(fr.result||'');
+    cmd('readPack',{text}).then(r=>{ if(!r||!r.ok){ toast((r&&r.error)||'That pack could not be read'); return; } confirmInstall(r,text); }); };
+  fr.onerror=()=>toast('That file could not be read');
+  fr.readAsText(file);
+}
+function chooseAndReadPack(){
+  const i=document.createElement('input'); i.type='file'; i.accept='.tepack,.lepack';
+  i.onchange=()=>readPackFile(i.files&&i.files[0]); i.click();
+}
+function confirmInstall(r,text){
+  const info=r.info||{}, n=(r.presets||[]).length;
+  const body=el('div','installpk');
+  const L1=el('div'); L1.appendChild(packCover(info,true));
+  L1.appendChild(el('div','ptags','<span class="k">BY '+esc(String(info.author||'').toUpperCase())+'</span><span class="k">'+n+(n===1?' PRESET':' PRESETS')+'</span>'));
+  if(info.description) L1.appendChild(el('p','help',esc(info.description)));
+  body.appendChild(L1);
+  const R1=el('div'); R1.appendChild(el('b','','What will be added'));
+  const g=el('div','pgrid two');
+  (r.presets||[]).slice(0,10).forEach(p=>g.appendChild(el('div','pgi',esc(p.name)+'<span>'+esc(String(p.category||'').toUpperCase())+'</span>')));
+  R1.appendChild(g);
+  if(n>10) R1.appendChild(el('div','help','…and '+(n-10)+' more.'));
+  R1.appendChild(el('div','okmsg','✓ Checked: '+n+(n===1?' preset':' presets')+' for '+esc(PRODUCT.name)+', nothing but sounds.'
+    +(r.skipped?' '+r.skipped+(r.skipped===1?' pedal this version does not have was':' pedals this version does not have were')+' left out.':'')
+    +(r.installed?' You have this pack already; installing replaces it.':' Your own presets are not changed.')));
+  body.appendChild(R1);
+  openSheet({title:'Install “'+(info.name||'pack')+'”?', body, wide:true, actions:[{label:'Cancel',onClick:closeSheet},
+    {label:'Install '+n+(n===1?' preset':' presets'),kind:'primary',onClick:()=>{ closeSheet();
+      cmd('installPack',{text}).then(res=>{ if(!res||!res.ok){ toast((res&&res.error)||'Could not install'); return; }
+        lib={tab:'packs',id:info.id,page:0,q:''}; if(view!=='library') showView('library'); else renderLibrary();
+        toast('Installed '+res.added+' presets from '+info.name); }); }}]});
+}
+/* Drop a pack anywhere on the app to install it. */
+(()=>{
+  const ov=el('div','packdrop','<div>Drop to add it<small>A preset pack or an amp capture. It is checked before anything is added.</small></div>'); document.body.appendChild(ov);
+  const hasFile=e=>e.dataTransfer&&[...(e.dataTransfer.types||[])].indexOf('Files')>=0;
+  let depth=0;
+  window.addEventListener('dragenter',e=>{ if(!hasFile(e)||(view!=='library'&&view!=='rig')) return; depth++; ov.classList.add('on'); });
+  window.addEventListener('dragleave',e=>{ if(!hasFile(e)) return; if(--depth<=0){ depth=0; ov.classList.remove('on'); } });
+  window.addEventListener('dragover',e=>{ if(hasFile(e)) e.preventDefault(); });
+  window.addEventListener('drop',e=>{ if(!hasFile(e)) return; depth=0; ov.classList.remove('on');
+    const files=[...e.dataTransfer.files], f=files.find(f=>/\.(tepack|lepack)$/i.test(f.name)), nam=files.find(f=>/\.nam$/i.test(f.name));
+    if(nam){ e.preventDefault(); e.stopPropagation(); readCaptureFile(nam,r=>{ if(r&&view==='library'){ lib={tab:'captures',id:'nam:'+r.key,page:0,q:''}; renderLibrary(); } }); return; }
+    if(!f) return;                      // other files (songs, IRs) are handled where they are dropped
+    e.preventDefault(); e.stopPropagation(); readPackFile(f); },true);
+})();

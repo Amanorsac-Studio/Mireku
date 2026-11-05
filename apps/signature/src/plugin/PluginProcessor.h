@@ -51,10 +51,49 @@ public:
     // ------------------------------------------------- AudioProcessor basics
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
+    // ------------------------------------------------------ MULTI OUT (2026-11-01)
+    // Kontakt-style: four stereo instrument outputs, OUT 1..4. Each world (slot)
+    // plays through the one it is assigned to in the Audio / MIDI window. In a
+    // host they are four stereo buses: OUT 1 is the main output and always on,
+    // OUT 2..4 are extra buses the host enables on demand; a world sent to a
+    // bus the host has not enabled is FOLDED INTO OUT 1 so it is never silent.
+    // In the standalone, where there is no host to enable buses, all four are
+    // always on and `standaloneOutChannel` says which device channel pair each
+    // one lands on (-1 = folded into OUT 1). See processBlock.
+    static constexpr int kNumOutputs = 4;
+
     bool isBusesLayoutSupported (const BusesLayout& l) const override
     {
-        return l.getMainOutputChannelSet() == juce::AudioChannelSet::stereo();
+        if (l.getMainOutputChannelSet() != juce::AudioChannelSet::stereo()) return false;
+        for (int k = 1; k < l.outputBuses.size(); ++k)
+        {
+            const auto& set = l.outputBuses.getReference (k);
+            if (set == juce::AudioChannelSet::stereo()) continue;
+            // The standalone holder disables every non-main bus at start-up;
+            // refusing that keeps all four outputs open so the device mapping
+            // below has channels to write to.
+            if (set.isDisabled() && wrapperType != wrapperType_Standalone) continue;
+            return false;
+        }
+        return true;
     }
+
+    /// Instrument output (0..3 = OUT 1..4) each slot plays through. Message
+    /// thread writes through setSlotOutput; the audio thread reads the atomics.
+    std::array<std::atomic<int>, 4> slotOutput {};
+    void setSlotOutput (int slot, int output);
+    int slotOutputIndex (int slot) const { return juce::jlimit (0, kNumOutputs - 1, slotOutput[(size_t) slot].load()); }
+    /// Standalone only: first device channel of each instrument output, or -1 =
+    /// folded into OUT 1. OUT 1 is always channels 0/1. Set by the Audio / MIDI
+    /// window, restored by the standalone app from its settings file.
+    std::array<std::atomic<int>, kNumOutputs> standaloneOutChannel { 0, -1, -1, -1 };
+    /// Device output channels the standalone opened (0 in a host). An output
+    /// mapped past the end of the device folds into OUT 1 rather than vanishing.
+    std::atomic<int> standaloneDeviceOuts { 0 };
+    std::array<std::atomic<float>, kNumOutputs> outputPeak {};
+    bool isStandaloneBuild() const { return wrapperType == wrapperType_Standalone; }
+    /// True when any slot is assigned to that output (OUT 1 always counts).
+    bool outputInUse (int k) const;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
     juce::AudioProcessorEditor* createEditor() override;
@@ -102,6 +141,13 @@ public:
     /// the same routed pipeline, so nothing about them is a special case.
     void sendUiMidi (const juce::MidiMessage& m) { routedQueue.push (m, kSlotMaskAll, true); }
 
+    /// The last pitch bend (0..1, 0.5 centre) and mod wheel (0..1) that
+    /// reached the instrument from any source, so the on-screen wheels follow
+    /// a controller (client, 2026-11-03: "my pitch bend and modwheel don't
+    /// affect the wheels on the keys page").
+    float wheelBend() const { return wheelBend_.load (std::memory_order_relaxed); }
+    float wheelMod() const  { return wheelMod_.load (std::memory_order_relaxed); }
+
     /// ±semitone range applied to incoming pitch-bend (settings, default 2).
     int pitchBendRange() const;
 
@@ -130,6 +176,12 @@ public:
     /// Already scanned as factory content by the browser; in AUTHORING mode it
     /// is also where a performance snapshot is SAVED.
     static juce::File factoryPerformanceDir() { return performancePresetDir().getChildFile ("Factory"); }
+    /// Every folder the browser lists FACTORY performances from: the app's own
+    /// Factory folder first, then the LIBRARY's Performance\Factory and
+    /// Performance folders (client, 2026-11-03: James delivers performances
+    /// inside his library folder, beside the bundles, and they were not
+    /// showing). Only folders that exist. Saves never go to the library ones.
+    std::vector<juce::File> factoryPerformanceDirs() const;
 
     //================================================================ AUTHORING MODE
     // One SAVE gesture, two meanings, decided by the mode (engine/Authoring.h):
@@ -225,6 +277,22 @@ public:
     };
     RecategoriseOutcome recategoriseBundle (const juce::File& bundleDir, int newWorld);
 
+    /// ANCHORED PLAYBACK (2026-10-29). Takes a finished measurement (made on a
+    /// worker thread by authoring::measureBundleLevels), writes it into the
+    /// bundle through the guard, re-scans the library and RELOADS the bundle
+    /// into any slot playing it. A reload rather than an in-place patch: the
+    /// audio thread reads zones under the engine's spin lock on every note-on,
+    /// and anchorVelocity / levelDb are exactly the fields it reads, so they
+    /// cannot be edited behind its back the way meta.name can.
+    struct MeasureOutcome
+    {
+        bool ok = false;
+        juce::String message;
+        juce::String note;
+        int reloadedSlots = 0;
+    };
+    MeasureOutcome applyBundleLevels (const authoring::MeasuredLevels& measured);
+
     /// CLIENT-FACING GAP FOUND 2026-10-26: neither setStateInformation() nor
     /// loadPerformancePreset() ever re-loaded the .jmi bundles their saved slots
     /// name, so restoring a session or RECALLING a performance preset restored
@@ -289,6 +357,12 @@ public:
         return Library::userPresetDir().getChildFile (juce::String (worldJsonId (world)));
     }
 
+    /// The global half of velocity response. Written to settings.json (it
+    /// belongs to the player's keyboard, not to any patch) and pushed to all
+    /// four engines, since a curve that applied to one slot and not another
+    /// would make a split feel broken.
+    void setVelocityCurve (VelCurve c, int fixedVel);
+
     /// Push every piece of AppState into the DSP objects (after state load).
     void syncAllToDsp();
     void syncSlotToDsp (int slot);
@@ -296,6 +370,7 @@ public:
     // -------------------------------------------------- parameter router
     // Paths: "slot{i}.engine.{id}" | "slot{i}.fx{j}.{id}" | "slot{i}.fx{j}.bypass"
     //        | "slot{i}.ampenv.{attackMs|decayMs|sustain|releaseMs}"
+    //        | "slot{i}.vel.{depth|offset}"
     //        | "master.fx{j}.{id}" | "host.{apvtsParamId}"
     bool setParamNormalized (const juce::String& path, float norm, bool fromMacro = false);
     float getParamNormalized (const juce::String& path) const;
@@ -445,6 +520,98 @@ private:
     std::atomic<float>* bendRangeParam = nullptr;
     std::array<std::atomic<float>*, 4> slotVol {}, slotPan {}, slotEnable {};
     std::array<float, 4> lastEnable { -1, -1, -1, -1 };
+    /// Per-slot semitone shift (12 * octave + transpose), the audio-thread copy
+    /// of SlotState::octave / transpose. Written by setSlotShift and
+    /// syncSlotToDsp on the message thread, read in handleRoutedMessage.
+    std::array<std::atomic<int>, 4> slotShift { { 0, 0, 0, 0 } };
+    /// Per-slot KEY RANGE, the audio-thread copy of SlotState::keyLo / keyHi.
+    /// Only note-ons are filtered by it; a note-off reaches every routed slot,
+    /// so a range change can never strand a held note.
+    std::array<std::atomic<int>, 4> slotKeyLo { { 0, 0, 0, 0 } }, slotKeyHi { { 127, 127, 127, 127 } };
+    std::atomic<int> rangeLearnArm_ { -1 };          // slot * 2 + (0 low, 1 high), -1 idle
+    std::atomic<int> rangeLearnHit_ { -1 };          // (arm << 8) | note, -1 none
+    std::atomic<int> pendingProgram_ { -1 };         // MIDI program change, for the setlist
+    std::atomic<float> wheelBend_ { 0.5f }, wheelMod_ { 0.0f };   // for the on-screen wheels
+    std::atomic<float>* superKnobParam = nullptr;
+    float lastSuper_ = -1.0f;
+    bool deferRacks_ = false;                        // performance load: racks swap 25 ms later, dry
+    std::shared_ptr<int> aliveToken_ = std::make_shared<int> (0);
+
+public:
+    /// Sets a slot's OCTAVE (-2..+2). Notes the slot is holding are released
+    /// first, because their note-offs would otherwise arrive under the new
+    /// shift and miss them.
+    void setSlotShift (int slot, int octave);
+    /// Sets the played-key range an engine answers (inclusive, 0..127).
+    void setSlotRange (int slot, int lo, int hi);
+    /// Range LEARN: the next played key becomes the slot's low (which 0) or
+    /// high (which 1) key. pollRangeLearn applies it on the message thread
+    /// and returns true when something changed.
+    void armRangeLearn (int slot, int which) { rangeLearnArm_.store (slot * 2 + which); }
+    bool rangeLearnArmed() const { return rangeLearnArm_.load() >= 0; }
+    bool pollRangeLearn();
+
+    /// SUPER KNOB: pushes the "superKnob" parameter into every linked macro
+    /// when it has moved. Message thread; called from the UI timer.
+    void pollSuperKnob();
+
+    //=================================================================== SETLIST
+    // An ordered list of performance names for a show, stepped with NEXT /
+    // PREV on the setlist page or by MIDI program change. Saved in
+    // Presets\Setlists\Default.json. A name is resolved against the same
+    // folders the browser lists, so a performance delivered in the library
+    // can be on the list.
+    struct Setlist
+    {
+        /// SCENES (client, 2026-11-03): a scene is a whole picture of the
+        /// moment - which worlds are on, every knob, the effects, the macros
+        /// and the super knob - saved as the same snapshot a performance file
+        /// holds, kept inside the song. Tapping one brings it all back through
+        /// the seamless path, so held notes keep sounding.
+        struct Scene { juce::String name; juce::var snapshot; };
+        struct Entry                                           // a song of your own naming, and what it plays
+        {
+            juce::String song, performance;
+            std::vector<Scene> scenes;
+        };
+        juce::String name { "Default" };
+        std::vector<Entry> entries;
+        int current = -1;
+        int currentScene = -1;      // the scene of the current song last recalled (UI state, not saved)
+        bool viewOpen = false;      // the setlist page is showing (UI state, not saved)
+    };
+    Setlist setlist;
+    std::array<bool, 4> cardFlipped {};   // PERFORM card showing its back (UI state, not saved)
+    static juce::File setlistDir() { return Library::userPresetDir().getChildFile ("Setlists"); }
+    void loadSetlist();
+    void saveSetlist() const;
+    void setlistAdd (const juce::String& song, const juce::String& performanceName);
+    void setlistEdit (int index, const juce::String& song, const juce::String& performanceName);
+    void setlistRemove (int index);
+    void setlistMove (int index, int delta);
+    /// Drag-and-drop reorder: the song at `from` lands at position `to`.
+    void setlistReorder (int from, int to);
+    bool setlistGo (int index);
+    //---- scenes of a song
+    void sceneSave (int entry, const juce::String& name);        // the current state, as a new scene
+    void sceneUpdate (int entry, int scene);                     // overwrite a scene with the current state
+    void sceneRename (int entry, int scene, const juce::String& name);
+    void sceneRemove (int entry, int scene);
+    void sceneMove (int entry, int from, int to);
+    bool sceneRecall (int entry, int scene);
+    /// The whole performance as the snapshot a performance file holds.
+    juce::var performanceVar (const juce::String& name) const;
+    /// Applies such a snapshot through the seamless path. `name` when the
+    /// snapshot carries none.
+    bool applyPerformanceVar (const juce::var& v, const juce::String& name);
+    bool setlistNext() { return setlistGo (setlist.current + 1); }
+    bool setlistPrev() { return setlistGo (setlist.current - 1); }
+    /// All performance names the browser would list (factory folders + user), sorted.
+    juce::StringArray performanceNames() const;
+    juce::File performanceFileNamed (const juce::String& name) const;
+    /// MIDI program change n -> setlist entry n. Message thread; from the UI timer.
+    bool pollPendingProgram();
+private:
 
     // MODULATION PHASE 1 — host-parameter destinations are applied as an OFFSET
     // at the point of use, so the automated/stored base is never written.
@@ -462,6 +629,15 @@ private:
 
     juce::SmoothedValue<float> expressionGain { 1.0f };   // CC11
     juce::AudioBuffer<float> slotBuf;
+    /// MULTI OUT: the four instrument outputs are mixed here, post-processed
+    /// here (master volume, limiter, master rack on OUT 1) and only then copied
+    /// to the host buses or the device channels. Sized in prepareToPlay.
+    std::array<juce::AudioBuffer<float>, kNumOutputs> outBufs;
+    /// OUT 2..4 each carry their own safety limiter (masterLimiter is OUT 1's):
+    /// the limiter's look-ahead delay line always runs, so every output that
+    /// is in use leaves the plugin with the same latency and stays aligned.
+    std::array<MasterLimiter, kNumOutputs - 1> auxLimiters;
+    void copyOutputsToBuffer (juce::AudioBuffer<float>& buffer, int n);
     juce::MidiBuffer uiMidiBuf_;                 // on-screen keyboard scratch (message-free)
     juce::AudioProcessLoadMeasurer loadMeasurer;
     double bpm_ = 120.0;

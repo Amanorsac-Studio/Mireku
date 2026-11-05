@@ -38,8 +38,21 @@ public:
         addAndMakeVisible (close_);
     }
 
+    /// DOCKED (the edit page): no plaque, no title, no CLOSE chip - the page
+    /// draws the chrome and the tabs, and the panel lays its content out wide
+    /// and short across the band.
+    void setDocked (bool b)
+    {
+        docked_ = b;
+        close_.setVisible (! b);
+        resized();
+        repaint();
+    }
+    bool isDocked() const { return docked_; }
+
     void paint (juce::Graphics& g) override
     {
+        if (docked_) return;
         auto r = getLocalBounds().toFloat().reduced (2.0f);
         ux::drawChromePlaque (g, r, 10.0f);
         ux::drawMicroWeave (g, r.reduced (2.0f), 0.07f, 10.0f);
@@ -55,10 +68,13 @@ public:
     void resized() override
     {
         close_.setBounds (getWidth() - 96, 12, 76, 26);
-        contentResized (juce::Rectangle<int> (16, 52, getWidth() - 32, getHeight() - 68));
+        if (docked_) contentResized (juce::Rectangle<int> (14, 10, getWidth() - 28, getHeight() - 18));
+        else         contentResized (juce::Rectangle<int> (16, 52, getWidth() - 32, getHeight() - 68));
     }
 
     virtual void contentResized (juce::Rectangle<int>) {}
+    /// A docked panel's footnotes sit at the band's foot; an overlay's at its own.
+    int noteY (int fromBottom) const { return getHeight() - fromBottom; }
 
     void dismiss()
     {
@@ -73,6 +89,7 @@ public:
 protected:
     juce::String title_;
     ux::PlateButton close_;
+    bool docked_ = false;
 };
 
 //==============================================================================
@@ -234,6 +251,12 @@ public:
             rebuild();
         };
         addAndMakeVisible (clear_);
+        // the rows live in a viewport so a long list scrolls inside the band
+        // (docked) instead of growing the panel
+        view_.setViewedComponent (&holder_, false);
+        view_.setScrollBarsShown (true, false);
+        view_.setScrollBarThickness (8);
+        addAndMakeVisible (view_);
         rebuild();
     }
 
@@ -243,6 +266,8 @@ public:
         return juce::jmax (kMinHeight, 128 + juce::jmax (1, n) * kRowH);
     }
 
+    int macroIndex() const { return idx_; }
+
     void rebuild()
     {
         rows_.clear();
@@ -251,7 +276,7 @@ public:
         {
             auto* r = new MacroTargetRow (proc_, idx_, i, [this] { rebuild(); });
             rows_.add (r);
-            addAndMakeVisible (r);
+            holder_.addAndMakeVisible (r);
         }
         resized();
         repaint();
@@ -262,8 +287,13 @@ public:
         auto head = area.removeFromTop (30);
         rename_.setBounds (head.removeFromLeft (240).reduced (0, 2));
         clear_.setBounds (head.removeFromRight (100).reduced (0, 1));
-        area.removeFromTop (16);
-        for (auto* r : rows_) r->setBounds (area.removeFromTop (kRowH));
+        area.removeFromTop (docked_ ? 8 : 16);
+        view_.setBounds (area);
+        const int w = area.getWidth() - (rows_.size() * kRowH > area.getHeight() ? 10 : 0);
+        holder_.setSize (w, juce::jmax (area.getHeight(), rows_.size() * kRowH));
+        int y = 0;
+        for (auto* r : rows_) { r->setBounds (0, y, w, kRowH); y += kRowH; }
+        emptyArea_ = area;
     }
 
     void paint (juce::Graphics& g) override
@@ -277,7 +307,7 @@ public:
                               "Drag a parameter's gold link tab onto this macro knob; or right-click the\n"
                               "macro, choose Learn and click a control; or right-click any control and\n"
                               "choose \"Assign to Macro " + juce::String (idx_ + 1) + "\".",
-                              getLocalBounds().reduced (30, 0).withTrimmedTop (104).withHeight (72),
+                              emptyArea_.reduced (14, 0).withTrimmedTop (docked_ ? 10 : 20).withHeight (72),
                               juce::Justification::centredTop, 3);
         }
     }
@@ -287,6 +317,9 @@ private:
     int idx_;
     juce::TextEditor rename_;
     ux::PlateButton clear_;
+    juce::Viewport view_;
+    juce::Component holder_;
+    juce::Rectangle<int> emptyArea_;
     juce::OwnedArray<MacroTargetRow> rows_;
 };
 
@@ -530,6 +563,8 @@ public:
         static std::function<void()> hook;
         return hook;
     }
+    /// Opens the AUDIO / MIDI window (AudioSettings.h) over this panel's host.
+    void openAudioMidi();
 
     explicit SettingsPanel (JMSignatureProcessor& p) : ChromePanel ("Preferences"), proc_ (p)
     {
@@ -563,10 +598,9 @@ public:
         };
         addAndMakeVisible (rescan_);
 
-        audio_.setButtonText ("AUDIO / MIDI DEVICES...");
+        audio_.setButtonText ("AUDIO / MIDI...");
         audio_.setFontHeight (11.0f);
-        audio_.onClick = [] { if (auto& h = audioSettingsHook()) h(); };
-        audio_.setEnabled (audioSettingsHook() != nullptr);
+        audio_.onClick = [this] { openAudioMidi(); };       // defined in AudioSettings.h
         addAndMakeVisible (audio_);
 
         // ---------------------------------------------------- R4(2) bend range
@@ -976,3 +1010,7 @@ private:
 };
 
 } // namespace jm
+
+// The AUDIO / MIDI window builds on ChromePanel and RoutingRow above, and
+// SettingsPanel::openAudioMidi is defined in it, so it belongs at the end.
+#include "AudioSettings.h"

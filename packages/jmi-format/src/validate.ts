@@ -124,7 +124,12 @@ export function validateBundle(bundlePath: string): ValidationResult {
         closeSync(fd);
         const info = readAudioHeader(head);
         if (info.format !== 'pcm') err(rp, `${rr.file}: not integer PCM (float dump?)`);
-        if (info.sampleRate !== inst.meta.sampleRate)
+        // A sample may sit a little off the bundle's nominal rate: libraries
+        // converted from Akai-era samplers tune individual notes BY RATE
+        // (44,066 Hz is 44,100 lowered by 1.3 cents), and the player honours
+        // the file's own rate. Anything further off than ~3% (half a semitone)
+        // is a wrong file, not a tuning.
+        if (Math.abs(info.sampleRate / inst.meta.sampleRate - 1) > 0.03)
           err(rp, `${rr.file}: sampleRate ${info.sampleRate} != meta ${inst.meta.sampleRate}`);
         if (info.bitDepth !== inst.meta.bitDepth)
           err(rp, `${rr.file}: bitDepth ${info.bitDepth} != meta ${inst.meta.bitDepth}`);

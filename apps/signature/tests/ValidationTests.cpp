@@ -417,7 +417,7 @@ static void testPluginLevelNull()
     juce::ScopedJuceInitialiser_GUI juceInit;
     JMSignatureProcessor proc;
     // let the sample loader settle so both renders see the same residency
-    juce::Thread::sleep (750);
+    juce::Thread::sleep (750); SampleLoader::instance().waitUntilSettled (60000);
 
     auto* limiter = proc.apvts.getParameter ("limiter");
     // -18 dB master so nothing can reach the limiter's knee
@@ -468,6 +468,116 @@ static void testPluginLevelNull()
 }
 
 //==============================================================================
+// MULTI OUT (2026-11-01) -- each world to its own output bus
+//==============================================================================
+/// Renders one note through the whole processor into a buffer of `numChannels`
+/// and returns every channel. The same reset discipline as renderPlugin.
+static std::vector<std::vector<float>> renderPluginChannels (JMSignatureProcessor& proc, const RenderSpec& spec,
+                                                             int numChannels)
+{
+    const int total = (int) std::lround (spec.sampleRate * spec.seconds);
+    proc.setRateAndBufferSizeDetails (spec.sampleRate, spec.blockSize);
+    proc.prepareToPlay (spec.sampleRate, spec.blockSize);
+    for (int s = 0; s < 4; ++s)
+    {
+        proc.slotRacks[(size_t) s].setState (FxRackState {});
+        proc.slotRacks[(size_t) s].setState (proc.state.slots[(size_t) s].rack);
+        proc.engines[(size_t) s].setBundle (proc.engines[(size_t) s].bundle());
+    }
+    proc.masterRack.setState (FxRackState {});
+    proc.masterRack.setState (proc.state.masterRack);
+
+    std::vector<std::vector<float>> out ((size_t) numChannels);
+    juce::AudioBuffer<float> buf (numChannels, spec.blockSize);
+    juce::MidiBuffer midi;
+    for (int pos = 0; pos < total; pos += spec.blockSize)
+    {
+        const int len = juce::jmin (spec.blockSize, total - pos);
+        buf.setSize (numChannels, len, false, false, true);
+        buf.clear();
+        midi.clear();
+        if (pos == 0) midi.addEvent (juce::MidiMessage::noteOn (1, spec.note, (juce::uint8) spec.velocity), 0);
+        proc.processBlock (buf, midi);
+        for (int ch = 0; ch < numChannels; ++ch)
+            for (int i = 0; i < len; ++i) out[(size_t) ch].push_back (buf.getSample (ch, i));
+    }
+    juce::MidiBuffer panic;
+    panic.addEvent (juce::MidiMessage::allNotesOff (1), 0);
+    buf.setSize (numChannels, spec.blockSize, false, false, true);
+    buf.clear();
+    proc.processBlock (buf, panic);
+    return out;
+}
+
+static void testMultiOut()
+{
+    std::printf ("\n== MULTI OUT: a world on OUT 2 leaves OUT 1 and lands on its own bus ==\n");
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    JMSignatureProcessor proc;
+    juce::Thread::sleep (750); SampleLoader::instance().waitUntilSettled (60000);
+    if (auto* mv = proc.apvts.getParameter ("masterVol"))
+        mv->setValueNotifyingHost (mv->convertTo0to1 (-18.0f));
+
+    char msg[192];
+    CHECK (proc.getBusCount (false) == JMSignatureProcessor::kNumOutputs, "four output buses are declared");
+    CHECK (proc.getBus (false, 0)->isEnabled() && ! proc.getBus (false, 1)->isEnabled(),
+           "OUT 1 is on by default, OUT 2 is off until the host enables it");
+
+    // the slot that sounds for a note on channel 1 at first run is slot A
+    int sounding = -1;
+    for (int s = 0; s < 4 && sounding < 0; ++s)
+        if (proc.engines[(size_t) s].bundle() != nullptr && proc.apvts.getRawParameterValue ("slotEnable" + juce::String (s))->load() >= 0.5f)
+            sounding = s;
+    CHECK (sounding >= 0, "a slot has an instrument to render");
+    if (sounding < 0) return;
+
+    RenderSpec spec;
+    // The first render after construction is the warm-up (as in the null test:
+    // only renders after it are compared sample for sample).
+    renderPluginChannels (proc, spec, 2);
+    const auto base = renderPluginChannels (proc, spec, 2);
+    const double baseRms = rmsOf (base[0], 0, (int) base[0].size());
+    std::snprintf (msg, sizeof msg, "with every world on OUT 1 the main bus sounds (RMS %.1f dBFS)", dbOf (baseRms));
+    CHECK (baseRms > 1.0e-5, msg);
+
+    // 1. OUT 2 asked for, but the host has not enabled it: folded into OUT 1
+    proc.setSlotOutput (sounding, 1);
+    const auto folded = renderPluginChannels (proc, spec, 2);
+    CHECK (maxAbsDiff (folded[0], base[0]) == 0.0f,
+           "a world on an output the host has not enabled plays through OUT 1 unchanged");
+
+    // 2. the host enables OUT 2: the main bus goes quiet, OUT 2 carries the world
+    auto layout = proc.getBusesLayout();
+    layout.outputBuses.getReference (1) = juce::AudioChannelSet::stereo();
+    CHECK (proc.setBusesLayout (layout), "the host can enable OUT 2 as a stereo bus");
+    CHECK (proc.getTotalNumOutputChannels() == 4, "OUT 1 + OUT 2 = four channels");
+    const auto split = renderPluginChannels (proc, spec, 4);
+    const double mainRms = rmsOf (split[0], 0, (int) split[0].size());
+    const double out2Rms = rmsOf (split[2], 0, (int) split[2].size());
+    std::snprintf (msg, sizeof msg, "OUT 1 is silent once the world moved (RMS %.1f dBFS)", dbOf (mainRms));
+    CHECK (mainRms == 0.0, msg);
+    std::snprintf (msg, sizeof msg, "OUT 2 carries the world (RMS %.1f dBFS)", dbOf (out2Rms));
+    CHECK (out2Rms > 1.0e-5, msg);
+    CHECK (maxAbsDiff (split[2], base[0]) == 0.0f && maxAbsDiff (split[3], base[1]) == 0.0f,
+           "OUT 2 is sample-identical to what OUT 1 carried before: same volume, same limiter latency");
+
+    // 3. back to OUT 1 with OUT 2 still enabled: OUT 2 is silent
+    proc.setSlotOutput (sounding, 0);
+    const auto back = renderPluginChannels (proc, spec, 4);
+    CHECK (rmsOf (back[2], 0, (int) back[2].size()) == 0.0 && maxAbsDiff (back[0], base[0]) == 0.0f,
+           "moved back, OUT 2 is silent and OUT 1 is exactly as it was");
+
+    // 4. the assignment travels with the session state, not with a performance
+    proc.setSlotOutput (sounding, 3);
+    juce::MemoryBlock blob;
+    proc.getStateInformation (blob);
+    proc.setSlotOutput (sounding, 0);
+    proc.setStateInformation (blob.getData(), (int) blob.getSize());
+    CHECK (proc.slotOutputIndex (sounding) == 3, "the world's output is saved and restored with the plugin state");
+    proc.setSlotOutput (sounding, 0);
+}
+
+//==============================================================================
 // S4.1 -- SAMPLE-RATE AND BUFFER-SIZE MATRIX
 //==============================================================================
 static void testRateAndBufferMatrix()
@@ -475,7 +585,7 @@ static void testRateAndBufferMatrix()
     std::printf ("\n== S4.1 sample-rate / buffer-size matrix (whole plugin) ==\n");
     juce::ScopedJuceInitialiser_GUI juceInit;
     JMSignatureProcessor proc;
-    juce::Thread::sleep (750);                       // sample loader settles
+    juce::Thread::sleep (750); SampleLoader::instance().waitUntilSettled (60000);                       // sample loader settles
 
     const double rates[] = { 44100.0, 48000.0, 88200.0, 96000.0, 192000.0 };
     const int blocks[] = { 32, 64, 128, 256, 512, 1024, 2048 };
@@ -1380,16 +1490,18 @@ static void testRenameMigration()
 int main (int argc, char* argv[])
 {
     bool doNull = true, doMatrix = true, doRegression = true, doNeutral = true,
-         doMigration = true, rebaseline = false;
+         doMigration = true, doMultiOut = true, rebaseline = false, measureApply = false;
     juce::File neutralLibrary (JM_LIBRARY_TESTDATA);
+    juce::File measureDir;
     for (int i = 1; i < argc; ++i)
     {
         const juce::String a (argv[i]);
         if (a == "--null" || a == "--matrix" || a == "--regression" || a == "--neutral"
-            || a == "--migration")
+            || a == "--migration" || a == "--multiout")
         {
-            doNull = doMatrix = doRegression = doNeutral = doMigration = false;
+            doNull = doMatrix = doRegression = doNeutral = doMigration = doMultiOut = false;
             if (a == "--null") doNull = true;
+            if (a == "--multiout") doMultiOut = true;
             if (a == "--matrix") doMatrix = true;
             if (a == "--regression") doRegression = true;
             if (a == "--neutral") doNeutral = true;
@@ -1401,9 +1513,65 @@ int main (int argc, char* argv[])
                 neutralLibrary = juce::File (argv[++i]);
         }
         else if (a == "--rebaseline") rebaseline = true;
+        // `--measure <bundle-or-library>` runs the anchored-playback measurement
+        // pass headlessly. WITHOUT --apply it is a DRY RUN: the samples are read
+        // (read-only) and the edited instrument.json is written to a scratch
+        // copy beside this tool's output, never into the bundle. With --apply
+        // it writes through authoring::writeBundleLevels, i.e. the same guard
+        // (.bak, read back, validated, restored on failure) the app uses.
+        else if (a == "--measure" && i + 1 < argc) { measureDir = juce::File (argv[++i]); }
+        else if (a == "--apply") measureApply = true;
     }
     if (juce::SystemStats::getEnvironmentVariable ("JM_REBASELINE", {}).isNotEmpty())
         rebaseline = true;
+
+    if (measureDir != juce::File())
+    {
+        std::printf ("MIREKU anchored-playback measurement (%s)\n", measureApply ? "APPLY" : "DRY RUN");
+        juce::Array<juce::File> bundles;
+        if (authoring::looksLikeBundle (measureDir)) bundles.add (measureDir);
+        else for (auto& d : measureDir.findChildFiles (juce::File::findDirectories, false, "*.jmi"))
+            if (authoring::looksLikeBundle (d)) bundles.add (d);
+        auto scratch = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("mireku-measure-dryrun");
+        scratch.createDirectory();
+        int okCount = 0;
+        for (auto& b : bundles)
+        {
+            auto m = authoring::measureBundleLevels (b);
+            double lo = 0, hi = -200;
+            for (auto& z : m.zones) if (z.levelDb <= 0.0) { lo = juce::jmin (lo, z.levelDb); hi = juce::jmax (hi, z.levelDb); }
+            std::printf ("  %-28s zones %3d  samples %4d  level %7.2f .. %7.2f dB  %s\n",
+                         b.getFileName().toRawUTF8(), (int) m.zones.size(), m.samplesRead, lo, hi,
+                         m.problems.isEmpty() ? "" : m.problems.joinIntoString ("; ").toRawUTF8());
+            if (m.zones.empty()) { ++failures; continue; }
+            if (measureApply)
+            {
+                auto wr = authoring::writeBundleLevels (m);
+                std::printf ("      %s%s%s\n", wr.ok ? "WRITTEN: " : "REFUSED: ", wr.message.toRawUTF8(),
+                             wr.note.isNotEmpty() ? ("  (" + wr.note + ")").toRawUTF8() : "");
+                if (wr.ok) ++okCount; else ++failures;
+            }
+            else
+            {
+                // Dry run: the SAME writer, against a copy of instrument.json
+                // in the scratch folder, so the guard and the validator run
+                // for real and the bundle is never opened for writing.
+                auto copy = scratch.getChildFile (b.getFileName());
+                copy.deleteRecursively();
+                copy.createDirectory();
+                b.getChildFile ("instrument.json").copyFileTo (copy.getChildFile ("instrument.json"));
+                authoring::MeasuredLevels mc = m;
+                mc.bundleDir = copy;
+                auto wr = authoring::writeBundleLevels (mc);
+                std::printf ("      dry run -> %s%s\n", wr.ok ? "would write: " : "WOULD REFUSE: ", wr.message.toRawUTF8());
+                if (wr.ok) ++okCount; else ++failures;
+            }
+        }
+        std::printf ("\n%d of %d bundle(s) %s. %s\n", okCount, bundles.size(),
+                     measureApply ? "written" : "would be written",
+                     measureApply ? "" : ("Scratch copies: " + scratch.getFullPathName()).toRawUTF8());
+        return failures == 0 ? 0 : 1;
+    }
 
     std::printf ("MIREKU validation suite\n=============================\n");
 
@@ -1414,6 +1582,8 @@ int main (int argc, char* argv[])
         testBypassedFxUnitIsBitTransparent();
         testPluginLevelNull();
     }
+    if (doMultiOut)
+        testMultiOut();
     if (doMatrix)
         testRateAndBufferMatrix();
     if (doRegression)

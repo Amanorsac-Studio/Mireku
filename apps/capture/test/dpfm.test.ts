@@ -145,6 +145,7 @@ function buildFakeLibrary(
       rec[3] = 127;
       rec[8] = z.root;
       rec[11] = 1;
+      rec[15] = 1; // play mode one shot, as every real whole-sample keyzone has
       le32(44100).forEach((b, i) => (rec[36 + i] = b));
       le32(0).forEach((b, i) => (rec[44 + i] = b));
       le32(z.samples - 1).forEach((b, i) => (rec[48 + i] = b));

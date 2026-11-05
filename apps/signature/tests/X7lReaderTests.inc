@@ -100,6 +100,7 @@ static juce::String dumpLibrary (const juce::File& f)
         {
             const auto ip = jm::x7l::planImport (lib, dp, levels);
             out << "INSTRUMENTS " << (int) ip.instruments.size() << "\n";
+            for (auto& s : ip.skipped) out << "  INSTSKIP " << s.name << ": " << s.reason << "\n";
             for (auto& in : ip.instruments)
             {
                 out << "  INST " << in.index << " name=" << in.name << " bundle=" << in.bundleName

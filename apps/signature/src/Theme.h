@@ -140,6 +140,12 @@ public:
         // uniform-contain scaled (V2 root discipline retained).
         static constexpr int designW        = 1536;
         static constexpr int designH        = 1024;
+        // WIDE SCREENS (client, 2026-11-01: "work and look good on very wide
+        // monitors"). The root is still scaled by HEIGHT, never stretched, but
+        // its width now follows the window up to this many design units: the
+        // centre stage, the PERFORM dock and the FX rack take the extra width,
+        // the browser keeps its column. Beyond this the end cheeks return.
+        static constexpr int maxDesignW     = 2560;
         // R3(E): maximise must be able to fill a large display; the root is
         // uniform-contain scaled inside whatever size it gets, so the extra
         // headroom only ever adds chassis letterbox, never stretch.
@@ -221,19 +227,29 @@ public:
         // middle when PERFORM is selected) -----------------------------------
         // (the centre stage widens to centerW + dockW when PERFORM is selected)
         static constexpr int pcStageW = centerW + dockW + 6;      // 1254
-        static constexpr int pcSlotW = 590, pcSlotH = 132;
+        // (client, 2026-11-03: "lower the height"; the cards flip to show OCT and
+        // the key range on their back, so the front needs less)
+        static constexpr int pcSlotW = 590, pcSlotH = 104;
         static constexpr int pcSlotX[4] = { 26, 638, 26, 638 };
-        static constexpr int pcSlotY[4] = { 46, 46, 186, 186 };
-        static constexpr int pcModeX = 196, pcModeY = 332, pcModeW = 290, pcModeH = 52;
-        static constexpr int pcTransX = 520, pcTransY = 332, pcTransW = 300, pcTransH = 52;
-        static constexpr int pcOctX = 854, pcOctY = 332, pcOctW = 204, pcOctH = 52;
-        static constexpr int pcMacroY = 396, pcMacroH = 160, pcMacroD = 104;
+        static constexpr int pcSlotY[4] = { 46, 46, 160, 160 };
+        static constexpr int pcModeX = 196, pcModeY = 286, pcModeW = 290, pcModeH = 52;
+        static constexpr int pcTransX = 520, pcTransY = 286, pcTransW = 300, pcTransH = 52;
+        static constexpr int pcOctX = 854, pcOctY = 286, pcOctW = 204, pcOctH = 52;
+        static constexpr int pcMacroY = 360, pcMacroH = 160, pcMacroD = 104;
         static constexpr int pcMacroCx[4] = { 251, 502, 753, 1004 };
 
         // fx rack (local) -----------------------------------------------------
         static constexpr int fxTitleH = 26;
         static constexpr int fxRailX = 4, fxRailY = 32, fxRailW = 32, fxRailH = 215;
         static constexpr int fxUnitX = 42, fxUnitY = 32, fxUnitW = 164, fxUnitH = 215, fxUnitPitch = 168;
+        // A unit with five or more parameters needs three columns; at fxUnitW
+        // those are 52 px and the captions do not fit. fxUnitWide is three of
+        // the same 74 px cells a sparse unit gets. fxUnitGap is the space
+        // between plates (fxUnitPitch - fxUnitW, kept as its own name now that
+        // the pitch is no longer uniform). fxUnitMinW is where the strip stops
+        // shrinking units to fit and starts dropping the last one off the end.
+        static constexpr int fxUnitWide = 238, fxUnitGap = 4, fxUnitMinW = 140;
+        static constexpr int fxStripRight = 1054;   // fxMasterX: units end here
         static constexpr int fxDotsY = 258;
         static constexpr int fxMasterX = 1054, fxMasterY = 32, fxMasterW = 196, fxMasterH = 215;
 

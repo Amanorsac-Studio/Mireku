@@ -18,6 +18,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout JMSignatureProcessor::create
     lay.add (std::make_unique<juce::AudioParameterInt> (juce::ParameterID { "transpose", 1 }, "Transpose", -12, 12, 0));
     lay.add (std::make_unique<juce::AudioParameterInt> (juce::ParameterID { "octave", 1 }, "Octave", -2, 2, 0));
     lay.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "solo", 1 }, "Solo Mode", false));
+    // SETLIST SUPER KNOB (client, 2026-11-03): one knob that moves every linked
+    // macro. A host parameter so it can be automated and MIDI-learned like a
+    // macro; the fan-out to the macros happens on the message thread.
+    lay.add (std::make_unique<P> (juce::ParameterID { "superKnob", 1 }, "Super Knob", 0.0f, 1.0f, 0.0f));
     // CLIENT REVIEW ROUND 3 (D): the header LIMITER plate bound to "limiter",
     // which no layout ever declared — the button was permanently disabled and
     // there was no DSP behind it. Both now exist (see engine/Limiter.h).
@@ -39,7 +43,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout JMSignatureProcessor::create
 }
 
 JMSignatureProcessor::JMSignatureProcessor()
-    : juce::AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+    : juce::AudioProcessor (BusesProperties().withOutput ("OUT 1", juce::AudioChannelSet::stereo(), true)
+                                             .withOutput ("OUT 2", juce::AudioChannelSet::stereo(), false)
+                                             .withOutput ("OUT 3", juce::AudioChannelSet::stereo(), false)
+                                             .withOutput ("OUT 4", juce::AudioChannelSet::stereo(), false)),
       apvts (*this, nullptr, "JMSignature", createLayout())
 {
     for (int i = 0; i < 4; ++i)
@@ -65,6 +72,7 @@ JMSignatureProcessor::JMSignatureProcessor()
     limiterParam = apvts.getRawParameterValue ("limiter");
     transposeParam = apvts.getRawParameterValue ("transpose");
     octaveParam = apvts.getRawParameterValue ("octave");
+    superKnobParam = apvts.getRawParameterValue ("superKnob");
     soloParam = apvts.getRawParameterValue ("solo");
     bendRangeParam = apvts.getRawParameterValue ("bendRange");
 
@@ -74,8 +82,15 @@ JMSignatureProcessor::JMSignatureProcessor()
         deviceRouter = std::make_unique<MidiDeviceRouter> (routedQueue);
     midiRouting.refreshDeviceList();
 
+    // MULTI OUT: a host enables OUT 2..4 when it wants them; the standalone
+    // has no host, so all four are opened here and isBusesLayoutSupported
+    // refuses the holder's attempt to close them again.
+    for (auto& o : slotOutput) o.store (0);
+    if (wrapperType == wrapperType_Standalone) enableAllBuses();
+
     state.library.rescan();
     ensureFactoryPerformancePresets();
+    loadSetlist();
     // Auto-load the first available bundle of each world into its default slot.
     for (int i = 0; i < 4; ++i)
     {
@@ -90,6 +105,7 @@ JMSignatureProcessor::JMSignatureProcessor()
 
 JMSignatureProcessor::~JMSignatureProcessor()
 {
+    aliveToken_.reset();                 // a pending rack hand-over timer must not find us gone
     stateChanged.removeChangeListener (this);
     stopTimer();
 }
@@ -109,6 +125,8 @@ void JMSignatureProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     masterGain.reset (sampleRate, 0.02);
     masterGain.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (masterVolParam->load(), -60.0f));
     masterLimiter.prepare (sampleRate, samplesPerBlock);
+    for (auto& l : auxLimiters) l.prepare (sampleRate, samplesPerBlock);
+    for (auto& b : outBufs) { b.setSize (2, samplesPerBlock); b.clear(); }
     setLatencySamples (masterLimiter.latencySamples());
     mod.prepare (sampleRate);
     arp.prepare (sampleRate);       // PHASE 2: also clears held notes and the sounding set
@@ -177,24 +195,44 @@ void JMSignatureProcessor::handleRoutedMessage (const juce::MidiMessage& m, juce
     auto arpSink = [this] (const ArpEvent& e) { applyArpEvent (e); };
 
     {
+        // Per-engine OCTAVE / TRANSPOSE sits on top of the global shift. The arp
+        // is fed the globally shifted note and applies the slot's own shift
+        // when it plays into that slot (applyArpEvent), so both paths agree.
+        auto slotNote = [this, shift] (int i, int n)
+        { return juce::jlimit (0, 127, n + shift + slotShift[(size_t) i].load (std::memory_order_relaxed)); };
+        // KEY RANGE: the PLAYED key decides which slots a note-on reaches.
+        auto rangeMask = [this] (int played)
+        {
+            juce::uint8 r = 0;
+            for (int i = 0; i < 4; ++i)
+                if (played >= slotKeyLo[(size_t) i].load (std::memory_order_relaxed)
+                    && played <= slotKeyHi[(size_t) i].load (std::memory_order_relaxed))
+                    r |= (juce::uint8) (1u << i);
+            return r;
+        };
         if (m.isNoteOn())
         {
+            // range LEARN: the next key played sets a slot's low or high key
+            if (const int arm = rangeLearnArm_.exchange (-1); arm >= 0)
+                rangeLearnHit_.store ((arm << 8) | m.getNoteNumber());
             const int note = juce::jlimit (0, 127, m.getNoteNumber() + shift);
+            const juce::uint8 rm = rangeMask (m.getNoteNumber());
+            const juce::uint8 dm = (juce::uint8) (directMask & rm), am = (juce::uint8) (arpMask & rm);
             for (int i = 0; i < 4; ++i)
-                if (direct (i) && slotEnable[(size_t) i]->load() >= 0.5f)
-                    engines[(size_t) i].noteOn (note, m.getVelocity());
-            if (arpMask != 0) arp.noteOn (note, m.getVelocity(), arpMask, offset, arpSink);
+                if ((dm & (1u << i)) != 0 && slotEnable[(size_t) i]->load() >= 0.5f)
+                    engines[(size_t) i].noteOn (slotNote (i, m.getNoteNumber()), m.getVelocity());
+            if (am != 0) arp.noteOn (note, m.getVelocity(), am, offset, arpSink);
             // MODULATION PHASE 1: velocity / key track / random are per-note
             // sources, and the 0-held-notes -> 1 edge is what drives First-note
             // retrigger and the LFO fade-in for these GLOBAL LFOs. The PLAYED
             // note drives them, arpeggiated or not.
-            if (mask != 0) mod.noteOn (note, m.getVelocity());
+            if ((mask & rm) != 0) mod.noteOn (note, m.getVelocity());
         }
         else if (m.isNoteOff())
         {
             const int note = juce::jlimit (0, 127, m.getNoteNumber() + shift);
             for (int i = 0; i < 4; ++i)
-                if (direct (i)) engines[(size_t) i].noteOff (note);
+                if (direct (i)) engines[(size_t) i].noteOff (slotNote (i, m.getNoteNumber()));
             if (arpMask != 0) arp.noteOff (note, arpSink);
             if (mask != 0) mod.noteOff();
         }
@@ -204,6 +242,12 @@ void JMSignatureProcessor::handleRoutedMessage (const juce::MidiMessage& m, juce
             arp.panic (arpSink);
             for (auto& e : engines) e.allNotesOff (m.isAllNotesOff());
             mod.allNotesOff();
+        }
+        else if (m.isProgramChange())
+        {
+            // SETLIST: program change n steps to entry n; loading happens on
+            // the message thread (pollPendingProgram, from the UI timer).
+            if (mask != 0) pendingProgram_.store (m.getProgramChangeNumber());
         }
         else if (m.isChannelPressure())
         {
@@ -219,6 +263,7 @@ void JMSignatureProcessor::handleRoutedMessage (const juce::MidiMessage& m, juce
             // semitones as a smoothed playback-rate multiplier (Sampler.h).
             const float semis = ((float) m.getPitchWheelValue() - 8192.0f) / 8192.0f
                                 * (float) pitchBendRange();
+            if (mask != 0) wheelBend_.store ((float) m.getPitchWheelValue() / 16383.0f, std::memory_order_relaxed);
             for (int i = 0; i < 4; ++i)
                 if (routed (i)) engines[(size_t) i].setPitchBend (semis);
         }
@@ -251,6 +296,7 @@ void JMSignatureProcessor::handleRoutedMessage (const juce::MidiMessage& m, juce
             {
                 const float n = (float) val / 127.0f;
                 if (mask != 0) mod.setModWheel (n);           // also a matrix source now
+                if (mask != 0) wheelMod_.store (n, std::memory_order_relaxed);
                 for (int i = 0; i < 4; ++i)
                 {
                     if (! routed (i)) continue;
@@ -310,14 +356,317 @@ void JMSignatureProcessor::applyArpEvent (const ArpEvent& e)
     for (int i = 0; i < 4; ++i)
     {
         if ((e.mask & (1u << i)) == 0) continue;
+        const int note = juce::jlimit (0, 127, e.note + slotShift[(size_t) i].load (std::memory_order_relaxed));
         if (e.noteOn)
         {
             if (slotEnable[(size_t) i]->load() >= 0.5f)
-                engines[(size_t) i].noteOn (e.note, e.velocity);
+                engines[(size_t) i].noteOn (note, e.velocity);
         }
         else
-            engines[(size_t) i].noteOff (e.note);
+            engines[(size_t) i].noteOff (note);
     }
+}
+
+std::vector<juce::File> JMSignatureProcessor::factoryPerformanceDirs() const
+{
+    std::vector<juce::File> out;
+    auto add = [&out] (const juce::File& d)
+    {
+        if (! d.isDirectory()) return;
+        for (auto& e : out) if (e == d) return;
+        out.push_back (d);
+    };
+    add (factoryPerformanceDir());
+    const auto lib = state.library.libraryDir();
+    if (lib != juce::File())
+    {
+        add (lib.getChildFile ("Performance").getChildFile ("Factory"));
+        add (lib.getChildFile ("Performance"));
+        add (lib.getChildFile ("Performances"));
+    }
+    return out;
+}
+
+void JMSignatureProcessor::setSlotShift (int slot, int octave)
+{
+    if (slot < 0 || slot > 3) return;
+    auto& s = state.slots[(size_t) slot];
+    octave = juce::jlimit (-2, 2, octave);
+    if (s.octave == octave) return;
+    s.octave = octave;
+    // a held note's note-off would now be shifted differently and miss it
+    engines[(size_t) slot].allNotesOff (true);
+    slotShift[(size_t) slot].store (s.noteShift(), std::memory_order_relaxed);
+    // no stateChanged: nothing structural changed, and a rebuild would flip
+    // the PERFORM card back to its front under the player's hand
+}
+
+void JMSignatureProcessor::setSlotRange (int slot, int lo, int hi)
+{
+    if (slot < 0 || slot > 3) return;
+    auto& s = state.slots[(size_t) slot];
+    lo = juce::jlimit (0, 127, lo);
+    hi = juce::jlimit (0, 127, hi);
+    if (hi < lo) std::swap (lo, hi);
+    if (s.keyLo == lo && s.keyHi == hi) return;
+    s.keyLo = lo;
+    s.keyHi = hi;
+    slotKeyLo[(size_t) slot].store (lo, std::memory_order_relaxed);
+    slotKeyHi[(size_t) slot].store (hi, std::memory_order_relaxed);
+}
+
+bool JMSignatureProcessor::pollRangeLearn()
+{
+    const int hit = rangeLearnHit_.exchange (-1);
+    if (hit < 0) return false;
+    const int arm = hit >> 8, note = hit & 0x7F;
+    const int slot = arm / 2, which = arm % 2;
+    if (slot < 0 || slot > 3) return false;
+    auto& s = state.slots[(size_t) slot];
+    if (which == 0) setSlotRange (slot, note, juce::jmax (note, s.keyHi));
+    else            setSlotRange (slot, juce::jmin (note, s.keyLo), note);
+    return true;
+}
+
+void JMSignatureProcessor::pollSuperKnob()
+{
+    if (superKnobParam == nullptr) return;
+    const float v = superKnobParam->load();
+    if (lastSuper_ < 0.0f) { lastSuper_ = v; return; }   // first look: learn where it sits, move nothing
+    if (std::abs (v - lastSuper_) < 1.0e-4f) return;
+    lastSuper_ = v;
+    for (int i = 0; i < 4; ++i)
+    {
+        auto& m = state.macros[(size_t) i];
+        if (! m.superLink) continue;
+        const float t = m.superInvert ? 1.0f - v : v;
+        const float target = juce::jlimit (0.0f, 1.0f, m.superMin + (m.superMax - m.superMin) * t);
+        if (auto* p = apvts.getParameter ("macro" + juce::String (i + 1)))
+            if (std::abs (p->getValue() - target) > 1.0e-4f) p->setValueNotifyingHost (target);
+    }
+}
+
+//=================================================================== SETLIST
+void JMSignatureProcessor::loadSetlist()
+{
+    setlist = Setlist {};
+    auto f = sealed::findDocument (setlistDir(), "Default");
+    if (f == juce::File()) return;
+    auto v = sealed::readDocumentVar (f, sealed::setlist);
+    setlist.name = v.getProperty ("name", "Default").toString();
+    if (auto* arr = v.getProperty ("entries", juce::var()).getArray())
+        for (auto& e : *arr)
+        {
+            Setlist::Entry en;
+            if (e.isObject())
+            {
+                en.song = e.getProperty ("song", "").toString();
+                en.performance = e.getProperty ("performance", "").toString();
+            }
+            else en.song = en.performance = e.toString();        // the first format: names only
+            if (en.song.isEmpty()) en.song = en.performance;
+            if (auto* sc = e.getProperty ("scenes", juce::var()).getArray())
+                for (auto& s : *sc)
+                    if (s.isObject())
+                        en.scenes.push_back ({ s.getProperty ("name", "Scene").toString(),
+                                               s.getProperty ("snapshot", juce::var()) });
+            if (en.performance.isNotEmpty()) setlist.entries.push_back (en);
+        }
+}
+
+void JMSignatureProcessor::saveSetlist() const
+{
+    auto* o = new juce::DynamicObject();
+    o->setProperty ("name", setlist.name);
+    juce::Array<juce::var> arr;
+    for (auto& e : setlist.entries)
+    {
+        auto* eo = new juce::DynamicObject();
+        eo->setProperty ("song", e.song);
+        eo->setProperty ("performance", e.performance);
+        if (! e.scenes.empty())
+        {
+            juce::Array<juce::var> sc;
+            for (auto& s : e.scenes)
+            {
+                auto* so = new juce::DynamicObject();
+                so->setProperty ("name", s.name);
+                so->setProperty ("snapshot", s.snapshot);
+                sc.add (juce::var (so));
+            }
+            eo->setProperty ("scenes", sc);
+        }
+        arr.add (juce::var (eo));
+    }
+    o->setProperty ("entries", arr);
+    setlistDir().createDirectory();
+    sealed::writeDocument (sealed::documentFile (setlistDir(), "Default"), sealed::setlist,
+                           juce::JSON::toString (juce::var (o)));
+}
+
+void JMSignatureProcessor::setlistAdd (const juce::String& song, const juce::String& performanceName)
+{
+    if (performanceName.isEmpty()) return;
+    setlist.entries.push_back ({ song.isEmpty() ? performanceName : song, performanceName });
+    saveSetlist();
+}
+
+void JMSignatureProcessor::setlistEdit (int index, const juce::String& song, const juce::String& performanceName)
+{
+    if (index < 0 || index >= (int) setlist.entries.size() || performanceName.isEmpty()) return;
+    auto& e = setlist.entries[(size_t) index];
+    e.song = song.isEmpty() ? performanceName : song;
+    e.performance = performanceName;                          // the song's scenes stay with it
+    saveSetlist();
+}
+
+void JMSignatureProcessor::setlistRemove (int index)
+{
+    if (index < 0 || index >= (int) setlist.entries.size()) return;
+    setlist.entries.erase (setlist.entries.begin() + index);
+    if (setlist.current == index) setlist.current = -1;
+    else if (setlist.current > index) --setlist.current;
+    saveSetlist();
+}
+
+void JMSignatureProcessor::setlistMove (int index, int delta)
+{
+    const int to = index + delta;
+    const int n = (int) setlist.entries.size();
+    if (index < 0 || index >= n || to < 0 || to >= n) return;
+    std::swap (setlist.entries[(size_t) index], setlist.entries[(size_t) to]);
+    if (setlist.current == index) setlist.current = to;
+    else if (setlist.current == to) setlist.current = index;
+    saveSetlist();
+}
+
+void JMSignatureProcessor::setlistReorder (int from, int to)
+{
+    const int n = (int) setlist.entries.size();
+    if (from < 0 || from >= n || to < 0 || to >= n || from == to) return;
+    auto moved = setlist.entries[(size_t) from];
+    setlist.entries.erase (setlist.entries.begin() + from);
+    setlist.entries.insert (setlist.entries.begin() + to, moved);
+    if (setlist.current == from) setlist.current = to;
+    else if (from < setlist.current && to >= setlist.current) --setlist.current;
+    else if (from > setlist.current && to <= setlist.current) ++setlist.current;
+    saveSetlist();
+}
+
+//---------------------------------------------------------------------- scenes
+void JMSignatureProcessor::sceneSave (int entry, const juce::String& name)
+{
+    if (entry < 0 || entry >= (int) setlist.entries.size()) return;
+    auto& e = setlist.entries[(size_t) entry];
+    const auto nm = name.trim().isEmpty() ? "Scene " + juce::String (e.scenes.size() + 1) : name.trim();
+    e.scenes.push_back ({ nm, performanceVar (nm) });
+    if (entry == setlist.current) setlist.currentScene = (int) e.scenes.size() - 1;
+    saveSetlist();
+}
+
+void JMSignatureProcessor::sceneUpdate (int entry, int scene)
+{
+    if (entry < 0 || entry >= (int) setlist.entries.size()) return;
+    auto& e = setlist.entries[(size_t) entry];
+    if (scene < 0 || scene >= (int) e.scenes.size()) return;
+    e.scenes[(size_t) scene].snapshot = performanceVar (e.scenes[(size_t) scene].name);
+    if (entry == setlist.current) setlist.currentScene = scene;
+    saveSetlist();
+}
+
+void JMSignatureProcessor::sceneRename (int entry, int scene, const juce::String& name)
+{
+    if (entry < 0 || entry >= (int) setlist.entries.size()) return;
+    auto& e = setlist.entries[(size_t) entry];
+    if (scene < 0 || scene >= (int) e.scenes.size() || name.trim().isEmpty()) return;
+    e.scenes[(size_t) scene].name = name.trim();
+    saveSetlist();
+}
+
+void JMSignatureProcessor::sceneRemove (int entry, int scene)
+{
+    if (entry < 0 || entry >= (int) setlist.entries.size()) return;
+    auto& e = setlist.entries[(size_t) entry];
+    if (scene < 0 || scene >= (int) e.scenes.size()) return;
+    e.scenes.erase (e.scenes.begin() + scene);
+    if (entry == setlist.current)
+    {
+        if (setlist.currentScene == scene) setlist.currentScene = -1;
+        else if (setlist.currentScene > scene) --setlist.currentScene;
+    }
+    saveSetlist();
+}
+
+void JMSignatureProcessor::sceneMove (int entry, int from, int to)
+{
+    if (entry < 0 || entry >= (int) setlist.entries.size()) return;
+    auto& e = setlist.entries[(size_t) entry];
+    const int n = (int) e.scenes.size();
+    if (from < 0 || from >= n || to < 0 || to >= n || from == to) return;
+    auto moved = e.scenes[(size_t) from];
+    e.scenes.erase (e.scenes.begin() + from);
+    e.scenes.insert (e.scenes.begin() + to, moved);
+    if (entry == setlist.current && setlist.currentScene == from) setlist.currentScene = to;
+    saveSetlist();
+}
+
+bool JMSignatureProcessor::sceneRecall (int entry, int scene)
+{
+    if (entry < 0 || entry >= (int) setlist.entries.size()) return false;
+    auto& e = setlist.entries[(size_t) entry];
+    if (scene < 0 || scene >= (int) e.scenes.size()) return false;
+    if (entry != setlist.current)
+    {
+        // a scene of another song: that song comes first, its scene on top
+        if (! setlistGo (entry)) return false;
+    }
+    const bool ok = applyPerformanceVar (e.scenes[(size_t) scene].snapshot, e.performance);
+    if (ok) setlist.currentScene = scene;
+    return ok;
+}
+
+juce::StringArray JMSignatureProcessor::performanceNames() const
+{
+    juce::StringArray names;
+    for (auto& d : factoryPerformanceDirs())
+        for (auto& f : sealed::listDocuments (d))
+            names.addIfNotAlreadyThere (f.getFileNameWithoutExtension());
+    for (auto& f : sealed::listDocuments (performancePresetDir()))
+        names.addIfNotAlreadyThere (f.getFileNameWithoutExtension());
+    names.sortNatural();
+    return names;
+}
+
+juce::File JMSignatureProcessor::performanceFileNamed (const juce::String& name) const
+{
+    for (auto& d : factoryPerformanceDirs())
+    {
+        auto f = sealed::findDocument (d, name);
+        if (f != juce::File()) return f;
+    }
+    return sealed::findDocument (performancePresetDir(), name);
+}
+
+bool JMSignatureProcessor::setlistGo (int index)
+{
+    if (index < 0 || index >= (int) setlist.entries.size()) return false;
+    auto f = performanceFileNamed (setlist.entries[(size_t) index].performance);
+    if (f == juce::File())
+    {
+        state.libraryNotice = "\"" + setlist.entries[(size_t) index].performance + "\" is not among your performances";
+        stateChanged.sendChangeMessage();
+        return false;
+    }
+    setlist.current = index;
+    setlist.currentScene = -1;                       // the song itself, no scene on top yet
+    return loadPerformancePreset (f);
+}
+
+bool JMSignatureProcessor::pollPendingProgram()
+{
+    const int pc = pendingProgram_.exchange (-1);
+    if (pc < 0) return false;
+    return setlistGo (pc);
 }
 
 void JMSignatureProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
@@ -335,6 +684,11 @@ void JMSignatureProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     if constexpr (tester::kEnabled)
         if (! testerOpen_.load (std::memory_order_relaxed)) { midi.clear(); return; }
     if (slotBuf.getNumSamples() < n) slotBuf.setSize (2, n, false, false, true);
+    for (auto& b : outBufs)
+    {
+        if (b.getNumSamples() < n) b.setSize (2, n, false, false, true);
+        b.clear (0, n);
+    }
 
     // MODULATION PHASE 1 — the transport clock. getPosition() may ONLY be called
     // from processBlock, so this is its one call site. The clock latches the
@@ -352,6 +706,20 @@ void JMSignatureProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     keyboardState.processNextMidiBuffer (uiMidiBuf_, 0, n, true);
     for (const auto meta : uiMidiBuf_)
         routedQueue.push (meta.getMessage(), kSlotMaskAll, true);
+    // The other direction: notes from a MIDI device (the host buffer) light the
+    // on-screen keys. `false` = read the buffer into the key state only, inject
+    // nothing, so a hardware note is never doubled (client, 2026-11-01: "the
+    // piano doesn't show the keys when I play on my keyboard").
+    // Only note on / off go through: JUCE's keyboard state answers an
+    // all-notes-off by QUEUEING 128 note-offs for injection in the next block,
+    // which reached the engine as stray events and made renders differ by
+    // block size (the S4.1 matrix caught it). All-notes-off just clears the keys.
+    for (const auto meta : midi)
+    {
+        const auto m = meta.getMessage();
+        if (m.isNoteOnOrOff())                            keyboardState.processNextMidiEvent (m);
+        else if (m.isAllNotesOff() || m.isAllSoundOff())  keyboardState.reset();
+    }
 
     for (int i = 0; i < 4; ++i) mod.setMacroBase (i, macroParams[(size_t) i]->load());
 
@@ -421,28 +789,112 @@ void JMSignatureProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     // reaches it as a NORMALISED OFFSET on top of the automated base, so the
     // host's automation lane is never written (research trap 1).
     masterGain.setTargetValue (juce::Decibels::decibelsToGain (modulatedHostValue (hmMasterVol), -60.0f));
+    // MULTI OUT: the master volume is the instrument's volume, so it rides on
+    // every output; outputs nobody is assigned to are skipped (they are silent).
+    bool used[kNumOutputs];
+    for (int k = 0; k < kNumOutputs; ++k) used[k] = outputInUse (k);
     for (int i = 0; i < n; ++i)
     {
         const float g = masterGain.getNextValue() * expressionGain.getNextValue();
-        buffer.getWritePointer (0)[i] *= g;
-        buffer.getWritePointer (1)[i] *= g;
+        for (int k = 0; k < kNumOutputs; ++k)
+        {
+            if (! used[k]) continue;
+            outBufs[(size_t) k].getWritePointer (0)[i] *= g;
+            outBufs[(size_t) k].getWritePointer (1)[i] *= g;
+        }
     }
 
-    // master-bus safety limiter, post master volume (R3/D)
-    masterLimiter.setEnabled (limiterParam != nullptr && limiterParam->load() >= 0.5f);
-    masterLimiter.process (buffer);
+    // safety limiter, post master volume (R3/D) — one per output in use, so
+    // every output leaves with the same look-ahead latency
+    const bool limiterOn = limiterParam != nullptr && limiterParam->load() >= 0.5f;
+    for (int k = 0; k < kNumOutputs; ++k)
+    {
+        if (! used[k]) { outputPeak[(size_t) k].store (0.0f); continue; }
+        float* p[2] = { outBufs[(size_t) k].getWritePointer (0), outBufs[(size_t) k].getWritePointer (1) };
+        juce::AudioBuffer<float> view (p, 2, n);
+        auto& lim = k == 0 ? masterLimiter : auxLimiters[(size_t) (k - 1)];
+        lim.setEnabled (limiterOn);
+        lim.process (view);
+        outputPeak[(size_t) k].store (view.getMagnitude (0, n));
+    }
 
-    masterPeakL.store (buffer.getMagnitude (0, 0, n));
-    masterPeakR.store (buffer.getMagnitude (1, 0, n));
+    masterPeakL.store (outBufs[0].getMagnitude (0, 0, n));
+    masterPeakR.store (outBufs[0].getMagnitude (1, 0, n));
+
+    copyOutputsToBuffer (buffer, n);
+}
+
+bool JMSignatureProcessor::outputInUse (int k) const
+{
+    if (k == 0) return true;
+    for (int i = 0; i < 4; ++i) if (slotOutputIndex (i) == k) return true;
+    return false;
+}
+
+void JMSignatureProcessor::setSlotOutput (int slot, int output)
+{
+    if (slot < 0 || slot >= 4) return;
+    slotOutput[(size_t) slot].store (juce::jlimit (0, kNumOutputs - 1, output));
+    stateChanged.sendChangeMessage();
+}
+
+/// The only place the host buffer is written. OUT 1 is the main bus / device
+/// channels 0-1. Each other output goes to its bus if the host has enabled it,
+/// or to its device channel pair in the standalone if the device has it;
+/// otherwise it is FOLDED INTO OUT 1, so an assignment the environment cannot
+/// honour costs nothing but the separation.
+void JMSignatureProcessor::copyOutputsToBuffer (juce::AudioBuffer<float>& buffer, int n)
+{
+    const int totalCh = buffer.getNumChannels();
+    if (totalCh < 2) return;
+    auto addPair = [&] (int firstCh, int k)
+    {
+        buffer.addFrom (firstCh,     0, outBufs[(size_t) k], 0, 0, n);
+        buffer.addFrom (firstCh + 1, 0, outBufs[(size_t) k], 1, 0, n);
+    };
+    const bool standalone = isStandaloneBuild();
+    const int deviceOuts = standaloneDeviceOuts.load (std::memory_order_relaxed);
+    for (int k = 0; k < kNumOutputs; ++k)
+    {
+        if (! outputInUse (k)) continue;
+        int first = 0;                                       // OUT 1, and the fold target
+        if (k > 0)
+        {
+            if (standalone)
+            {
+                const int c = standaloneOutChannel[(size_t) k].load (std::memory_order_relaxed);
+                // `deviceOuts` is what the device actually opened; the buffer
+                // is the processor's eight channels regardless, and a pair
+                // past the device would be written into silence.
+                if (c >= 0 && c + 1 < totalCh && (deviceOuts <= 0 || c + 1 < deviceOuts)) first = c;
+            }
+            else if (auto* bus = getBus (false, k); bus != nullptr && bus->isEnabled()
+                     && bus->getNumberOfChannels() >= 2)
+            {
+                const int c = getChannelIndexInProcessBlockBuffer (false, k, 0);
+                if (c >= 0 && c + 1 < totalCh) first = c;
+            }
+        }
+        addPair (first, k);
+    }
 }
 
 //==============================================================================
 // MODULATION PHASE 1 — one control block of audio.
 void JMSignatureProcessor::renderChunk (juce::AudioBuffer<float>& buffer, int start, int len)
 {
-    // allocation-free views onto the destination block
-    float* outPtr[2] = { buffer.getWritePointer (0) + start, buffer.getWritePointer (1) + start };
-    juce::AudioBuffer<float> outView (outPtr, 2, len);
+    // allocation-free views onto the four instrument outputs (MULTI OUT): the
+    // host buffer is not touched here, copyOutputsToBuffer does that once per
+    // block after the output processing.
+    juce::ignoreUnused (buffer);
+    float* outPtr[kNumOutputs][2];
+    juce::AudioBuffer<float> outViews[kNumOutputs];
+    for (int k = 0; k < kNumOutputs; ++k)
+    {
+        outPtr[k][0] = outBufs[(size_t) k].getWritePointer (0) + start;
+        outPtr[k][1] = outBufs[(size_t) k].getWritePointer (1) + start;
+        outViews[k].setDataToReferTo (outPtr[k], 2, len);
+    }
     float* slotPtr[2] = { slotBuf.getWritePointer (0), slotBuf.getWritePointer (1) };
     juce::AudioBuffer<float> slotView (slotPtr, 2, len);
 
@@ -461,6 +913,7 @@ void JMSignatureProcessor::renderChunk (juce::AudioBuffer<float>& buffer, int st
         slotView.clear();
         eng.render (slotView, len);
         slotRacks[(size_t) i].process (slotView, bpm_);
+        auto& outView = outViews[slotOutputIndex (i)];     // the world's output
 
         // Slot volume and pan are modulation destinations. Research section 1.5: smooth
         // the PAN POSITION and recompute the equal-power law from it, never the
@@ -496,7 +949,7 @@ void JMSignatureProcessor::renderChunk (juce::AudioBuffer<float>& buffer, int st
     }
     if (start == 0) totalVoices.store (voices);
 
-    masterRack.process (outView, bpm_);
+    masterRack.process (outViews[0], bpm_);                // the master rack sits on OUT 1
 }
 
 /// Base (automated / stored) value of a continuous host parameter with the
@@ -994,6 +1447,27 @@ bool JMSignatureProcessor::setParamNormalized (const juce::String& path, float n
         }
         return false;
     }
+    // GLOBAL velocity response. Not under "slot" because it is not per slot:
+    // the curve describes the player's keyboard and is written to
+    // settings.json, not to a preset.
+    if (path.startsWith ("velocity."))
+    {
+        const auto id = path.fromFirstOccurrenceOf ("velocity.", false, false);
+        if (id == "curve")
+        {
+            const int i = juce::jlimit (0, kVelCurveCount - 1,
+                                        (int) std::lround (nv * (float) (kVelCurveCount - 1)));
+            setVelocityCurve ((VelCurve) i, state.library.fixedVelocity());
+            return true;
+        }
+        if (id == "fixed")
+        {
+            setVelocityCurve (velCurveFromId (state.library.velocityCurveId()),
+                              juce::jlimit (1, 127, (int) std::lround (1.0f + nv * 126.0f)));
+            return true;
+        }
+        return false;
+    }
 
     FxRackState* rack = nullptr;
     FxRackDsp* rackDsp = nullptr;
@@ -1028,12 +1502,28 @@ bool JMSignatureProcessor::setParamNormalized (const juce::String& path, float n
             }
         return false;
     }
+    if (rest.startsWith ("vel.") && slot >= 0)
+    {
+        // DEPTH and OFFSET are integers 0..127 with 64 neutral, not continuous
+        // floats, because that is the vocabulary a Yamaha player already has
+        // for them and because the knob should land exactly on 64.
+        auto id = rest.fromFirstOccurrenceOf ("vel.", false, false);
+        auto& vel = state.slots[(size_t) slot].vel;
+        const int v = juce::jlimit (0, 127, (int) std::lround (nv * 127.0f));
+        if (id == "depth") vel.depth = v;
+        else if (id == "offset") vel.offset = v;
+        else return false;
+        engines[(size_t) slot].setVelDepthOffset (vel.depth, vel.offset);
+        return true;
+    }
     if (rest.startsWith ("ampenv.") && slot >= 0)
     {
         auto id = rest.fromFirstOccurrenceOf ("ampenv.", false, false);
         auto& env = state.slots[(size_t) slot].ampEnv;
         auto& dst = engines[(size_t) slot].ampEnv();
-        if (id == "attackMs")  { env.attackMs = 1.0f + nv * nv * 1999.0f;  dst.attackMs = env.attackMs; }
+        // 0..2000 ms, squared taper. It used to be 1 + nv^2 * 1999: the knob
+        // could not reach 0, which is now the default.
+        if (id == "attackMs")  { env.attackMs = nv * nv * 2000.0f;  dst.attackMs = env.attackMs; }
         else if (id == "decayMs")   { env.decayMs = nv * nv * 4000.0f;    dst.decayMs = env.decayMs; }
         else if (id == "sustain")   { env.sustain = nv * 100.0f;          dst.sustain = env.sustain; }
         else if (id == "releaseMs") { env.releaseMs = 5.0f + nv * nv * 3995.0f; dst.releaseMs = env.releaseMs; }
@@ -1069,6 +1559,15 @@ float JMSignatureProcessor::getParamNormalized (const juce::String& path) const
     if (path.startsWith ("host."))
         if (auto* p = apvts.getParameter (path.fromFirstOccurrenceOf ("host.", false, false)))
             return p->getValue();
+    if (path.startsWith ("velocity."))
+    {
+        const auto id = path.fromFirstOccurrenceOf ("velocity.", false, false);
+        if (id == "curve")
+            return (float) (int) velCurveFromId (state.library.velocityCurveId())
+                 / (float) (kVelCurveCount - 1);
+        if (id == "fixed") return ((float) state.library.fixedVelocity() - 1.0f) / 126.0f;
+        return 0;
+    }
 
     int slot = -1;
     const FxRackState* rack = nullptr;
@@ -1097,11 +1596,19 @@ float JMSignatureProcessor::getParamNormalized (const juce::String& path) const
                 return norm (s, it != state.slots[(size_t) slot].engineParams.end() ? it->second : s.def);
             }
     }
+    if (rest.startsWith ("vel.") && slot >= 0)
+    {
+        auto id = rest.fromFirstOccurrenceOf ("vel.", false, false);
+        auto& vel = state.slots[(size_t) slot].vel;
+        if (id == "depth") return (float) vel.depth / 127.0f;
+        if (id == "offset") return (float) vel.offset / 127.0f;
+        return 0;
+    }
     if (rest.startsWith ("ampenv.") && slot >= 0)
     {
         auto id = rest.fromFirstOccurrenceOf ("ampenv.", false, false);
         auto& env = state.slots[(size_t) slot].ampEnv;
-        if (id == "attackMs") return std::sqrt (juce::jlimit (0.0f, 1.0f, (env.attackMs - 1.0f) / 1999.0f));
+        if (id == "attackMs") return std::sqrt (juce::jlimit (0.0f, 1.0f, env.attackMs / 2000.0f));
         if (id == "decayMs") return std::sqrt (juce::jlimit (0.0f, 1.0f, env.decayMs / 4000.0f));
         if (id == "sustain") return env.sustain / 100.0f;
         if (id == "releaseMs") return std::sqrt (juce::jlimit (0.0f, 1.0f, (env.releaseMs - 5.0f) / 3995.0f));
@@ -1178,6 +1685,8 @@ juce::String JMSignatureProcessor::paramDisplayName (const juce::String& path) c
     }
     if (rest.startsWith ("ampenv."))
         return prefix + "  -  AMP ENV  -  " + pretty (rest.fromFirstOccurrenceOf ("ampenv.", false, false));
+    if (rest.startsWith ("vel."))
+        return prefix + "  -  VELOCITY  -  " + pretty (rest.fromFirstOccurrenceOf ("vel.", false, false));
     if (rest.startsWith ("fx") && rack != nullptr)
     {
         const int u = rest.substring (2).getIntValue();
@@ -1195,6 +1704,10 @@ juce::String JMSignatureProcessor::paramDisplayName (const juce::String& path) c
 
 bool JMSignatureProcessor::handleLearnClick (const juce::String& path)
 {
+    // The global velocity curve is not automatable and not a macro target: it
+    // is a property of the keyboard in front of the player. Linking it would
+    // create a target that resolveDest cannot resolve, i.e. a dead macro.
+    if (path.startsWith ("velocity.")) return false;
     const int mi = state.learn.macroLearnArmed.load();
     if (mi >= 0)
     {
@@ -1319,7 +1832,7 @@ void JMSignatureProcessor::applyJmiPresetToSlot (int slot, const jmi::Preset& pr
 
 bool JMSignatureProcessor::applyUserPresetToSlot (int slot, const juce::File& f)
 {
-    auto v = juce::JSON::parse (f.loadFileAsString());
+    auto v = sealed::readDocumentVar (f, sealed::preset);
     if (! v.isObject()) return false;
     auto& s = state.slots[(size_t) slot];
     s.presetName = v.getProperty ("name", f.getFileNameWithoutExtension()).toString();
@@ -1331,6 +1844,9 @@ bool JMSignatureProcessor::applyUserPresetToSlot (int slot, const juce::File& f)
     s.ampEnv.decayMs = (float) (double) env.getProperty ("decayMs", s.ampEnv.decayMs);
     s.ampEnv.sustain = (float) (double) env.getProperty ("sustain", s.ampEnv.sustain);
     s.ampEnv.releaseMs = (float) (double) env.getProperty ("releaseMs", s.ampEnv.releaseMs);
+    auto vel = v.getProperty ("velocity", juce::var());
+    s.vel.depth = juce::jlimit (0, 127, (int) vel.getProperty ("depth", s.vel.depth));
+    s.vel.offset = juce::jlimit (0, 127, (int) vel.getProperty ("offset", s.vel.offset));
     syncSlotToDsp (slot);
     stateChanged.sendChangeMessage();
     return true;
@@ -1355,6 +1871,13 @@ juce::var JMSignatureProcessor::slotPresetToVar (int slot, const juce::String& n
     env->setProperty ("sustain", s.ampEnv.sustain);
     env->setProperty ("releaseMs", s.ampEnv.releaseMs);
     o->setProperty ("ampEnvelope", juce::var (env));
+    // Velocity DEPTH/OFFSET is part of the sound, so it travels with a preset.
+    // The CURVE deliberately does not: it describes the player's keyboard, and
+    // a preset that silently re-tuned the feel of his action would be a bug.
+    auto* vel = new juce::DynamicObject();
+    vel->setProperty ("depth", s.vel.depth);
+    vel->setProperty ("offset", s.vel.offset);
+    o->setProperty ("velocity", juce::var (vel));
     return juce::var (o);
 }
 
@@ -1380,8 +1903,7 @@ juce::File JMSignatureProcessor::instrumentPresetFileFor (int slot, const juce::
         if (! authoring::looksLikeBundle (bundle)) return {};     // the save would fall back
         return authoring::bundlePresetFile (bundle, name);
     }
-    return worldPresetDir (state.slots[(size_t) slot].world)
-               .getChildFile (juce::File::createLegalFileName (name) + ".json");
+    return sealed::documentFile (worldPresetDir (state.slots[(size_t) slot].world), name);
 }
 
 bool JMSignatureProcessor::instrumentPresetExists (int slot, const juce::String& name) const
@@ -1395,7 +1917,7 @@ juce::File JMSignatureProcessor::performancePresetFileFor (const juce::String& r
     const auto name = rawName.trim();
     if (name.isEmpty()) return {};
     auto dir = state.library.isAuthoring() ? factoryPerformanceDir() : performancePresetDir();
-    return dir.getChildFile (juce::File::createLegalFileName (name) + ".json");
+    return sealed::documentFile (dir, name);
 }
 
 bool JMSignatureProcessor::performancePresetExists (const juce::String& name) const
@@ -1420,10 +1942,10 @@ JMSignatureProcessor::SaveOutcome JMSignatureProcessor::saveInstrumentPreset (in
     {
         auto dir = worldPresetDir (state.slots[(size_t) slot].world);
         dir.createDirectory();
-        auto f = dir.getChildFile (juce::File::createLegalFileName (name) + ".json");
+        auto f = sealed::documentFile (dir, name);
         // SAVE AS never stands on an existing preset — in the user folder
         // either, or "save as" would mean "save over" half the time.
-        if (f.existsAsFile() && ! allowReplace)
+        if ((f.existsAsFile() || sealed::findDocument (dir, name) != juce::File()) && ! allowReplace)
         {
             out.message = "\"" + name + "\" already exists. Use OVERWRITE to replace it, or enter another name.";
             return;
@@ -1435,11 +1957,8 @@ JMSignatureProcessor::SaveOutcome JMSignatureProcessor::saveInstrumentPreset (in
             bak.deleteFile();
             f.copyFileTo (bak);
         }
-        if (! f.replaceWithText (juce::JSON::toString (slotPresetToVar (slot, name), false)))
-        {
-            out.message = "Could not write " + f.getFullPathName();
+        if (! sealed::writeDocument (f, sealed::preset, juce::JSON::toString (slotPresetToVar (slot, name), false), &out.message))
             return;
-        }
         out.ok = true;
         out.dest = authoring::SaveDest::worldUserFolder;
         out.file = f;
@@ -1519,18 +2038,8 @@ JMSignatureProcessor::SaveOutcome JMSignatureProcessor::saveInstrumentPreset (in
     return out;
 }
 
-JMSignatureProcessor::SaveOutcome JMSignatureProcessor::savePerformanceSnapshot (const juce::String& rawName,
-                                                                                 SaveIntent intent)
+juce::var JMSignatureProcessor::performanceVar (const juce::String& name) const
 {
-    SaveOutcome early;
-    const auto name = rawName.trim();
-    if (name.isEmpty()) { early.message = "Name required."; return early; }
-    if (intent == SaveIntent::saveAs && performancePresetExists (name))
-    {
-        early.message = "\"" + name + "\" already exists. Use OVERWRITE to replace it, or enter another name.";
-        return early;
-    }
-
     auto* o = new juce::DynamicObject();
     o->setProperty ("name", name);
     juce::Array<juce::var> slots;
@@ -1548,12 +2057,28 @@ JMSignatureProcessor::SaveOutcome JMSignatureProcessor::savePerformanceSnapshot 
         if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p))
             hp->setProperty (rp->paramID, rp->getValue());
     o->setProperty ("hostParams", juce::var (hp));
+    return juce::var (o);
+}
+
+JMSignatureProcessor::SaveOutcome JMSignatureProcessor::savePerformanceSnapshot (const juce::String& rawName,
+                                                                                 SaveIntent intent)
+{
+    SaveOutcome early;
+    const auto name = rawName.trim();
+    if (name.isEmpty()) { early.message = "Name required."; return early; }
+    if (intent == SaveIntent::saveAs && performancePresetExists (name))
+    {
+        early.message = "\"" + name + "\" already exists. Use OVERWRITE to replace it, or enter another name.";
+        return early;
+    }
+
+    const auto snapshot = performanceVar (name);
 
     SaveOutcome out;
     const bool authoring = state.library.isAuthoring();
     auto dir = authoring ? factoryPerformanceDir() : performancePresetDir();
     dir.createDirectory();
-    auto f = dir.getChildFile (juce::File::createLegalFileName (name) + ".json");
+    auto f = sealed::documentFile (dir, name);
     if (f.existsAsFile())
     {
         auto bak = f.getSiblingFile (f.getFileName() + ".bak");
@@ -1561,11 +2086,8 @@ JMSignatureProcessor::SaveOutcome JMSignatureProcessor::savePerformanceSnapshot 
         f.copyFileTo (bak);
         out.note = "Previous version kept as " + bak.getFileName();
     }
-    if (! f.replaceWithText (juce::JSON::toString (juce::var (o), false)))
-    {
-        out.message = "Could not write " + f.getFullPathName();
+    if (! sealed::writeDocument (f, sealed::performance, juce::JSON::toString (snapshot, false), &out.message))
         return out;
-    }
     out.ok = true;
     out.file = f;
     out.dest = authoring ? authoring::SaveDest::performanceFactory
@@ -1617,9 +2139,8 @@ JMSignatureProcessor::renameInstrumentPreset (int slot, const juce::String& oldN
     }
     else
     {
-        auto f = worldPresetDir (state.slots[(size_t) slot].world)
-                     .getChildFile (juce::File::createLegalFileName (oldName) + ".json");
-        if (! f.existsAsFile())
+        auto f = sealed::findDocument (worldPresetDir (state.slots[(size_t) slot].world), oldName);
+        if (f == juce::File())
         {
             out.message = "No preset named \"" + oldName + "\".";
             return out;
@@ -1644,28 +2165,28 @@ JMSignatureProcessor::renameUserPresetFile (const juce::File& f, const juce::Str
     if (! f.existsAsFile()) { out.message = "Preset file not found."; return out; }
 
     const auto oldName = f.getFileNameWithoutExtension();
-    auto to = f.getSiblingFile (juce::File::createLegalFileName (newName) + ".json");
-    if (to != f && to.existsAsFile())
+    auto to = sealed::documentFile (f.getParentDirectory(), newName);
+    if (to != f && sealed::findDocument (f.getParentDirectory(), newName) != juce::File())
     {
         out.message = "\"" + newName + "\" already exists";
         return out;
     }
 
-    auto v = juce::JSON::parse (f.loadFileAsString());
+    auto v = sealed::readDocumentVar (f, sealed::preset);
     if (auto* o = v.getDynamicObject()) o->setProperty ("name", newName);
     else { out.message = "Preset file is not valid JSON."; return out; }
 
     // Validated the same way a save is: a rename must leave a preset that still
     // loads, and a user preset is read back by applyUserPresetToSlot.
-    auto wr = authoring::guardedReplace (to, juce::JSON::toString (v, false), to == f,
-                                         [] (const juce::String& text, juce::String& why)
-                                         {
-                                             auto back = juce::JSON::parse (text);
-                                             if (! back.isObject()) { why = "not an object"; return false; }
-                                             if (back.getProperty ("name", "").toString().isEmpty())
-                                             { why = "no name"; return false; }
-                                             return true;
-                                         });
+    auto wr = authoring::guardedReplaceDocument (to, sealed::preset, juce::JSON::toString (v, false), to == f,
+                                                 [] (const juce::String& text, juce::String& why)
+                                                 {
+                                                     auto back = juce::JSON::parse (text);
+                                                     if (! back.isObject()) { why = "not an object"; return false; }
+                                                     if (back.getProperty ("name", "").toString().isEmpty())
+                                                     { why = "no name"; return false; }
+                                                     return true;
+                                                 });
     if (! wr.ok) { out.message = wr.message; return out; }
     if (to != f)
     {
@@ -1691,17 +2212,18 @@ JMSignatureProcessor::renamePerformancePreset (const juce::File& f, const juce::
     if (! f.existsAsFile()) { out.message = "Performance file not found."; return out; }
 
     const auto oldName = f.getFileNameWithoutExtension();
-    auto to = f.getSiblingFile (juce::File::createLegalFileName (newName) + ".json");
-    if (to != f && to.existsAsFile()) { out.message = "\"" + newName + "\" already exists"; return out; }
+    auto to = sealed::documentFile (f.getParentDirectory(), newName);
+    if (to != f && sealed::findDocument (f.getParentDirectory(), newName) != juce::File())
+    { out.message = "\"" + newName + "\" already exists"; return out; }
 
-    auto v = juce::JSON::parse (f.loadFileAsString());
+    auto v = sealed::readDocumentVar (f, sealed::performance);
     if (auto* o = v.getDynamicObject()) o->setProperty ("name", newName);
     else { out.message = "Performance file is not valid JSON."; return out; }
 
     // A performance snapshot is the ONLY thing that carries the artist's
     // modulation, so the read-back check is that it still loads as one: the
     // slots array, the macros and the mod block have to survive the rename.
-    auto wr = authoring::guardedReplace (to, juce::JSON::toString (v, false), to == f,
+    auto wr = authoring::guardedReplaceDocument (to, sealed::performance, juce::JSON::toString (v, false), to == f,
                                          [] (const juce::String& text, juce::String& why)
                                          {
                                              auto back = juce::JSON::parse (text);
@@ -1781,6 +2303,44 @@ JMSignatureProcessor::renameBundle (const juce::File& bundleDir, const juce::Str
 }
 
 //==============================================================================
+JMSignatureProcessor::MeasureOutcome
+JMSignatureProcessor::applyBundleLevels (const authoring::MeasuredLevels& measured)
+{
+    MeasureOutcome out;
+    auto wr = authoring::writeBundleLevels (measured);
+    if (! wr.ok) { out.message = wr.message; return out; }
+
+    state.library.rescan();
+
+    // Any slot holding this bundle gets a FRESH load, swapped in under the
+    // engine's lock by setBundle. The slot's own state - its engine params,
+    // rack, amp envelope, velocity depth/offset - is deliberately untouched:
+    // syncSlotToDsp pushes it straight back, because setBundle resets the
+    // engine's envelope to the bundle's defaults.
+    const auto path = measured.bundleDir.getFullPathName();
+    for (int i = 0; i < 4; ++i)
+    {
+        if (state.slots[(size_t) i].bundleDir != path) continue;
+        juce::String err;
+        auto b = state.library.loadBundle (measured.bundleDir, err);
+        if (b == nullptr)
+        {
+            out.note = "reload failed: " + err;
+            continue;
+        }
+        engines[(size_t) i].setBundle (b);
+        syncSlotToDsp (i);
+        ++out.reloadedSlots;
+    }
+
+    out.ok = true;
+    out.message = wr.message;
+    if (wr.note.isNotEmpty()) out.note = wr.note;
+    stateChanged.sendChangeMessage();
+    return out;
+}
+
+//==============================================================================
 JMSignatureProcessor::RecategoriseOutcome
 JMSignatureProcessor::recategoriseBundle (const juce::File& bundleDir, int newWorld)
 {
@@ -1844,6 +2404,8 @@ int JMSignatureProcessor::restoreSlotBundles()
             if (lb->dir == want) continue;                 // already the right instrument
 
         const BundleInfo* bi = state.library.find (want);
+        if (bi == nullptr)
+            bi = state.library.findByFolderName (want.getFileName());   // same bundle, another root
         if (bi == nullptr)
         {
             // The saved path has gone (a renamed folder, another machine, a
@@ -1953,23 +2515,21 @@ int JMSignatureProcessor::slotForModelPage (int page) const
 juce::String JMSignatureProcessor::saveDestinationLine (int page) const
 {
     const bool authoring = state.library.isAuthoring();
+    // One short line in the manual's register. What a save captures is in the
+    // README; the line here only says where it lands (client, 2026-11-01:
+    // "clean up all unnecessary info").
     if (page > 3)
-        return authoring
-            ? juce::String ("SAVE -> FACTORY performance. Captures slots, macros, "
-                            "modulation and the arpeggiator.")
-            : juce::String ("SAVE -> your performance presets. Captures slots, macros, "
-                            "modulation and the arpeggiator.");
+        return authoring ? juce::String ("Saves as a factory performance.")
+                         : juce::String ("Saves to your performances.");
 
     const int slot = slotForModelPage (page);
     if (! authoring)
-        return "SAVE -> your presets. Captures the engine, the FX rack and the amp envelope.";
+        return "Saves to your presets.";
 
     auto bundle = bundleDirForSlot (slot);
     if (! authoring::looksLikeBundle (bundle))
-        return "SAVE -> no instrument loaded here, so it would go to your presets. "
-               "Load an instrument to save into its factory content.";
-    return "SAVE -> FACTORY, inside " + bundle.getFileName()
-         + ". Captures the engine, the FX rack and the amp envelope.";
+        return "Load an instrument to save into it.";
+    return "Saves into " + bundle.getFileNameWithoutExtension() + ".";
 }
 
 juce::String JMSignatureProcessor::modBoundaryLine (int page) const
@@ -2039,7 +2599,7 @@ juce::String JMSignatureProcessor::saveOverLine (int page) const
 void JMSignatureProcessor::ensureFactoryPerformancePresets()
 {
     auto dir = performancePresetDir().getChildFile ("Factory");
-    if (dir.isDirectory() && dir.findChildFiles (juce::File::findFiles, false, "*.json").size() > 0)
+    if (dir.isDirectory() && sealed::listDocuments (dir).size() > 0)
         return;
     dir.createDirectory();
 
@@ -2069,15 +2629,25 @@ void JMSignatureProcessor::ensureFactoryPerformancePresets()
             hp->setProperty ("slotEnable" + juce::String (i), d.en[i] ? 1.0 : 0.0);
         hp->setProperty ("solo", d.solo ? 1.0 : 0.0);
         o->setProperty ("hostParams", juce::var (hp));
-        dir.getChildFile (juce::File::createLegalFileName (d.name) + ".json")
-           .replaceWithText (juce::JSON::toString (juce::var (o)));
+        sealed::writeDocument (sealed::documentFile (dir, d.name), sealed::performance,
+                               juce::JSON::toString (juce::var (o)));
     }
 }
 
 bool JMSignatureProcessor::loadPerformancePreset (const juce::File& f)
 {
-    auto v = juce::JSON::parse (f.loadFileAsString());
+    return applyPerformanceVar (sealed::readDocumentVar (f, sealed::performance), f.getFileNameWithoutExtension());
+}
+
+bool JMSignatureProcessor::applyPerformanceVar (const juce::var& v, const juce::String& name)
+{
     if (! v.isObject()) return false;
+    // SCENES: a rack whose structure and settings do not change keeps running
+    // as it is, with no dry hand-over at all - so a scene that only switches a
+    // world on or moves a macro leaves every reverb tail untouched.
+    std::array<juce::String, 4> rackBefore;
+    for (int i = 0; i < 4; ++i) rackBefore[(size_t) i] = juce::JSON::toString (rackToVar (state.slots[(size_t) i].rack));
+    const auto masterBefore = juce::JSON::toString (rackToVar (state.masterRack));
     if (auto* slots = v.getProperty ("slots", juce::var()).getArray())
         for (int i = 0; i < juce::jmin (4, slots->size()); ++i)
             state.slotFromVar (i, slots->getReference (i));
@@ -2089,20 +2659,55 @@ bool JMSignatureProcessor::loadPerformancePreset (const juce::File& f)
         for (auto& prop : hp->getProperties())
             if (auto* p = apvts.getParameter (prop.name.toString()))
                 p->setValueNotifyingHost ((float) (double) prop.value);
-    state.performPresetName = v.getProperty ("name", f.getFileNameWithoutExtension()).toString();
+    state.performPresetName = v.getProperty ("name", name).toString();
     // RECALL MUST BRING THE INSTRUMENTS BACK (gap found 2026-10-26). A
     // performance snapshot stores each slot's .jmi path, and nothing ever
     // re-loaded it: every parameter, macro and mod row came back and the
     // engines kept playing whatever was loaded before — so the one route that
     // captures the artist's modulation work could not actually recall it.
+    //
+    // SEAMLESS SWITCHING (client, 2026-11-03). Two things used to pop: the
+    // engines cut their voices on setBundle (they now keep sounding, see
+    // SamplerEngine::setBundle), and every FX rack was rebuilt under a live
+    // signal. The racks now take the same two-step hand-over a reorder takes:
+    // ramp to dry over 20 ms, swap 25 ms later, ramp back in. A reverb tail
+    // from the previous song fades over those 20 ms instead of being cut.
+    std::array<bool, 4> rackChanged;
+    for (int i = 0; i < 4; ++i)
+        rackChanged[(size_t) i] = juce::JSON::toString (rackToVar (state.slots[(size_t) i].rack)) != rackBefore[(size_t) i];
+    const bool masterChanged = juce::JSON::toString (rackToVar (state.masterRack)) != masterBefore;
+    for (int i = 0; i < 4; ++i) if (rackChanged[(size_t) i]) slotRacks[(size_t) i].beginRestructure();
+    if (masterChanged) masterRack.beginRestructure();
+    deferRacks_ = true;
     restoreSlotBundles();
     syncAllToDsp();
+    deferRacks_ = false;
+    juce::Timer::callAfterDelay (FxRackDsp::kRestructureDelayMs,
+                                 [this, weak = std::weak_ptr<int> (aliveToken_), rackChanged, masterChanged]
+                                 {
+                                     if (weak.expired()) return;
+                                     for (int i = 0; i < 4; ++i)
+                                         if (rackChanged[(size_t) i])
+                                             slotRacks[(size_t) i].setState (state.slots[(size_t) i].rack, true);
+                                     if (masterChanged) masterRack.setState (state.masterRack, true);
+                                 });
     publishModulation();
     stateChanged.sendChangeMessage();
     return true;
 }
 
 //==============================================================================
+void JMSignatureProcessor::setVelocityCurve (VelCurve c, int fixedVel)
+{
+    state.library.setVelocityCurve (velCurveId (c), fixedVel);
+    for (auto& e : engines) e.setVelCurve (c, fixedVel);
+    // NO stateChanged here. The editor treats that broadcast as "the
+    // instrument changed - rebuild everything", which rebuilt the centre page
+    // and dropped the player back on MAIN every time he clicked a curve. A
+    // global preference changes no structure; the velocity panel refreshes
+    // itself.
+}
+
 void JMSignatureProcessor::syncSlotToDsp (int i)
 {
     auto& s = state.slots[(size_t) i];
@@ -2113,7 +2718,12 @@ void JMSignatureProcessor::syncSlotToDsp (int i)
     eng.ampEnv().decayMs = s.ampEnv.decayMs;
     eng.ampEnv().sustain = s.ampEnv.sustain;
     eng.ampEnv().releaseMs = s.ampEnv.releaseMs;
-    slotRacks[(size_t) i].setState (s.rack);
+    eng.setVelDepthOffset (s.vel.depth, s.vel.offset);
+    eng.setVelCurve (velCurveFromId (state.library.velocityCurveId()), state.library.fixedVelocity());
+    slotShift[(size_t) i].store (s.noteShift(), std::memory_order_relaxed);
+    slotKeyLo[(size_t) i].store (s.keyLo, std::memory_order_relaxed);
+    slotKeyHi[(size_t) i].store (s.keyHi, std::memory_order_relaxed);
+    if (! deferRacks_) slotRacks[(size_t) i].setState (s.rack);
 
     // (re)load bundle if the state references one the engine doesn't have
     if (s.bundleDir.isNotEmpty())
@@ -2140,6 +2750,14 @@ void JMSignatureProcessor::syncSlotToDsp (int i)
             // in the status bar rather than done silently. If the library has
             // nothing for that world the slot is left genuinely empty — an
             // empty slot the player can see beats a ghost he cannot find.
+            if (state.library.find (dir) == nullptr)
+                if (auto* same = state.library.findByFolderName (dir.getFileName()))
+                {
+                    // the instrument itself, filed under another library root
+                    dir = same->dir;
+                    s.bundleDir = same->dir.getFullPathName();
+                    s.bundleName = same->name;
+                }
             if (state.library.find (dir) == nullptr)
             {
                 const auto missing = s.bundleName.isNotEmpty() ? s.bundleName : dir.getFileName();
@@ -2179,7 +2797,7 @@ void JMSignatureProcessor::syncSlotToDsp (int i)
 void JMSignatureProcessor::syncAllToDsp()
 {
     for (int i = 0; i < 4; ++i) syncSlotToDsp (i);
-    masterRack.setState (state.masterRack);
+    if (! deferRacks_) masterRack.setState (state.masterRack);
 }
 
 //==============================================================================
@@ -2198,6 +2816,12 @@ void JMSignatureProcessor::getStateInformation (juce::MemoryBlock& dest)
     o->setProperty ("mod", state.mod.toVar());
     o->setProperty ("midiMap", state.midiMap.toVar());
     o->setProperty ("midiRouting", midiRouting.toVar());     // round 4 (item 1)
+    // MULTI OUT: which instrument output each slot plays through. Session
+    // state only — a performance is a sound, not a wiring, so it never moves
+    // a world to another output when recalled.
+    juce::Array<juce::var> outs;
+    for (int i = 0; i < 4; ++i) outs.add (slotOutputIndex (i));
+    o->setProperty ("slotOutputs", outs);
     o->setProperty ("currentPage", state.currentPage);
     o->setProperty ("performPresetName", state.performPresetName);
     auto* hp = new juce::DynamicObject();
@@ -2222,6 +2846,9 @@ void JMSignatureProcessor::setStateInformation (const void* data, int size)
     state.midiMap.fromVar (v.getProperty ("midiMap", juce::var()));
     midiRouting.fromVar (v.getProperty ("midiRouting", juce::var()));
     refreshMidiDevices();                                    // re-open what was saved
+    if (auto* outs = v.getProperty ("slotOutputs", juce::var()).getArray())
+        for (int i = 0; i < juce::jmin (4, outs->size()); ++i)
+            slotOutput[(size_t) i].store (juce::jlimit (0, kNumOutputs - 1, (int) outs->getReference (i)));
     state.currentPage = (int) v.getProperty ("currentPage", 0);
     state.performPresetName = v.getProperty ("performPresetName", "").toString();
     if (auto* hp = v.getProperty ("hostParams", juce::var()).getDynamicObject())

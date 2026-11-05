@@ -64,7 +64,7 @@ p { margin: 0 0 1em; }
 }
 .top .wrap { display: flex; align-items: center; gap: 18px; height: 64px; }
 .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--gold-hi); }
-.brand img { width: 40px; height: 34px; object-fit: cover; border-radius: 6px; border: 1px solid var(--gold-lo); }
+.brand img { width: 36px; height: 36px; object-fit: cover; border-radius: 50%; border: 1px solid var(--gold-lo); background: #000; }
 .brand b { font: 700 24px/1 "Barlow SC", sans-serif; letter-spacing: .08em; }
 .brand small { display: block; font: 600 10px/1.2 "Barlow SC", sans-serif; letter-spacing: .24em; color: var(--muted); }
 .nav { margin-left: auto; display: flex; gap: 22px; align-items: center; }
@@ -189,9 +189,33 @@ section.block { padding: clamp(64px, 9vw, 110px) 0; }
 .gallery .frame img { aspect-ratio: auto; }
 
 /* ---------- James ---------- */
-.james { display: grid; grid-template-columns: 260px 1fr; gap: 40px; align-items: center; }
-.james .portrait { border-radius: var(--r); border: 1px solid var(--gold-lo); overflow: hidden; box-shadow: 0 20px 60px -20px rgba(217,164,65,.35); background: #000; }
-@media (max-width: 720px) { .james { grid-template-columns: 1fr; } .james .portrait { max-width: 240px; } }
+.james { display: grid; grid-template-columns: 248px 1fr; gap: 44px; align-items: center; }
+/* The portrait is the app's badge drawing, 224 px wide: shown at that size in a
+   thin gold frame, never stretched, so it stays sharp. */
+.portrait { width: 248px; padding: 11px; border-radius: 18px; border: 1px solid var(--gold);
+            background: #000; box-shadow: 0 0 0 4px #000, 0 0 0 5px var(--gold-lo), 0 24px 60px -24px rgba(217,164,65,.45); }
+.portrait img { width: 224px; height: auto; border-radius: 8px; }
+@media (max-width: 720px) { .james { grid-template-columns: 1fr; } }
+
+/* ---------- James's links ---------- */
+.social { list-style: none; display: flex; flex-wrap: wrap; gap: 10px; padding: 0; margin: 20px 0 22px; }
+.social a { display: inline-flex; align-items: center; gap: 9px; min-height: 42px; padding: 0 16px 0 12px;
+            border: 1px solid var(--gold-lo); border-radius: 999px; text-decoration: none; color: var(--gold-hi);
+            font: 600 14px/1 "Barlow SC", sans-serif; letter-spacing: .12em; text-transform: uppercase; background: rgba(217,164,65,.05); }
+.social a:hover { color: #fff; border-color: var(--gold); background: rgba(217,164,65,.12); }
+.social svg { width: 20px; height: 20px; }
+
+/* ---------- about page ---------- */
+.about-hero .wrap { text-align: left; }
+.about-hero .lead { text-align: left; margin: 0; }
+.about-id { display: grid; grid-template-columns: 248px 1fr; gap: 48px; align-items: center; }
+.hero .about-name { font-size: clamp(42px, 6.4vw, 78px); letter-spacing: .06em; margin: 4px 0 18px;
+              background: linear-gradient(180deg, #fff3cf 0%, var(--gold-hi) 40%, var(--gold) 75%, #9a6d22 100%);
+              -webkit-background-clip: text; background-clip: text; color: transparent; }
+@media (max-width: 760px) { .about-id { grid-template-columns: 1fr; gap: 28px; } }
+.player { margin-top: 26px; border-radius: 16px; overflow: hidden; border: 1px solid var(--line); background: #121212; }
+.player iframe { display: block; border: 0; }
+.small-note { font-size: 14px; margin-top: 14px; }
 
 /* ---------- specs ---------- */
 .specs { width: 100%; border-collapse: collapse; margin-top: 28px; font-size: 15px; }

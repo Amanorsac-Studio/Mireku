@@ -244,7 +244,7 @@ static void testX7lHardPannedPairs()
         CHECK (plan.instruments.size() == 1 && plan.instruments[0].sampleRate == 44100,
                "planned as one instrument at the nominal 44100");
         CHECK (plan.instruments[0].notes.joinIntoString (" ").contains ("2 sample(s) are tuned by rate in the source (44066..44077 Hz"),
-               "and the notes say which samples are tuned by rate: " + plan.instruments[0].notes.joinIntoString (" "));
+               ("and the notes say which samples are tuned by rate: " + plan.instruments[0].notes.joinIntoString (" ")).toRawUTF8());
         auto outDir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("mireku-tests").getChildFile ("rate-tuned");
         outDir.deleteRecursively();
         outDir.createDirectory();
@@ -271,9 +271,9 @@ static void testX7lHardPannedPairs()
     // what is still refused, and why
     {
         const auto mixed = refusal (build ({ { "1:Mixed", kZones, 9000, Pairs::firstOnly } }));
-        CHECK (mixed.contains ("stereo in some keys and mono in others"), "a half-paired waveform is refused: " + mixed);
+        CHECK (mixed.contains ("stereo in some keys and mono in others"), ("a half-paired waveform is refused: " + mixed).toRawUTF8());
         const auto same = refusal (build ({ { "1:Dup", kZones, 9000, Pairs::samePan } }));
-        CHECK (same.contains ("all claim key") && same.contains ("pans 64, 64"), "two centred keyzones on one slot are refused: " + same);
+        CHECK (same.contains ("all claim key") && same.contains ("pans 64, 64"), ("two centred keyzones on one slot are refused: " + same).toRawUTF8());
         const auto plain = refusal (build ({ { "1:Mono", kZones, 9000, Pairs::none } }));
         CHECK (plain.isEmpty(), "an ordinary mono waveform still reads");
     }
@@ -318,7 +318,7 @@ static void testX7lNamedWindowsAndSkips()
             }
             CHECK (tiles, "windows are 1-15, 16-31, ... 112-127, as the names say");
             CHECK (in.layerNames[0].endsWith ("Velocity 15 vel 1-15") && in.layerNames[7].endsWith ("Velocity 127 vel 112-127"),
-                   "layers are ordered by the named bound: " + in.layerNames.joinIntoString (" | "));
+                   ("layers are ordered by the named bound: " + in.layerNames.joinIntoString (" | ")).toRawUTF8());
             CHECK (in.notes.joinIntoString (" ").contains ("taken from the waveform names"), "and the notes say where the windows came from");
             CHECK (in.sampleCount == (int) kZones.size() * 8, "every source sample lands somewhere");
         }
@@ -351,7 +351,7 @@ static void testX7lNamedWindowsAndSkips()
         const auto plan = planOf (build ({ { "1:Good EP", kZones, 8000 }, { "2:Gappy", gappy, 8000 } }));
         CHECK (plan.instruments.size() == 1 && plan.instruments[0].name == "Good EP", "the good instrument is planned");
         CHECK (plan.skipped.size() == 1 && plan.skipped[0].name == "Gappy" && plan.skipped[0].reason.contains ("do not tile 1..127"),
-               "the gappy one is skipped with its reason: " + (plan.skipped.empty() ? juce::String ("-") : plan.skipped[0].reason));
+               ("the gappy one is skipped with its reason: " + (plan.skipped.empty() ? juce::String ("-") : plan.skipped[0].reason)).toRawUTF8());
     }
 }
 
@@ -376,8 +376,8 @@ static void testX7lImportWorldChoice()
     int grandIdx = -1, grandWorld = -1;
     for (auto& in : previews[0].instruments)
         if (in.name.startsWith ("Gospel")) { grandIdx = in.index; grandWorld = in.world; }
-    CHECK (grandIdx >= 0, "the preview names the instrument the name heuristic would file as "
-                          + juce::String (grandWorld >= 0 ? worldName (grandWorld) : "?"));
+    CHECK (grandIdx >= 0, ("the preview names the instrument the name heuristic would file as "
+                           + juce::String (grandWorld >= 0 ? worldName (grandWorld) : "?")).toRawUTF8());
 
     const int chosen = grandWorld == 1 ? 2 : 1;      // anything but the guess
     auto dest = dir.getChildFile ("out");

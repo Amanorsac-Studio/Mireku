@@ -4,7 +4,7 @@
 # Remove that one line (and the Disallow in robots.txt) on launch day.
 /*
   X-Robots-Tag: noindex
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'sha256-dFqnkix/KyuQ/tR3B/FYwRtcbWXrtRW7VdscV/VFsmc=' 'sha256-tNNQZyMEwKMXvW8Qy3i8FnZdOGalDWJ8Cte7FWNmYMc='; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://kdxckigyhpnwhwgjdgqq.supabase.co wss://kdxckigyhpnwhwgjdgqq.supabase.co https://amanorsac.studio; form-action 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'sha256-dFqnkix/KyuQ/tR3B/FYwRtcbWXrtRW7VdscV/VFsmc=' 'sha256-tNNQZyMEwKMXvW8Qy3i8FnZdOGalDWJ8Cte7FWNmYMc='; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://kdxckigyhpnwhwgjdgqq.supabase.co wss://kdxckigyhpnwhwgjdgqq.supabase.co https://amanorsac.studio; form-action 'self'; frame-src https://open.spotify.com; frame-ancestors 'none'; base-uri 'self'; object-src 'none'
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()

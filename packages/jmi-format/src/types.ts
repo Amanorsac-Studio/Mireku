@@ -125,7 +125,8 @@ export type FxType =
   | 'svFilter'
   | 'tapeMachine'
   | 'ringMod'
-  | 'modPedal';
+  | 'modPedal'
+  | 'rotary';
 
 export interface FxUnitState {
   type: FxType;

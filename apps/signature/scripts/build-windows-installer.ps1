@@ -67,7 +67,9 @@ if (-not $SkipBuild) {
     # quoted individually. Joining the list unquoted split the source directory at
     # the space and cmake looked for "C:/Amanorsac".
     # `$args` is a PowerShell automatic variable, so the list is named $cfg.
-    $cfg = "-S `"$app`" -B `"$build`" -G Ninja -DCMAKE_BUILD_TYPE=Release"
+    # Every installer is a PLAYER build (2026-11-04): release mode pinned, no
+    # authoring tools, the library sealed. The studio's own build stays OFF.
+    $cfg = "-S `"$app`" -B `"$build`" -G Ninja -DCMAKE_BUILD_TYPE=Release -DMIREKU_PLAYER_BUILD=ON"
     if ($Tester) { $cfg += " -DMIREKU_TESTER_BUILD=ON" }
     $vcvars = "$vs\VC\Auxiliary\Build\vcvars64.bat"
     & cmd /c "`"$vcvars`" >nul && `"$cmake`" $cfg"
@@ -90,6 +92,19 @@ if (-not $SkipTests) {
 $keyHeader = Join-Path $app "src\plugin\TesterKey.h"
 $modulus = ([regex]::Match((Get-Content $keyHeader -Raw), '"([0-9a-f]{64})"')).Groups[1].Value
 if (-not $modulus) { throw "Could not read the public modulus from $keyHeader." }
+
+# The STUDIO key (engine/Sealed.h): a binary compiled without it carries the
+# all-zero TEST key and can open no sealed library, so it must never be packaged.
+# The configure writes generated\StudioKey.h and says which key went in.
+$studioKey = Join-Path $build "generated\StudioKey.h"
+if (-not (Test-Path $studioKey)) { throw "No $studioKey - the configure did not run gen-studio-key.js." }
+if ((Get-Content $studioKey -Raw) -match 'kIsTestKey = true') {
+    throw "REFUSED: the binary was built with the TEST studio key (no ~\.amanorsac\studio-keys.json or AOFAS_STUDIO_KEY). It could not open the sealed library."
+}
+if (-not ((Get-Content $studioKey -Raw) -match 'MIREKU_PLAYER_BUILD') -and -not (Select-String -Path (Join-Path $build "CMakeCache.txt") -Pattern 'MIREKU_PLAYER_BUILD:BOOL=ON' -Quiet)) {
+    throw "REFUSED: $build was not configured with MIREKU_PLAYER_BUILD=ON. Delete the build folder and run again."
+}
+Write-Host "  studio key: compiled in (not the test key); player build: yes" -ForegroundColor Green
 $exe = Join-Path $rel "Standalone\MIREKU.exe"
 if (-not (Test-Path $exe)) { throw "No standalone at $exe - build first." }
 

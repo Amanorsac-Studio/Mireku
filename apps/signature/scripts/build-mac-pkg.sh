@@ -50,9 +50,15 @@ if [ "$SIGN" = yes ]; then
     -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO )
 fi
 if [ "$TESTER" = "1" ]; then TESTER_ARG=(-DMIREKU_TESTER_BUILD=ON); else TESTER_ARG=(-DMIREKU_TESTER_BUILD=OFF); fi
+# Every package is a PLAYER build (2026-11-04): release mode pinned, no authoring
+# tools, the library sealed. The studio key comes from AOFAS_STUDIO_KEY (the
+# organisation secret in CI) or ~/.amanorsac/studio-keys.json on a studio Mac.
 cmake -S "$APP_DIR" -B "$BUILD" -G Xcode \
   "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
-  "${TESTER_ARG[@]}" "${SIGN_ARGS[@]}"
+  -DMIREKU_PLAYER_BUILD=ON "${TESTER_ARG[@]}" "${SIGN_ARGS[@]}"
+if grep -q 'kIsTestKey = true' "$BUILD/generated/StudioKey.h"; then
+  echo "REFUSED: built with the TEST studio key (set AOFAS_STUDIO_KEY); it could not open the sealed library"; exit 1
+fi
 cmake --build "$BUILD" --config Release \
   --target Mireku_Standalone Mireku_VST3 Mireku_AU MirekuTests -- -quiet
 

@@ -2,7 +2,7 @@
 # Configure:  cmake -B build -G "Visual Studio 18 2026" -A x64
 # Build:      cmake --build build --config Release
 cmake_minimum_required(VERSION 3.24)
-project(Mireku VERSION 1.0.3 LANGUAGES C CXX)
+project(Mireku VERSION 1.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -24,6 +24,26 @@ endif()
 
 # Shared read-only format header (packages/jmi-format/cpp/jmi_format.h)
 set(JMI_FORMAT_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../../packages/jmi-format/cpp")
+# The sealed container reader (packages/aofas-format/cpp/aofas_format.h) and
+# the studio key it opens files with. The key is NOT in the repository: the
+# script reads ~/.amanorsac/studio-keys.json (or AOFAS_STUDIO_KEY in CI) and
+# writes generated/StudioKey.h into this build folder as two XOR shares. With
+# no key it writes the documented all-zero TEST key and says so in the header;
+# the installer scripts refuse to package a binary built from that header, so
+# a developer machine without the key still builds and runs the tests.
+set(AOFAS_FORMAT_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../../packages/aofas-format/cpp")
+set(MIREKU_GENERATED_INCLUDE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+find_program(MIREKU_NODE node REQUIRED DOC "node, for scripts/gen-studio-key.js")
+execute_process(
+    COMMAND "${MIREKU_NODE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/gen-studio-key.js"
+            --out "${MIREKU_GENERATED_INCLUDE}/StudioKey.h" --allow-test
+    RESULT_VARIABLE MIREKU_KEY_RC OUTPUT_VARIABLE MIREKU_KEY_OUT ERROR_VARIABLE MIREKU_KEY_ERR)
+if(NOT MIREKU_KEY_RC EQUAL 0)
+    message(FATAL_ERROR "gen-studio-key.js failed: ${MIREKU_KEY_OUT}${MIREKU_KEY_ERR}")
+endif()
+string(STRIP "${MIREKU_KEY_OUT}" MIREKU_KEY_OUT)
+message(STATUS "${MIREKU_KEY_OUT}")
+set(JMI_FORMAT_INCLUDE "${JMI_FORMAT_INCLUDE}" "${AOFAS_FORMAT_INCLUDE}" "${MIREKU_GENERATED_INCLUDE}")
 
 # ------------------------------------------------ Signalsmith Stretch (MIT)
 # The Hall/Shimmer's pitch shifter (2026-10-29). Header-only; it needs the
@@ -79,6 +99,13 @@ option(JM_ASIO "Compile ASIO device support into the standalone" ON)
 # Test builds are named "-Tester-" and the installer scripts refuse to package a
 # release whose binary still contains the key.
 option(MIREKU_TESTER_BUILD "Build a key-gated test build" OFF)
+# A PLAYER build is what testers and customers install (2026-11-04): the
+# library mode is pinned to RELEASE, and the authoring tools that write into a
+# bundle folder (AUTHORING panel, IMPORT LIBRARY, Measure levels, Move to
+# category, Rename sound) are not reachable, because the shipped library is
+# sealed and cannot be written. Saves go to the user folders as sealed .jmi
+# documents. OFF for the studio's own working build.
+option(MIREKU_PLAYER_BUILD "Build the player (no authoring tools, release mode pinned)" OFF)
 set(JM_ASIO_SDK_DIR "" CACHE PATH
     "Optional: directory containing iasiodrv.h from a locally installed Steinberg ASIO SDK. \
 Leave empty to use the ASIO headers bundled with JUCE. The SDK is NOT redistributable and is \
@@ -157,6 +184,15 @@ juce_add_plugin(Mireku
     NEEDS_MIDI_OUTPUT         FALSE
     IS_MIDI_EFFECT            FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
+    # The client's approved portrait icon (resources/brand, delivered 2026-10-31
+    # as MIREKU-Developer-Pack). resources/brand/rounded holds the same artwork
+    # with rounded corners and transparent margins, the shape every other
+    # Windows 11 app icon has; the pack's square originals showed as a hard
+    # black box in the taskbar tile. JUCE builds the Windows .ico and the macOS
+    # .icns from these two PNGs; the installer uses MIREKU-rounded.ico, packed
+    # from the same set.
+    ICON_BIG                  resources/brand/rounded/MIREKU-1024.png
+    ICON_SMALL                resources/brand/rounded/MIREKU-256.png
     COPY_PLUGIN_AFTER_BUILD   FALSE
     FORMATS                   VST3 AU Standalone   # AU is ignored by JUCE on non-Apple platforms
     VST3_CATEGORIES           Instrument)
@@ -172,6 +208,7 @@ juce_add_binary_data(JMAssets HEADER_NAME JMAssets.h NAMESPACE JMAssets SOURCES
     resources/kente_mks.jpeg
     resources/kente_fm.jpeg
     resources/kente_strings.jpeg
+    resources/brand/MIREKU-512.png
     resources/svg/jm-shield-reference.svg
     resources/svg/engraved-mark-flow.svg
     resources/svg/engraved-mark-knot.svg
@@ -221,7 +258,8 @@ target_compile_definitions(Mireku PUBLIC
     # R6(1): device backends. These must be PUBLIC/on the shared-code target —
     # that is where JUCE compiles juce_audio_devices.
     ${JM_AUDIO_BACKEND_DEFS}
-    $<$<BOOL:${MIREKU_TESTER_BUILD}>:MIREKU_TESTER_BUILD=1>)
+    $<$<BOOL:${MIREKU_TESTER_BUILD}>:MIREKU_TESTER_BUILD=1>
+    $<$<BOOL:${MIREKU_PLAYER_BUILD}>:MIREKU_PLAYER_BUILD=1>)
 if(JM_ASIO_INCLUDE_DIR)
     target_include_directories(Mireku PUBLIC "${JM_ASIO_INCLUDE_DIR}")
 endif()

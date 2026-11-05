@@ -177,6 +177,7 @@ static int probeBundle (const juce::String& bundlePath, const juce::String& pres
 
 int main (int argc, char** argv)
 {
+    std::setvbuf (stdout, nullptr, _IONBF, 0);     // a crash must not swallow the lines before it
     juce::ScopedJuceInitialiser_GUI init;
     if (argc >= 3 && juce::String (argv[1]) == "--probe-bundle")
         return probeBundle (juce::String::fromUTF8 (argv[2]),
@@ -393,7 +394,9 @@ int main (int argc, char** argv)
                     const float sx = t.mat00, sy = t.mat11;
                     const float expect = juce::jmin ((float) s.w / 1536.0f, (float) s.h / 1024.0f);
                     auto tl = juce::Point<float> (0.0f, 0.0f).transformedBy (t);
-                    auto br = juce::Point<float> (1536.0f, 1024.0f).transformedBy (t);
+                    // the root's WIDTH follows the window (wide layout, 2026-11-01), so the
+                    // right edge is wherever the root ends, not the design width
+                    auto br = juce::Point<float> ((float) root->getWidth(), 1024.0f).transformedBy (t);
                     std::printf ("  %-24s window %dx%d -> scale (%.4f,%.4f) box (%.1f,%.1f)-(%.1f,%.1f)\n",
                                  s.what, s.w, s.h, sx, sy, tl.x, tl.y, br.x, br.y);
                     uniform &= std::abs (sx - sy) < 1.0e-4f && std::abs (sx - expect) < 1.0e-4f;
@@ -836,7 +839,7 @@ int main (int argc, char** argv)
 
         // performance presets are listed on PERFORM (item G)
         auto factory = JMSignatureProcessor::performancePresetDir().getChildFile ("Factory");
-        const int n = factory.findChildFiles (juce::File::findFiles, false, "*.json").size();
+        const int n = sealed::listDocuments (factory).size();
         std::printf ("  factory performance presets on disk: %d (%s)\n", n,
                      factory.getFullPathName().toRawUTF8());
         CHECK (n >= 4, "factory performance presets exist for the PERFORM browser");
@@ -912,6 +915,112 @@ int main (int argc, char** argv)
         CHECK (proc.engines[1].sustainedVoices() >= 1, "deferred note-off still works on the routed slot");
         play (juce::MidiMessage::controllerEvent (2, 64, 0));
         panic();
+
+        // PER-ENGINE OCTAVE (client, 2026-11-02) and KEY RANGE (2026-11-03, in
+        // place of a per-engine transpose). Slot B up an octave; the other
+        // slots stay where they were; the global steppers still add to
+        // everything; a performance carries it.
+        {
+            proc.midiRouting.resetChannelsToOmni();
+            panic();
+            proc.setSlotShift (1, 1);
+            play (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100));
+            std::printf ("  slot B oct+1: A plays 60=%d, B plays 72=%d (60=%d)\n",
+                         (int) proc.engines[0].isNoteActive (60), (int) proc.engines[1].isNoteActive (72),
+                         (int) proc.engines[1].isNoteActive (60));
+            CHECK (proc.engines[0].isNoteActive (60) && proc.engines[1].isNoteActive (72)
+                   && ! proc.engines[1].isNoteActive (60),
+                   "slot B's own OCTAVE +1 moves ONLY slot B, by 12 semitones");
+            play (juce::MidiMessage::noteOff (1, 60));
+            CHECK (proc.engines[1].activeVoices() == 0 || proc.engines[1].releasingVoices() == proc.engines[1].activeVoices(),
+                   "the note-off reaches the shifted note (no stuck voice)");
+            panic();
+            if (auto* p = dynamic_cast<juce::AudioParameterInt*> (proc.apvts.getParameter ("octave")))
+                *p = -1;
+            play (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100));
+            CHECK (proc.engines[0].isNoteActive (48) && proc.engines[1].isNoteActive (60),
+                   "the global OCTAVE adds to every slot on top of the slot's own shift");
+            if (auto* p = dynamic_cast<juce::AudioParameterInt*> (proc.apvts.getParameter ("octave")))
+                *p = 0;
+            panic();
+            auto v = proc.state.slotToVar (1);
+            CHECK ((int) v.getProperty ("octave", 0) == 1,
+                   "the slot's octave is saved with the slot (so with the performance)");
+            CHECK (! proc.state.slotToVar (0).hasProperty ("octave") && ! proc.state.slotToVar (0).hasProperty ("keyLo"),
+                   "...and a slot at 0 / whole keyboard writes nothing, so older files read unchanged");
+            proc.setSlotShift (1, 0);
+            CHECK (proc.state.slots[1].noteShift() == 0, "back to 0");
+
+            // KEY RANGE: slot A takes the left hand (up to B2), slot B the right
+            // hand (from middle C). A note-off is never range-filtered.
+            proc.setSlotRange (0, 0, 59);
+            proc.setSlotRange (1, 60, 127);
+            play (juce::MidiMessage::noteOn (1, 48, (juce::uint8) 100));
+            play (juce::MidiMessage::noteOn (1, 72, (juce::uint8) 100));
+            std::printf ("  split at C3: A plays 48=%d 72=%d, B plays 48=%d 72=%d\n",
+                         (int) proc.engines[0].isNoteActive (48), (int) proc.engines[0].isNoteActive (72),
+                         (int) proc.engines[1].isNoteActive (48), (int) proc.engines[1].isNoteActive (72));
+            CHECK (proc.engines[0].isNoteActive (48) && ! proc.engines[0].isNoteActive (72)
+                   && proc.engines[1].isNoteActive (72) && ! proc.engines[1].isNoteActive (48),
+                   "a split: each engine answers only the keys inside its range");
+            proc.setSlotRange (0, 0, 127);                // widen while the notes are held
+            play (juce::MidiMessage::noteOff (1, 48));
+            play (juce::MidiMessage::noteOff (1, 72));
+            CHECK (proc.engines[0].releasingVoices() == proc.engines[0].activeVoices()
+                   && proc.engines[1].releasingVoices() == proc.engines[1].activeVoices(),
+                   "note-offs reach every slot whatever the range, so no note sticks");
+            auto vb = proc.state.slotToVar (1);
+            CHECK ((int) vb.getProperty ("keyLo", 0) == 60 && (int) vb.getProperty ("keyHi", 0) == 127,
+                   "the range is saved with the slot");
+            // LEARN: the next key played becomes the low key
+            proc.armRangeLearn (1, 0);
+            play (juce::MidiMessage::noteOn (1, 55, (juce::uint8) 100));
+            CHECK (proc.pollRangeLearn() && proc.state.slots[1].keyLo == 55,
+                   "LEARN LOW: the next played key becomes the slot's low key");
+            panic();
+            proc.setSlotRange (1, 0, 127);
+        }
+
+        // SEAMLESS SOUND SWITCHING (client, 2026-11-03): a note held across an
+        // instrument change keeps sounding from the OLD samples until its key
+        // is lifted; the old bundle stays alive while it does.
+        {
+            panic();
+            auto before = proc.engines[0].bundle();
+            play (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100));
+            CHECK (proc.engines[0].isNoteActive (60), "a note is held on slot A");
+            // swap slot A to another instrument of the same world, or any other
+            const BundleInfo* other = nullptr;
+            for (auto& b : proc.state.library.bundles())
+                if (before != nullptr && b.dir != before->dir && b.world == before->world) { other = &b; break; }
+            if (other == nullptr)
+                for (auto& b : proc.state.library.bundles())
+                    if (before == nullptr || b.dir != before->dir) { other = &b; break; }
+            const auto savedParams = proc.state.slots[0].engineParams;
+            if (other != nullptr)
+            {
+                proc.loadBundleIntoSlot (0, *other);
+                for (int i = 0; i < 4; ++i) { juce::MidiBuffer empty; buf.clear(); proc.processBlock (buf, empty); }
+                CHECK (proc.engines[0].isNoteActive (60) && ! proc.engines[0].releasingVoices(),
+                       "the held note is STILL sounding after the instrument changed (no cut, no pop)");
+                CHECK (proc.engines[0].retiredBundles() >= 1,
+                       "the previous instrument's samples are kept while a voice plays from them");
+                play (juce::MidiMessage::noteOff (1, 60));
+                CHECK (proc.engines[0].releasingVoices() == proc.engines[0].activeVoices(),
+                       "lifting the key releases the held-over note");
+                proc.engines[0].allNotesOff (false);
+                proc.engines[0].purgeRetired();
+                CHECK (proc.engines[0].retiredBundles() == 0, "once nothing plays from it, the old instrument is let go");
+                // put slot A back as the rest of the suite expects it
+                if (before != nullptr)
+                    if (auto* orig = proc.state.library.find (before->dir)) proc.loadBundleIntoSlot (0, *orig);
+                proc.state.slots[0].engineParams = savedParams;
+                proc.syncSlotToDsp (0);
+            }
+            else
+                std::printf ("  (one instrument only in this library: the switch itself is not exercised)\n");
+            panic();
+        }
 
         // the DEVICE path: the standalone router stamps a mask before queuing,
         // so it is exercised here without needing real hardware.
@@ -1298,7 +1407,7 @@ int main (int argc, char** argv)
         // that happened to be in authoring mode.
         auto pf = proc.savePerformanceSnapshot ("ModProbe").file;
         CHECK (pf.existsAsFile()
-               && juce::JSON::parse (pf.loadFileAsString()).hasProperty ("mod"),
+               && sealed::readDocumentVar (pf, sealed::performance).hasProperty ("mod"),
                "a performance preset DOES carry modulation");
         pf.deleteFile();
         pf.getSiblingFile (pf.getFileName() + ".bak").deleteFile();
@@ -1600,7 +1709,7 @@ int main (int argc, char** argv)
         CHECK (! slotPreset.hasProperty ("mod") && ! slotPreset.hasProperty ("arp"),
                "a slot/.jmi-schema preset carries NO arp (spec decision 4)");
         auto pf = proc.savePerformanceSnapshot ("ArpProbe").file;   // (mode-correct: see MOD (5))
-        const auto pv = pf.existsAsFile() ? juce::JSON::parse (pf.loadFileAsString()) : juce::var();
+        const auto pv = pf.existsAsFile() ? sealed::readDocumentVar (pf, sealed::performance) : juce::var();
         CHECK (pf.existsAsFile()
                && pv.getProperty ("mod", juce::var()).hasProperty ("arp"),
                "a performance preset DOES carry the arp");
@@ -1733,6 +1842,199 @@ int main (int argc, char** argv)
                 if (changed (x, y) && ! insideStadium ((float) x + 0.5f, (float) y + 0.5f)) ++outside;
         std::printf ("  engaged pixels outside the stadium path: %d\n", outside);
         CHECK (outside == 0, "no engaged-state pixels outside the button's own outline");
+    }
+
+    // ----------------------- 2026-11-03: PERFORM with key ranges, and the setlist page
+    std::printf ("\n== snapshots: PERFORM key ranges and the SETLIST page ==\n");
+    {
+        proc.state.currentPage = 4;
+        proc.setSlotRange (0, 0, 59);                 // left hand
+        proc.setSlotRange (1, 60, 127);               // right hand
+        proc.setSlotShift (1, 1);
+        auto* ed = dynamic_cast<JMSignatureEditor*> (proc.createEditor());
+        ed->setSize (Theme::M::designW, Theme::M::designH);
+        ed->setVisible (true);
+        auto* pc = findOne<PerformCenterPanel> (*ed);
+        CHECK (pc != nullptr, "the PERFORM stage is on screen");
+        if (pc != nullptr)
+        {
+            pc->refresh();
+            std::vector<MiniStepper*> minis;
+            findAll<MiniStepper> (*pc, minis);
+            CHECK ((int) minis.size() == 12, "every card carries OCT, LOW and HIGH (twelve mini steppers)");
+            savePng (*ed, "perform-key-ranges.png");
+
+            // the card flips: the back carries OCT and the key range
+            std::vector<SlotStrip*> cards;
+            findAll<SlotStrip> (*pc, cards);
+            CHECK (cards.size() == 4, "four cards");
+            if (cards.size() == 4)
+            {
+                std::vector<MiniStepper*> shown;
+                findAll<MiniStepper> (*cards[0], shown);
+                int visible = 0;
+                for (auto* m : shown) if (m->isVisible()) ++visible;
+                CHECK (visible == 0, "the FRONT of a card shows no stepper");
+                proc.cardFlipped[0] = true;             // what a click on the letter does, without the animation
+                cards[0]->applyFaceForTest();
+                visible = 0;
+                for (auto* m : shown) if (m->isVisible()) ++visible;
+                CHECK (visible == 3, "the BACK of a card shows OCT, LOW and HIGH");
+                savePng (*ed, "perform-card-back.png");
+                proc.cardFlipped[0] = false;
+                cards[0]->applyFaceForTest();
+            }
+
+            // the setlist page covers the whole instrument, with songs that are NOT written to disk
+            const auto savedEntries = proc.setlist.entries;
+            const int savedCurrent = proc.setlist.current;
+            proc.setlist.entries = { { "Opening Worship", "Sunday Morning Set" }, { "Hymn 2", "JM Black Upright" },
+                                     { "Offering", "Mireku Custom VIP" }, { "Altar Call", "JM Celestial Grace" } };
+            proc.setlist.current = 1;
+            ed->showSetlist (true);
+            auto* sp = findOne<SetlistPanel> (*ed);
+            CHECK (sp != nullptr && sp->isVisible(), "SETLIST opens over the whole instrument");
+            if (sp != nullptr)
+                CHECK (sp->getWidth() == ed->getChildComponent (0)->getWidth()
+                       && sp->getHeight() == Theme::M::designH, "...covering the root edge to edge");
+            std::vector<ParamKnob*> knobs;
+            if (sp != nullptr) findAll<ParamKnob> (*sp, knobs);
+            CHECK (knobs.size() == 1, "the setlist page carries ONE knob, the super knob");
+            savePng (*ed, "setlist-page.png");
+
+            // ---- 2026-11-03 (afternoon): scenes, drag reorder, settings in place
+            // The setlist file on disk is the player's own: whatever these
+            // calls write is put back exactly afterwards.
+            // 1.1.0: the setlist is a sealed Default.jmi; an older Default.json
+            // may sit beside it. Both are put back as the BYTES they were.
+            const auto setlistFile = sealed::documentFile (JMSignatureProcessor::setlistDir(), "Default");
+            const auto legacySetlist = JMSignatureProcessor::setlistDir().getChildFile ("Default.json");
+            const bool hadFile = setlistFile.existsAsFile();
+            juce::MemoryBlock fileBefore;
+            if (hadFile) setlistFile.loadFileAsData (fileBefore);
+            const bool hadLegacy = legacySetlist.existsAsFile();
+            juce::MemoryBlock legacyBefore;
+            if (hadLegacy) legacySetlist.loadFileAsData (legacyBefore);
+            if (sp != nullptr)
+            {
+                // a scene is the whole picture: the super knob and a macro name go in it
+                if (auto* sk = proc.apvts.getParameter ("superKnob")) sk->setValueNotifyingHost (0.25f);
+                proc.state.macros[0].name = "Verse Swell";
+                proc.sceneSave (1, "Verse");
+                if (auto* sk = proc.apvts.getParameter ("superKnob")) sk->setValueNotifyingHost (0.9f);
+                proc.state.macros[0].name = "Chorus Swell";
+                if (auto* se = proc.apvts.getParameter ("slotEnable3")) se->setValueNotifyingHost (0.0f);
+                proc.sceneSave (1, "Chorus");
+                CHECK (proc.setlist.entries[1].scenes.size() == 2, "SAVE SCENE keeps a scene inside the song");
+                CHECK (proc.setlist.currentScene == 1, "the scene just saved is the lit one");
+                CHECK (proc.sceneRecall (1, 0), "a scene comes back");
+                CHECK (std::abs (proc.apvts.getParameter ("superKnob")->getValue() - 0.25f) < 1.0e-3f,
+                       "...with the super knob where it was");
+                CHECK (proc.state.macros[0].name == "Verse Swell", "...and the macro names of that moment");
+                CHECK (proc.apvts.getParameter ("slotEnable3")->getValue() > 0.5f, "...and world D on again");
+                CHECK (proc.setlist.currentScene == 0, "the recalled scene is the lit one");
+                sp->refresh();
+                CHECK (sp->sceneButtonCount() == 2, "the scenes band shows one plate per scene");
+                savePng (*ed, "setlist-scenes.png");
+                proc.sceneRename (1, 1, "Bridge");
+                CHECK (proc.setlist.entries[1].scenes[1].name == "Bridge", "a scene can be renamed");
+                proc.sceneRemove (1, 1);
+                CHECK (proc.setlist.entries[1].scenes.size() == 1, "...and removed");
+
+                // songs reorder by drag: the drop index follows the pointer, the
+                // loaded song keeps its identity when it moves
+                const auto row2 = sp->songRow (2);
+                CHECK (sp->dropIndexFor (row2.getCentreY()) == 2, "a pointer over row 3 drops at index 2");
+                proc.setlistReorder (3, 0);
+                CHECK (proc.setlist.entries[0].song == "Altar Call", "dragging the last song to the top puts it first");
+                CHECK (proc.setlist.current == 2, "...and the loaded song's index follows it down");
+                proc.setlistReorder (0, 3);
+                CHECK (proc.setlist.entries[3].song == "Altar Call" && proc.setlist.current == 1, "...and back");
+
+                // the super knob's SETTINGS open in the knob's own place, not as a pop-out
+                sp->showSettings (true);
+                CHECK (findOne<SuperKnobPanel> (*sp) != nullptr, "SETTINGS opens the super knob page inside the setlist");
+                CHECK (! knobs[0]->isVisible(), "...where the knob was");
+                CHECK (findOne<SuperKnobPanel> (*ed)->getParentComponent() == sp, "...and nowhere else");
+                savePng (*ed, "setlist-super-settings.png");
+                sp->showSettings (false);
+                CHECK (findOne<SuperKnobPanel> (*sp) == nullptr && knobs[0]->isVisible(), "...and the knob returns");
+            }
+            ed->showSetlist (false);
+            CHECK (findOne<SetlistPanel> (*ed) == nullptr, "BACK TO PERFORM takes the page away again");
+            proc.setlist.entries = savedEntries;
+            proc.setlist.current = savedCurrent;
+            proc.setlist.currentScene = -1;
+            if (hadFile) setlistFile.replaceWithData (fileBefore.getData(), fileBefore.getSize()); else setlistFile.deleteFile();
+            if (hadLegacy) legacySetlist.replaceWithData (legacyBefore.getData(), legacyBefore.getSize());
+            CHECK (sealed::isDocumentFile (setlistFile) || ! hadFile, "the setlist on disk is a sealed .jmi document");
+
+            // ---- THE EDIT PAGE: Macros / Mod Matrix / LFO / Arp / Super Knob in the rack band
+            ed->showEditPage (EditPageHost::lfo);
+            auto* page = findOne<EditPage> (*ed);
+            CHECK (page != nullptr, "LFO opens the edit page in the rack band");
+            if (page != nullptr)
+            {
+                using L = Theme::L;
+                CHECK (page->getX() == L::rackX && page->getY() == L::rackY && page->getHeight() == L::rackH,
+                       "...exactly where the effects rack sits");
+                CHECK (findOne<LfoPanel> (*page) != nullptr, "...showing the LFO panel docked");
+                CHECK (findOne<LfoPanel> (*page)->isDocked(), "...with no plaque or CLOSE chip of its own");
+                savePng (*ed, "edit-page-lfo.png");
+                ed->showEditPage (EditPageHost::arp);
+                CHECK (findOne<ArpPanel> (*page) != nullptr && findOne<LfoPanel> (*page) == nullptr, "the ARP tab swaps the panel in place");
+                savePng (*ed, "edit-page-arp.png");
+                ed->showEditPage (EditPageHost::matrix);
+                std::vector<MatrixRowEditor*> rows;
+                findAll<MatrixRowEditor> (*page, rows);
+                CHECK ((int) rows.size() == kDefaultMatrixRows, "the MOD MATRIX tab shows every row (scrolling inside the band)");
+                savePng (*ed, "edit-page-matrix.png");
+                ed->showEditPage (EditPageHost::macros, 2);
+                auto* me = findOne<MacroEditorPanel> (*page);
+                CHECK (me != nullptr && me->macroIndex() == 2, "a double-clicked macro lands on MACROS with that macro chosen");
+                CHECK (page->tab() == EditPageHost::macros && page->macro() == 2, "...and the strips say so");
+                savePng (*ed, "edit-page-macros.png");
+                ed->showEditPage (EditPageHost::superKnob);
+                CHECK (findOne<SuperKnobPanel> (*page) != nullptr, "SUPER KNOB is a tab of the page too");
+                savePng (*ed, "edit-page-super.png");
+                // the bottom bar's plates know which tab is open
+                std::vector<ux::PlateButton*> plates;
+                if (auto* bb = findOne<BottomBar> (*ed)) findAll<ux::PlateButton> (*bb, plates);
+                ed->showEditPage (EditPageHost::arp);
+                CHECK (plates.size() == 4 && plates[3]->isArmed() && ! plates[2]->isArmed(), "the ARP plate lights while its tab shows");
+                ed->closeEditPage();
+                CHECK (findOne<EditPage> (*ed) == nullptr, "CLOSE takes the page away and the rack is back");
+                CHECK (plates.size() == 4 && ! plates[3]->isArmed(), "...and the plate goes dark");
+            }
+
+            // ---- the keys page wheels follow a controller
+            {
+                auto* kb = ed->keyboardStrip();
+                CHECK (kb != nullptr, "the keyboard strip exists");
+                if (kb != nullptr)
+                {
+                    proc.prepareToPlay (48000.0, 512);
+                    juce::AudioBuffer<float> buf (2, 512);
+                    juce::MidiBuffer mb;
+                    mb.addEvent (juce::MidiMessage::pitchWheel (1, 16383), 0);
+                    mb.addEvent (juce::MidiMessage::controllerEvent (1, 1, 100), 1);
+                    proc.processBlock (buf, mb);
+                    kb->followMidi();
+                    CHECK (kb->pitchWheel().value() > 0.99f, "a controller's pitch bend moves the on-screen PITCH wheel");
+                    CHECK (std::abs (kb->modWheel().value() - 100.0f / 127.0f) < 1.0e-3f, "...and its mod wheel moves the MOD wheel");
+                    mb.clear();
+                    mb.addEvent (juce::MidiMessage::pitchWheel (1, 8192), 0);
+                    mb.addEvent (juce::MidiMessage::controllerEvent (1, 1, 0), 1);
+                    proc.processBlock (buf, mb);
+                    kb->followMidi();
+                    CHECK (std::abs (kb->pitchWheel().value() - 0.5f) < 1.0e-3f, "...back to centre when the bend returns");
+                }
+            }
+        }
+        delete ed;
+        proc.setSlotRange (0, 0, 127);
+        proc.setSlotRange (1, 0, 127);
+        proc.setSlotShift (1, 0);
     }
 
     // ----------------------- (2)/(4) the round-4 window, wheels and macro menu
@@ -2832,7 +3134,7 @@ int main (int argc, char** argv)
                    && authoring::modeFromId ("release") == authoring::Mode::release
                    && authoring::modeFromId ("RELEASE") == authoring::Mode::release,
                    "an absent or unrecognised mode means AUTHORING (the app has not been told it ships yet)");
-            CHECK (authoring::modeBadge (authoring::Mode::authoring).containsIgnoreCase ("FACTORY")
+            CHECK (authoring::modeBadge (authoring::Mode::authoring).containsIgnoreCase ("AUTHORING")
                    && authoring::modeBadge (authoring::Mode::release).isEmpty(),
                    "authoring mode carries an on-screen badge; release mode deliberately carries none");
             // The suite is pinned to release by JM_AUTHORING_MODE (see
@@ -2922,9 +3224,56 @@ int main (int argc, char** argv)
             PresetBrowserPanel br (proc);
             proc.state.currentPage = 0;
             br.rebuild();
-            bool listed = false;
-            for (int i = 0; i < br.rowCount(); ++i) if (br.rowName (i) == "Warm Tine") listed = true;
-            CHECK (listed, "the new factory patch appears in the browser immediately");
+            // One sound, one row (client, 2026-11-01): a bundle's lone preset is
+            // not listed a second time under the bundle, so the sound shows as
+            // its bundle row, and the patch itself is in the list the browser
+            // draws nested rows from the moment there is a second one.
+            bool bundleListed = false, inMemory = false;
+            for (int i = 0; i < br.rowCount(); ++i)
+                if (br.rowIsBundle (i) && br.rowName (i) == "AuthEP") bundleListed = true;
+            if (auto lb = proc.engines[0].bundle())
+                for (auto& p : lb->inst.presets) if (juce::String (p.name) == "Warm Tine") inMemory = true;
+            CHECK (bundleListed && inMemory, "the new factory patch appears in the browser immediately");
+
+            // INTELLIGENT BROWSER (client, 2026-11-02): tags on the row, in the
+            // search and in the filter; the artist's correction is kept.
+            {
+                auto autoT = proc.state.library.tagsFor (epBundle);
+                std::printf ("  AuthEP auto tags: %s\n", autoT.joinIntoString (", ").toRawUTF8());
+                CHECK (autoT.contains ("Piano"), "a rhodes-ep world bundle with a neutral name is tagged by its world");
+                const juce::StringArray wantTags { "Pad", "Warm", "Worship" };
+                proc.state.library.setTags (epBundle, { "Pad", "Warm", "Worship", "NotATag" });
+                br.rebuild();
+                int epRow = -1;
+                for (int i = 0; i < br.rowCount(); ++i) if (br.rowIsBundle (i) && br.rowName (i) == "AuthEP") epRow = i;
+                CHECK (epRow >= 0 && br.rowTags (epRow) == wantTags,
+                       "the artist's tags replace the automatic ones, unknown words dropped, vocabulary order");
+                br.setSearchText ("warm");
+                bool found = false;
+                for (int i = 0; i < br.rowCount(); ++i) if (br.rowName (i) == "AuthEP") found = true;
+                CHECK (found, "typing a MOOD finds a sound whose name does not carry it");
+                br.setSearchText ("warm organ");
+                CHECK (br.rowCount() == 0, "every typed word must match (name or tag)");
+                br.setSearchText ({});
+                br.setTagFilter ({ "Pad" });
+                found = false;
+                for (int i = 0; i < br.rowCount(); ++i) if (br.rowName (i) == "AuthEP") found = true;
+                CHECK (found, "the INSTRUMENT filter lists the sound tagged Pad");
+                br.setTagFilter ({ "Pad", "Organ" });
+                CHECK (br.rowCount() == 0, "two ticked tags must both be carried");
+                br.setTagFilter ({});
+                // the correction survives a rescan and a reload of settings
+                proc.state.library.rescan();
+                CHECK (proc.state.library.tagsFor (epBundle) == wantTags,
+                       "tags survive a library rescan (they are keyed by folder name)");
+                proc.state.library.resetTags (epBundle);
+                // (the automatic list may differ from autoT now: the rescan saw
+                // "Warm Tine" in presets/, and that name carries tags of its own)
+                CHECK (! proc.state.library.tagsEditedFor (epBundle)
+                       && proc.state.library.tagsFor (epBundle) != wantTags
+                       && ! proc.state.library.tagsFor (epBundle).isEmpty(),
+                       "back to the automatic tags on request");
+            }
 
             auto again = proc.saveInstrumentPreset (0, "Warm Tine");
             CHECK (again.ok && again.note.containsIgnoreCase ("bak"),
@@ -2994,7 +3343,8 @@ int main (int argc, char** argv)
             CHECK (out.file.getParentDirectory() == JMSignatureProcessor::factoryPerformanceDir(),
                    "it lands in Presets/Performance/Factory, which the browser already scans as factory");
 
-            auto onDisk = juce::JSON::parse (out.file.loadFileAsString());
+            auto onDisk = sealed::readDocumentVar (out.file, sealed::performance);
+            CHECK (sealed::isDocumentFile (out.file), "the performance on disk is a sealed .jmi document");
             CHECK (onDisk.hasProperty ("mod") && onDisk.hasProperty ("macros")
                    && onDisk.getProperty ("mod", juce::var()).hasProperty ("arp"),
                    "the file really carries the modulation, the macros and the arpeggiator");
@@ -3065,8 +3415,9 @@ int main (int argc, char** argv)
             // The line states the LIMIT; the way out is the button directly
             // under it, which is where the artist clicks. Asserted below on the
             // panel, where the label he actually reads is.
-            CHECK (proc.saveDestinationLine (0).containsIgnoreCase ("FACTORY")
-                   && proc.saveDestinationLine (0).containsIgnoreCase (epBundle.getFileName()),
+            // one short line since the client's 2026-11-01 clean-up: "Saves into <bundle>."
+            CHECK (proc.saveDestinationLine (0).containsIgnoreCase ("Saves into")
+                   && proc.saveDestinationLine (0).containsIgnoreCase (epBundle.getFileNameWithoutExtension()),
                    "the destination line names the bundle the patch is going into");
 
             PresetBrowserPanel br (proc);
@@ -3080,10 +3431,9 @@ int main (int argc, char** argv)
 
             br.setSaveName ("Kept By The Button");
             br.pressSave (true);                       // the one-click escape
-            auto kept = JMSignatureProcessor::factoryPerformanceDir()
-                            .getChildFile ("Kept By The Button.json");
+            auto kept = sealed::documentFile (JMSignatureProcessor::factoryPerformanceDir(), "Kept By The Button");
             CHECK (kept.existsAsFile()
-                   && juce::JSON::parse (kept.loadFileAsString()).hasProperty ("mod"),
+                   && sealed::readDocumentVar (kept, sealed::performance).hasProperty ("mod"),
                    "one click on it saves a snapshot that DOES carry the modulation");
             kept.deleteFile();
 
@@ -3141,7 +3491,7 @@ int main (int argc, char** argv)
             CHECK (out.ok && out.dest == authoring::SaveDest::worldUserFolder && out.fellBack,
                    "with no bundle to write into, the patch is still SAVED (to the user folder)");
             CHECK (out.note.isNotEmpty(), "and the fallback is stated, not silent");
-            CHECK (proc.saveDestinationLine (2).containsIgnoreCase ("no instrument loaded"),
+            CHECK (proc.saveDestinationLine (2).containsIgnoreCase ("Load an instrument"),
                    "the save control warned about it beforehand too");
             out.file.deleteFile();
 
@@ -3169,10 +3519,9 @@ int main (int argc, char** argv)
         {
             presetRoot.getChildFile ("Performance").getChildFile ("Factory").createDirectory();
             presetRoot.getChildFile ("rhodes-ep").createDirectory();
-            presetRoot.getChildFile ("Performance").getChildFile ("Factory")
-                      .getChildFile ("Set One.json")
-                      .replaceWithText (JMSignatureProcessor::factoryPerformanceDir()
-                                            .getChildFile ("James Live Set.json").loadFileAsString());
+            // 1.1.0: performances are sealed .jmi documents; the fixture is a byte copy
+            JMSignatureProcessor::factoryPerformanceDir().getChildFile ("James Live Set.jmi")
+                .copyFileTo (presetRoot.getChildFile ("Performance").getChildFile ("Factory").getChildFile ("Set One.jmi"));
             presetRoot.getChildFile ("Performance").getChildFile ("Loose Idea.json")
                       .replaceWithText ("{\"name\":\"Loose Idea\"}");
             presetRoot.getChildFile ("rhodes-ep").getChildFile ("Sketch.json")
@@ -3231,7 +3580,7 @@ int main (int argc, char** argv)
             const auto stolenHash = authoring::contentHash (stolen);
             stolen.deleteFile();
             presetRoot.getChildFile ("Performance").getChildFile ("Factory")
-                      .getChildFile ("Set One.json").deleteFile();
+                      .getChildFile ("Set One.jmi").deleteFile();
             presetRoot.getChildFile ("rhodes-ep").getChildFile ("Sketch.json").deleteFile();
 
             auto imp = authoring::importCollection (dest, libRoot, presetRoot);
@@ -3244,7 +3593,7 @@ int main (int argc, char** argv)
             CHECK (stolen.existsAsFile() && authoring::contentHash (stolen) == stolenHash,
                    "a FACTORY patch comes back byte for byte, inside its bundle");
             CHECK (presetRoot.getChildFile ("Performance").getChildFile ("Factory")
-                             .getChildFile ("Set One.json").existsAsFile(),
+                             .getChildFile ("Set One.jmi").existsAsFile(),
                    "so does the factory performance snapshot");
             CHECK (presetRoot.getChildFile ("rhodes-ep").getChildFile ("Sketch.json").existsAsFile(),
                    "and the world user preset");
@@ -3314,8 +3663,8 @@ int main (int argc, char** argv)
             }
 
             {   // a tampered collection is refused per entry, not applied blindly
-                auto victim = dest.getChildFile ("performance/Factory/Set One.json");
-                victim.replaceWithText (victim.loadFileAsString() + " ");
+                auto victim = dest.getChildFile ("performance/Factory/Set One.jmi");
+                victim.appendText (" ");
                 auto tampered = authoring::importCollection (dest, libRoot, presetRoot);
                 CHECK (! tampered.ok && tampered.skipped >= 1,
                        "a file whose checksum no longer matches the manifest is SKIPPED and reported");
@@ -3353,6 +3702,13 @@ int main (int argc, char** argv)
         std::printf ("\n== AUTHORING (9) MOVE AN INSTRUMENT TO ANOTHER CATEGORY ==\n");
         {
             proc.state.library.setModeTransient (authoring::Mode::authoring);
+            // The collection round trip above files AuthEP under STRINGS and
+            // renames it, and the tamper tests import that collection twice
+            // more, so the "put it back" there does not stick. The browser now
+            // lists a bundle on ITS world's page only, so the fixture must be
+            // back in rhodes-ep before the rescan.
+            authoring::writeInstrumentWorld (epBundle, "rhodes-ep");
+            authoring::renameInstrument (epBundle, "AuthEP");
             proc.state.library.setLibraryDirTransient (libRoot);
             const auto mksBundle = libRoot.getChildFile ("AuthMks.jmi");
             const auto ij = mksBundle.getChildFile ("instrument.json");
@@ -3717,15 +4073,16 @@ int main (int argc, char** argv)
             proc.state.currentPage = 4;
             PresetBrowserPanel br (proc);
             br.rebuild();
-            CHECK (br.destinationText().containsIgnoreCase ("FACTORY performance")
-                   && br.destinationText().containsIgnoreCase ("modulation"),
-                   "on PERFORM the save control says it captures the modulation");
+            CHECK (br.destinationText().containsIgnoreCase ("factory performance"),
+                   "on PERFORM the save control says it saves a factory performance");
             CHECK (! br.overwriteOffered(),
                    "a performance that has never been saved offers SAVE AS only — "
                    "there is nothing to overwrite");
             br.setSaveName ("James Rig");
             br.pressSave();
-            auto rig = JMSignatureProcessor::factoryPerformanceDir().getChildFile ("James Rig.json");
+            auto rig = sealed::documentFile (JMSignatureProcessor::factoryPerformanceDir(), "James Rig");   // .jmi, sealed
+            std::printf ("  -> %s\n     browser says: %s\n", rig.getFullPathName().toRawUTF8(),
+                         br.destinationText().toRawUTF8());
             CHECK (rig.existsAsFile() && proc.state.performPresetName == "James Rig",
                    "CREATE + NAME: the performance exists and the app knows which one is loaded");
             br.rebuild();
@@ -3739,10 +4096,10 @@ int main (int argc, char** argv)
             br.pressOverwrite();
             CHECK (rig.loadFileAsString() == firstBytes, "arming a performance overwrite writes nothing");
             br.pressOverwrite();
-            CHECK (rig.getSiblingFile ("James Rig.json.bak").existsAsFile(),
+            CHECK (rig.getSiblingFile ("James Rig.jmi.bak").existsAsFile(),
                    "SAVE OVER on a performance keeps a .bak of what it replaced");
             CHECK (JMSignatureProcessor::factoryPerformanceDir()
-                       .findChildFiles (juce::File::findFiles, false, "James Rig*.json").size() == 1,
+                       .findChildFiles (juce::File::findFiles, false, "James Rig*.jmi").size() == 1,
                    "and did not leave a second performance behind");
 
             // ---- RECALL. This is the gap that was found: a snapshot stores
@@ -3801,12 +4158,36 @@ int main (int argc, char** argv)
             int rigRow = -1;
             for (int i = 0; i < br.rowCount(); ++i) if (br.rowName (i) == "James Rig") rigRow = i;
             CHECK (rigRow >= 0, "the performance is listed on the FACTORY tab where it was saved");
+
+            // A performance delivered INSIDE the library (client, 2026-11-03:
+            // "I put some new performances in the folder but it's not showing")
+            // is listed beside the app's own, and a same-named one in the app
+            // folder takes precedence so the library file is never the save target.
+            {
+                auto libPerf = libRoot.getChildFile ("Performance").getChildFile ("Factory");
+                libPerf.createDirectory();
+                auto shipped = libPerf.getChildFile ("Shipped In Library.jmi");
+                rig.copyFileTo (shipped);
+                auto twin = libPerf.getChildFile ("James Rig.jmi");          // same name as the app's
+                rig.copyFileTo (twin);
+                br.rebuild();
+                int shippedRow = -1, rigRows = 0;
+                for (int i = 0; i < br.rowCount(); ++i)
+                {
+                    if (br.rowName (i) == "Shipped In Library") shippedRow = i;
+                    if (br.rowName (i) == "James Rig") ++rigRows;
+                }
+                CHECK (shippedRow >= 0, "a performance in the LIBRARY's Performance\\Factory folder is listed as FACTORY");
+                CHECK (rigRows == 1, "a library performance with the app folder's name is listed once (the app's copy)");
+                shipped.deleteFile();
+                twin.deleteFile();
+                br.rebuild();
+            }
             CHECK (br.renameRow (rigRow, "James Stage Rig"), "it renames");
-            auto stage = JMSignatureProcessor::factoryPerformanceDir()
-                             .getChildFile ("James Stage Rig.json");
+            auto stage = sealed::documentFile (JMSignatureProcessor::factoryPerformanceDir(), "James Stage Rig");
             CHECK (stage.existsAsFile() && ! rig.existsAsFile(),
                    "the file moved and the old name is gone");
-            CHECK (juce::JSON::parse (stage.loadFileAsString()).getProperty ("name", "").toString()
+            CHECK (sealed::readDocumentVar (stage, sealed::performance).getProperty ("name", "").toString()
                        == "James Stage Rig",
                    "the name inside the file moved with it");
             CHECK (proc.state.performPresetName == "James Stage Rig",
@@ -3819,12 +4200,9 @@ int main (int argc, char** argv)
             proc.state.library.toggleFavorite ("3|James Stage Rig");
 
             // leave the machine as we found it
-            for (auto& f : JMSignatureProcessor::factoryPerformanceDir()
-                               .findChildFiles (juce::File::findFiles, false, "James *.json"))
-                f.deleteFile();
-            for (auto& f : JMSignatureProcessor::factoryPerformanceDir()
-                               .findChildFiles (juce::File::findFiles, false, "James *.json.bak"))
-                f.deleteFile();
+            for (auto* pat : { "James *.json", "James *.json.bak", "James *.jmi", "James *.jmi.bak" })
+                for (auto& f : JMSignatureProcessor::factoryPerformanceDir().findChildFiles (juce::File::findFiles, false, pat))
+                    f.deleteFile();
             proc.state.mod = ModState {};
             proc.state.macros[1] = Macro { "MACRO 2", {} };
             proc.publishModulation();
@@ -3911,8 +4289,8 @@ int main (int argc, char** argv)
         }
 
         // leave the machine as we found it
-        JMSignatureProcessor::factoryPerformanceDir().getChildFile ("James Live Set.json").deleteFile();
-        JMSignatureProcessor::factoryPerformanceDir().getChildFile ("James Live Set.json.bak").deleteFile();
+        for (auto* n : { "James Live Set.jmi", "James Live Set.jmi.bak", "James Live Set.json", "James Live Set.json.bak" })
+            JMSignatureProcessor::factoryPerformanceDir().getChildFile (n).deleteFile();
         proc.state.mod = ModState {};
         proc.state.macros[2] = Macro { "MACRO 3", {} };
         proc.publishModulation();

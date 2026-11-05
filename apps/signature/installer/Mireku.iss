@@ -15,7 +15,7 @@
 ; Documents, so an install or an uninstall never touches them.
 
 #define AppName      "MIREKU"
-#define AppVersion   "1.0.3"
+#define AppVersion   "1.1.0"
 #define Publisher    "Amanorsac Studio"
 
 ; A TEST build (build-windows-installer.ps1 -Tester) differs in exactly three
@@ -58,6 +58,8 @@ VersionInfoDescription={#AppName} {#AppVersion} Setup
 OutputDir={#OutDir}
 OutputBaseFilename=Mireku-{#AppVersion}{#FileTag}-Windows
 WizardStyle=modern dark
+SetupIconFile=..\resources\brand\MIREKU-rounded.ico
+UninstallDisplayIcon={app}\MIREKU.exe
 LicenseFile={#LicenceSrc}
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible

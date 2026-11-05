@@ -25,12 +25,15 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <atomic>
 #include <deque>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <vector>
 #include "jmi_format.h"
 #include "FxParams.h"
 #include "Authoring.h"
+#include "Sealed.h"
+#include "Tags.h"
 
 namespace jm {
 
@@ -63,7 +66,24 @@ inline std::atomic<juce::int64>& coarseNowMs()
 //                   touched again while the SampleData lives.
 struct SampleData
 {
+    /// Where the audio comes from: a WAV inside a folder bundle (`file`), or a
+    /// stream inside a SEALED instrument (`sealed` + `stream`; `file` is then
+    /// the sealed .jmi file itself, for display). Decrypting happens on the
+    /// message and loader threads only, exactly where the WAV reads happen.
     juce::File file;
+    std::shared_ptr<sealed::SealedBundle> sealed;
+    int stream = -1;
+
+    /// Reads `count` frames from `from` into `dst` (resized), from either source.
+    bool readFrames (juce::AudioFormatManager& fm, juce::int64 from, int count, juce::AudioBuffer<float>& dst)
+    {
+        if (sealed != nullptr) return sealed->readFrames (stream, from, count, dst);
+        std::unique_ptr<juce::AudioFormatReader> r (fm.createReaderFor (file));
+        if (r == nullptr) return false;
+        dst.setSize (numChannels, count, false, false, true);
+        r->read (&dst, 0, count, from, true, true);
+        return true;
+    }
 
     /// Preloaded head. Kept at the shipped §5.1 figure (65536 frames, ~1.365 s)
     /// so nothing regresses in the window between "bundle assigned" and "body
@@ -265,17 +285,52 @@ using SamplePtr = std::shared_ptr<SampleData>;
 struct BundleInfo                                    // cheap scan result
 {
     juce::File dir;
+    /// The name the player sees. THE ARTIST'S PRESET NAME WHEN THERE IS ONE
+    /// (client, 2026-11-01: "the new sample names lost all the naming James
+    /// did"): a bundle that holds exactly one preset, saved under a real name,
+    /// is listed under that name — "Mireku Velvet Pads vip", not the folder's
+    /// "VelvetPad". With several presets, or only the importer's "Default" /
+    /// "With FX", the instrument's own `meta.name` stands. Nothing on disk is
+    /// renamed; see `displayNameFor`.
     juce::String name;
+    juce::String metaName;                           // instrument.json meta.name, untouched
+    juce::StringArray presetNames;                   // presets/*.json, file names, cleaned
+    juce::StringArray tags;                          // INSTRUMENT / MOOD / USE words (Tags.h)
+    bool tagsEdited = false;                         // true when they came from settings.json
     int world = 0;                                   // 0..3
     bool sustaining = false;
+
+    /// Import artefacts that are not a name: a Yamaha "■" block, a stray
+    /// ".jmi" / ".wav" suffix the artist typed into a save box, double spaces.
+    static juce::String cleanName (juce::String n)
+    {
+        n = n.replace (juce::String::fromUTF8 ("\xE2\x96\xA0"), " ");
+        while (n.endsWithIgnoreCase (".jmi") || n.endsWithIgnoreCase (".wav"))
+            n = n.dropLastCharacters (4);
+        n = n.replaceCharacters ("\t", " ");
+        while (n.contains ("  ")) n = n.replace ("  ", " ");
+        return n.trim();
+    }
+    static bool isImporterPresetName (const juce::String& n)
+    {
+        return n.equalsIgnoreCase ("Default") || n.equalsIgnoreCase ("With FX");
+    }
+    static juce::String displayNameFor (const juce::String& metaName, const juce::StringArray& presets)
+    {
+        if (presets.size() == 1 && ! isImporterPresetName (presets[0]) && presets[0].isNotEmpty())
+            return presets[0];
+        return cleanName (metaName);
+    }
 };
 
 struct LoadedBundle
 {
     jmi::Instrument inst;
     std::vector<std::vector<SamplePtr>> samples;     // [zone][rr], parallel to inst.zones
-    juce::File dir;
+    juce::File dir;                                  // the folder bundle, or the sealed .jmi FILE
     int world = 0;
+    std::shared_ptr<sealed::SealedBundle> sealed;    // set when `dir` is a sealed file
+    bool isSealed() const { return sealed != nullptr; }
 };
 using BundlePtr = std::shared_ptr<LoadedBundle>;
 
@@ -429,10 +484,8 @@ private:
         if (residentByteCounter().load (std::memory_order_relaxed) + need > kMaxResidentBytes)
             if (! reclaim (need, &s)) return false;
 
-        std::unique_ptr<juce::AudioFormatReader> r (fm_.createReaderFor (s.file));
-        if (r == nullptr) return false;
-        juce::AudioBuffer<float> b (s.numChannels, (int) s.lengthFrames);
-        r->read (&b, 0, (int) s.lengthFrames, 0, true, true);
+        juce::AudioBuffer<float> b;
+        if (! s.readFrames (fm_, 0, (int) s.lengthFrames, b)) return false;
         s.publishFull (std::move (b));
         // The head is now a duplicate prefix of the body. Give it back — but not
         // while a voice is reading it, or the drop would starve that voice for a
@@ -661,6 +714,16 @@ public:
                 }
                 if (auto* favs = o->getProperty ("favorites").getArray())
                     for (auto& fv : *favs) favorites_.addIfNotAlreadyThere (fv.toString());
+                // the artist's tag corrections: { "<bundle folder>": ["Pad", "Warm", ...] }
+                if (auto* to = o->getProperty ("tags").getDynamicObject())
+                    for (auto& prop : to->getProperties())
+                    {
+                        juce::StringArray list;
+                        if (auto* arr = prop.value.getArray())
+                            for (auto& t : *arr)
+                                if (auto c = tags::canonical (t.toString()); c.isNotEmpty()) list.addIfNotAlreadyThere (c);
+                        userTags_[prop.name.toString().toLowerCase()] = list;
+                    }
                 licenseKey_ = o->getProperty ("licenseKey").toString();
                 // VELOCITY CURVE is global and belongs to the PLAYER's keyboard,
                 // not to any patch, so it lives here beside the library path and
@@ -675,6 +738,15 @@ public:
         settingsMode_ = mode_;
         if (auto env = juce::SystemStats::getEnvironmentVariable ("JM_AUTHORING_MODE", {}); env.isNotEmpty())
             mode_ = authoring::modeFromId (env);
+#if MIREKU_PLAYER_BUILD
+        // The PLAYER (what testers and customers install) is RELEASE mode,
+        // whatever an old settings.json says: its library is sealed and no
+        // save may try to go into it. Only the self-check's JM_AUTHORING_MODE
+        // (set by CTest, never by a player) can pin it the other way, so the
+        // authoring tests still run against the player binary.
+        if (juce::SystemStats::getEnvironmentVariable ("JM_AUTHORING_MODE", {}).isEmpty())
+            mode_ = settingsMode_ = authoring::Mode::release;
+#endif
         // Round 5: JM_LIBRARY_DIR overrides the scanned folder for THIS process
         // only and is never written back. The UI self-check sets it so the test
         // runs against the repo testdata instead of whatever happens to be in
@@ -695,6 +767,17 @@ public:
         juce::Array<juce::var> favs;
         for (auto& f : favorites_) favs.add (f);
         o->setProperty ("favorites", favs);
+        if (! userTags_.empty())
+        {
+            auto* to = new juce::DynamicObject();
+            for (auto& [folder, list] : userTags_)
+            {
+                juce::Array<juce::var> arr;
+                for (auto& t : list) arr.add (t);
+                to->setProperty (folder, arr);
+            }
+            o->setProperty ("tags", juce::var (to));
+        }
         o->setProperty ("licenseKey", licenseKey_);
         o->setProperty ("mode", authoring::modeId (settingsMode_));
         o->setProperty ("velocityCurve", velCurve_.isEmpty() ? "normal" : velCurve_);
@@ -743,6 +826,89 @@ public:
         saveSettings();
     }
 
+    // ------------------------------------------------------------------ tags
+    /// The tags a bundle is listed and searched under: the artist's own list
+    /// when he has edited it, otherwise what Tags.h reads off the names.
+    /// A bundle's or a performance's tags: the artist's own list when he has
+    /// edited it, otherwise what Tags.h reads off the names (for a
+    /// performance: its name plus the instruments in its four slots).
+    juce::StringArray tagsFor (const juce::File& f) const
+    {
+        if (auto* b = find (f)) return b->tags;
+        if (isPerformanceFile (f)) return performanceTags (f);
+        return {};
+    }
+    bool tagsEditedFor (const juce::File& f) const
+    {
+        if (auto* b = find (f)) return b->tagsEdited;
+        return userTags_.count (tagKey (f)) != 0;
+    }
+    /// Replaces a bundle's or performance's tags. Unknown words are dropped;
+    /// an empty list means "no tags at all" and is kept as the artist's decision.
+    void setTags (const juce::File& f, const juce::StringArray& list)
+    {
+        juce::StringArray clean;
+        for (auto& t : list)
+            if (auto c = tags::canonical (t); c.isNotEmpty()) clean.addIfNotAlreadyThere (c);
+        userTags_[tagKey (f)] = clean;
+        for (auto& b : bundles_) if (b.dir == f) applyTags (b);
+        perfTagCache_.erase (f.getFullPathName());
+        saveSettings();
+    }
+    void toggleTag (const juce::File& f, const juce::String& tag)
+    {
+        auto list = tagsFor (f);
+        if (list.contains (tag)) list.removeString (tag); else list.add (tag);
+        setTags (f, list);
+    }
+    /// Back to the automatic tags.
+    void resetTags (const juce::File& f)
+    {
+        userTags_.erase (tagKey (f));
+        for (auto& b : bundles_) if (b.dir == f) applyTags (b);
+        perfTagCache_.erase (f.getFullPathName());
+        saveSettings();
+    }
+    /// A performance DOCUMENT (sealed .jmi or the old .json), as against a bundle.
+    static bool isPerformanceFile (const juce::File& f)
+    {
+        return f.existsAsFile() && sealed::hasDocumentExtension (f) && ! sealed::isSealedBundleFile (f);
+    }
+    /// A performance's tags (client, 2026-11-03: "tags for performances too"):
+    /// the artist's list if edited, else its name's tags plus the INSTRUMENT
+    /// and MOOD tags of the bundles its slots name. Parsed once per file
+    /// version; the cache is keyed by path and modification time.
+    juce::StringArray performanceTags (const juce::File& f) const
+    {
+        if (auto it = userTags_.find (tagKey (f)); it != userTags_.end()) return it->second;
+        const auto stamp = f.getLastModificationTime().toMilliseconds();
+        if (auto it = perfTagCache_.find (f.getFullPathName()); it != perfTagCache_.end() && it->second.first == stamp)
+            return it->second.second;
+        juce::StringArray out = tags::autoTags (3, f.getFileNameWithoutExtension(), {}, {}, false);
+        auto v = sealed::readDocumentVar (f, sealed::performance);
+        if (auto* slots = v.getProperty ("slots", juce::var()).getArray())
+            for (auto& s : *slots)
+            {
+                juce::File dir (s.getProperty ("bundleDir", "").toString());
+                const BundleInfo* b = find (dir);
+                if (b == nullptr) b = findByFolderName (dir.getFileName());
+                if (b == nullptr) continue;
+                for (auto& t : b->tags)
+                {
+                    bool keep = false;
+                    for (auto* w : tags::groups()[0].words) if (t == w) keep = true;   // INSTRUMENT
+                    for (auto* w : tags::groups()[1].words) if (t == w) keep = true;   // MOOD
+                    if (keep) out.addIfNotAlreadyThere (t);
+                }
+            }
+        juce::StringArray ordered;                     // vocabulary order, like a bundle's
+        for (auto& g : tags::groups())
+            for (auto* w : g.words)
+                if (out.contains (w)) ordered.add (w);
+        perfTagCache_[f.getFullPathName()] = { stamp, ordered };
+        return ordered;
+    }
+
     // ----------------------------------------------------------------- scan
     /// Scans the library folder for *.jmi bundle dirs. Dev fallback (logged in
     /// DECISIONS-signature.md): when the folder yields no bundles, the repo
@@ -787,6 +953,19 @@ public:
         for (auto& b : bundles_) if (b.world == world) return &b;
         return nullptr;
     }
+    /// The same instrument under another root. The client's performances were
+    /// saved on his machine with his library path baked into every slot; on any
+    /// other machine (or after the folder moves) the absolute path misses, but
+    /// the bundle FOLDER NAME is the instrument's identity and travels with it.
+    /// Tried before `firstForWorld` so a moved library recalls the right sound
+    /// instead of a stand-in. Case-insensitive: Windows paths are.
+    const BundleInfo* findByFolderName (const juce::String& folderName) const
+    {
+        if (folderName.isEmpty()) return nullptr;
+        for (auto& b : bundles_)
+            if (b.dir.getFileName().equalsIgnoreCase (folderName)) return &b;
+        return nullptr;
+    }
 
     // ----------------------------------------------------------------- load
     /// Full load: parse instrument.json + presets, preload the resident head of
@@ -796,6 +975,7 @@ public:
     /// while the instrument still speaks the instant it is assigned.
     BundlePtr loadBundle (const juce::File& dir, juce::String& err)
     {
+        if (dir.existsAsFile()) return loadSealedBundle (dir, err);
         auto lb = std::make_shared<LoadedBundle>();
         std::string serr;
         std::vector<std::string> presetFiles;
@@ -838,7 +1018,69 @@ public:
         return lb;
     }
 
+    /// The same, from a SEALED instrument file: the instrument and its presets
+    /// come out of the sealed index, the heads are decrypted here and the
+    /// bodies by the loader thread, through SampleData::readFrames.
+    BundlePtr loadSealedBundle (const juce::File& f, juce::String& err)
+    {
+        auto sb = std::make_shared<sealed::SealedBundle>();
+        if (! sb->open (f, err)) return nullptr;
+        auto lb = std::make_shared<LoadedBundle>();
+        lb->inst = sb->instrument();
+        lb->inst.bundlePath = f.getFullPathName().toStdString();
+        lb->dir = f;
+        lb->world = (int) lb->inst.meta.world;
+        lb->sealed = sb;
+        lb->samples.resize (lb->inst.zones.size());
+        for (size_t z = 0; z < lb->inst.zones.size(); ++z)
+        {
+            auto& zone = lb->inst.zones[z];
+            for (auto& rr : zone.roundRobins)
+            {
+                auto sd = std::make_shared<SampleData>();
+                sd->file = f;
+                sd->sealed = sb;
+                sd->stream = sb->streamFor (rr.file);
+                const auto* st = sb->stream (sd->stream);
+                if (st == nullptr)
+                {
+                    err = "sealed instrument has no sample " + juce::String (rr.file);
+                    return nullptr;
+                }
+                sd->loop = rr.loop;
+                sd->lengthFrames = (juce::int64) st->frames;
+                sd->fileSampleRate = (double) st->sampleRate;
+                sd->numChannels = (int) st->channels;
+                const int pre = (int) juce::jmin<juce::int64> (SampleData::kHeadFrames, sd->lengthFrames);
+                juce::AudioBuffer<float> h;
+                if (! sd->readFrames (fm_, 0, pre, h))
+                {
+                    err = "cannot read sealed sample: " + juce::String (rr.file);
+                    return nullptr;
+                }
+                sd->setHead (std::move (h));
+                SampleLoader::instance().enrol (sd);
+                lb->samples[z].push_back (std::move (sd));
+            }
+        }
+        return lb;
+    }
+
 private:
+    /// settings.json key: a bundle by folder name, a performance by
+    /// "performance:<file name>", so the two can never collide.
+    static juce::String tagKey (const juce::File& f)
+    {
+        return (isPerformanceFile (f) ? "performance:" : "") + f.getFileName().toLowerCase();
+    }
+    void applyTags (BundleInfo& bi) const
+    {
+        auto it = userTags_.find (tagKey (bi.dir));
+        bi.tagsEdited = it != userTags_.end();
+        bi.tags = bi.tagsEdited ? it->second
+                                : tags::autoTags (bi.world, bi.dir.getFileNameWithoutExtension(), bi.metaName, bi.presetNames);
+    }
+
     void scanDir (const juce::File& dir)
     {
         if (! dir.isDirectory()) return;
@@ -853,8 +1095,36 @@ private:
             if (! jmi::parseInstrumentJson (text, inst, err)) continue;
             BundleInfo bi;
             bi.dir = d;
-            bi.name = juce::String (inst.meta.name);
+            bi.metaName = juce::String (inst.meta.name);
+            // presets/*.json at the top level only: `_importer/` (the parked
+            // importer pair) and any other subfolder are not the artist's.
+            for (auto& pf : d.getChildFile ("presets").findChildFiles (juce::File::findFiles, false, "*.json"))
+                bi.presetNames.add (BundleInfo::cleanName (pf.getFileNameWithoutExtension()));
+            bi.presetNames.sortNatural();
+            bi.name = BundleInfo::displayNameFor (bi.metaName, bi.presetNames);
             bi.world = (int) inst.meta.world;
+            applyTags (bi);
+            bi.sustaining = inst.soundType == jmi::SoundType::Sustaining;
+            bundles_.push_back (std::move (bi));
+        }
+        // SEALED instruments: one file each, "Name.jmi", told by the magic.
+        // The index (instrument + presets) is decrypted for the scan; the
+        // audio is not touched until the instrument is assigned to a slot.
+        for (auto& f : dir.findChildFiles (juce::File::findFiles, false, "*.jmi"))
+        {
+            if (! sealed::isSealedBundleFile (f)) continue;
+            sealed::SealedBundle sb;
+            juce::String err;
+            if (! sb.open (f, err)) { DBG ("sealed: " << f.getFileName() << ": " << err); continue; }
+            const auto& inst = sb.instrument();
+            BundleInfo bi;
+            bi.dir = f;
+            bi.metaName = juce::String (inst.meta.name);
+            for (auto& p : inst.presets) bi.presetNames.add (BundleInfo::cleanName (juce::String (p.name)));
+            bi.presetNames.sortNatural();
+            bi.name = BundleInfo::displayNameFor (bi.metaName, bi.presetNames);
+            bi.world = (int) inst.meta.world;
+            applyTags (bi);
             bi.sustaining = inst.soundType == jmi::SoundType::Sustaining;
             bundles_.push_back (std::move (bi));
         }
@@ -867,6 +1137,8 @@ private:
     authoring::Mode settingsMode_ = authoring::Mode::authoring;   // never the env override
     std::vector<BundleInfo> bundles_;
     juce::StringArray favorites_;
+    std::map<juce::String, juce::StringArray> userTags_;     // tagKey -> the artist's tags
+    mutable std::map<juce::String, std::pair<juce::int64, juce::StringArray>> perfTagCache_;   // path -> (mtime, tags)
     juce::String licenseKey_;
     juce::String velCurve_;                 // empty == "normal"
     int velFixed_ = 100;

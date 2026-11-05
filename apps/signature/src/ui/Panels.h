@@ -58,6 +58,20 @@ public:
             const char* names[] = { "User", "Factory", "Favorites" };
             for (int i = 0; i < 3; ++i)
                 m.addItem (i + 1, names[i], true, tabs_[(size_t) i].getToggleState());
+            // INTELLIGENT BROWSER (client, 2026-11-02): filter by INSTRUMENT,
+            // MOOD and USE. A tick narrows the list to sounds carrying that
+            // tag; several ticks must all be carried. The typed search also
+            // reads the tags, so "warm pad" finds a sound named neither.
+            m.addSeparator();
+            int id = 100;
+            for (auto& g : tags::groups())
+            {
+                juce::PopupMenu sub;
+                for (auto* w : g.words)
+                    sub.addItem (id++, w, true, tagFilter_.contains (w));
+                m.addSubMenu (g.name, sub, true, nullptr, false, 0);
+            }
+            if (! tagFilter_.isEmpty()) m.addItem (99, "Clear tags (" + tagFilter_.joinIntoString (", ") + ")");
             m.showMenuAsync (styledMenu (m, *filterBtn_), [this] (int r)
             {
                 if (r >= 1 && r <= 3)
@@ -65,9 +79,33 @@ public:
                     tabs_[(size_t) (r - 1)].setToggleState (true, juce::dontSendNotification);
                     rebuild();
                 }
+                else if (r == 99) { tagFilter_.clear(); rebuild(); }
+                else if (r >= 100)
+                {
+                    int id = 100;
+                    for (auto& g : tags::groups())
+                        for (auto* w : g.words)
+                            if (id++ == r)
+                            {
+                                if (tagFilter_.contains (w)) tagFilter_.removeString (w); else tagFilter_.add (w);
+                                rebuild();
+                            }
+                }
             });
         };
         addAndMakeVisible (*filterBtn_);
+        // one click clears the typed search AND the ticked tags (client,
+        // 2026-11-03: "easy way to remove filters in the search bar"); shown
+        // only while something is narrowing the list
+        clearBtn_.setFontHeight (10.0f);
+        clearBtn_.setTooltip ("Clear the search text and every ticked tag");
+        clearBtn_.onClick = [this]
+        {
+            search_.setText ({}, juce::dontSendNotification);
+            tagFilter_.clear();
+            rebuild();
+        };
+        addChildComponent (clearBtn_);
 
         addAndMakeVisible (tabStrip_);
         const char* names[] = { "USER", "FACTORY", "FAVORITES" };
@@ -152,35 +190,73 @@ public:
         auto filter = search_.getText().trim();
         const int page = proc_.state.currentPage;
         const int mode = tabs_[0].getToggleState() ? 0 : tabs_[2].getToggleState() ? 2 : 1;
+        // the well says what is narrowing the list when the field is empty
+        search_.setTextToShowWhenEmpty (tagFilter_.isEmpty() ? juce::String ("Search presets...")
+                                                             : tagFilter_.joinIntoString (" + "),
+                                        tagFilter_.isEmpty() ? Theme::muted.withAlpha (0.65f) : Theme::goldHi.withAlpha (0.8f));
         auto add = [&] (Row r)
         {
-            if (filter.isNotEmpty() && ! r.name.containsIgnoreCase (filter)) return;
+            if (filter.isNotEmpty() && ! tags::matches (filter, r.name, r.tags)) return;
+            for (auto& t : tagFilter_) if (! r.tags.contains (t)) return;
             if (mode == 2 && ! proc_.state.library.isFavorite (r.favKey())) return;
             rows_.push_back (std::move (r));
         };
+        auto ownTags = [page] (const juce::String& name)
+        { return tags::autoTags (page, name, {}, {}, false); };
+        const bool narrowing = filter.isNotEmpty() || ! tagFilter_.isEmpty();
+        if (narrowing != clearBtn_.isVisible()) { clearBtn_.setVisible (narrowing); resized(); }
         if (page >= 0 && page <= 3)
         {
             const int slot = slotForWorld (proc_.state, page);
-            if (mode != 0)
-                for (auto& b : proc_.state.library.bundlesForWorld (page))
-                    add ({ Row::Bundle, juce::String::fromUTF8 ("\xE2\x96\xA0 ") + b.name, b.dir, slot, -1 });
+            // One sound, one row. A bundle's presets sit INDENTED under their
+            // own bundle, and only when there is more than one: selecting a
+            // bundle already loads its first preset, so a lone preset listed
+            // again under another name read as a second sound (client,
+            // 2026-11-01: "VelvetPad and Mireku Velvet Pads vip?? confusing").
             if (mode != 0)
             {
-                if (auto lb = proc_.engines[(size_t) slot].bundle())
-                    for (size_t i = 0; i < lb->inst.presets.size(); ++i)
-                        add ({ Row::FactoryPreset, juce::String (lb->inst.presets[i].name), {}, slot, (int) i });
+                auto lb = proc_.engines[(size_t) slot].bundle();
+                for (auto& b : proc_.state.library.bundlesForWorld (page))
+                {
+                    add ({ Row::Bundle, b.name, b.dir, slot, -1, false, b.tags });
+                    if (lb != nullptr && lb->dir == b.dir && lb->inst.presets.size() > 1)
+                        for (size_t i = 0; i < lb->inst.presets.size(); ++i)
+                        {
+                            // a preset carries its instrument's tags plus its own name's
+                            auto nm = BundleInfo::cleanName (juce::String (lb->inst.presets[i].name));
+                            auto tg = b.tags;
+                            for (auto& t : ownTags (nm)) tg.addIfNotAlreadyThere (t);
+                            add ({ Row::FactoryPreset, nm, {}, slot, (int) i, true, tg });
+                        }
+                }
             }
             if (mode != 1)
-                for (auto& f : proc_.worldPresetDir (page).findChildFiles (juce::File::findFiles, false, "*.json"))
-                    add ({ Row::UserPreset, f.getFileNameWithoutExtension(), f, slot, -1 });
+                for (auto& f : sealed::listDocuments (proc_.worldPresetDir (page)))
+                    add ({ Row::UserPreset, f.getFileNameWithoutExtension(), f, slot, -1, false,
+                           ownTags (f.getFileNameWithoutExtension()) });
         }
         else
         {
             auto dir = JMSignatureProcessor::performancePresetDir();
-            for (auto& f : dir.getChildFile ("Factory").findChildFiles (juce::File::findFiles, false, "*.json"))
-                if (mode != 0) add ({ Row::Performance, f.getFileNameWithoutExtension(), f, -1, -1 });
-            for (auto& f : dir.findChildFiles (juce::File::findFiles, false, "*.json"))
-                if (mode != 1) add ({ Row::Performance, f.getFileNameWithoutExtension(), f, -1, -1 });
+            // FACTORY performances come from the app's Factory folder AND from
+            // the library's own Performance folders. One name, one row: the
+            // app's copy wins, so a save-over made here hides, never edits,
+            // the file James shipped in the library.
+            if (mode != 0)
+            {
+                juce::StringArray seen;
+                for (auto& pd : proc_.factoryPerformanceDirs())
+                    for (auto& f : sealed::listDocuments (pd))
+                    {
+                        const auto nm = f.getFileNameWithoutExtension();
+                        if (seen.contains (nm, true)) continue;
+                        seen.add (nm);
+                        add ({ Row::Performance, nm, f, -1, -1, false, proc_.state.library.performanceTags (f) });
+                    }
+            }
+            for (auto& f : sealed::listDocuments (dir))
+                if (mode != 1) add ({ Row::Performance, f.getFileNameWithoutExtension(), f, -1, -1, false,
+                                      proc_.state.library.performanceTags (f) });
         }
         refreshSaveBlock();
         list_.updateContent();
@@ -264,6 +340,11 @@ public:
         searchRow.removeFromRight (6);
         // R3(A): the icon now lives INSIDE the recessed well (drawn over the
         // field in paintOverChildren) instead of sitting beside a bare JUCE box.
+        if (clearBtn_.isVisible())
+        {
+            clearBtn_.setBounds (searchRow.removeFromRight (56).reduced (0, 3));
+            searchRow.removeFromRight (4);
+        }
         search_.setBounds (searchRow);
         searchIconArea_ = searchRow.withWidth (28).reduced (7);
         tabStrip_.setBounds (12, L::brTabsY, w - 24, L::brTabsH);
@@ -376,6 +457,14 @@ public:
     {
         return i >= 0 && i < (int) rows_.size() ? rows_[(size_t) i].name : juce::String();
     }
+    juce::StringArray rowTags (int i) const
+    {
+        return i >= 0 && i < (int) rows_.size() ? rows_[(size_t) i].tags : juce::StringArray();
+    }
+    /// Self-check hooks for the search well and the tag filter.
+    void setSearchText (const juce::String& s) { search_.setText (s, juce::dontSendNotification); rebuild(); }
+    void setTagFilter (const juce::StringArray& t) { tagFilter_ = t; rebuild(); }
+    juce::StringArray tagFilter() const { return tagFilter_; }
     bool rowIsBundle (int i) const
     {
         return i >= 0 && i < (int) rows_.size() && rows_[(size_t) i].kind == Row::Bundle;
@@ -426,7 +515,11 @@ public:
             return "No performance presets.\n\nArrange the slots on PERFORM,\nthen SAVE one below.";
         if (mode == 2) return "No favourites yet.\n\nRight-click a row and\n\"Toggle Favorite\" to star it.";
         if (search_.getText().trim().isNotEmpty())
-            return "Nothing matches\n\"" + search_.getText().trim() + "\"";
+            return "Nothing matches\n\"" + search_.getText().trim() + "\""
+                 + (tagFilter_.isEmpty() ? juce::String() : "\nwith " + tagFilter_.joinIntoString (" + "));
+        if (! tagFilter_.isEmpty())
+            return "Nothing here is tagged\n" + tagFilter_.joinIntoString (" + ")
+                 + ".\n\nClear the tags from the filter\nbutton, or tag a sound by\nright-clicking its row.";
         if (mode == 0) return "No user presets for " + juce::String (worldName (page)).toUpperCase()
                             + ".\n\nDial in a sound and SAVE it below.";
         return "No " + juce::String (worldName (page)).toUpperCase() + " instruments\nin your library.\n\n"
@@ -444,19 +537,18 @@ public:
     /// JM box / USB brand art panel at the foot of the column (approved ref).
     void drawBrandArt (juce::Graphics& g, juce::Rectangle<float> r)
     {
-        kit::drawNineSlice (g, kit::image (kit::Img::buttonMaster), r, 34, 34, 1.0f);
-        auto inner = r.reduced (18.0f, 22.0f);
-        if (shield_ != nullptr)
-            shield_->drawWithin (g, inner.removeFromTop (inner.getHeight() * 0.48f),
-                                 juce::RectanglePlacement::centred, 1.0f);
-        g.setColour (Theme::goldHi);
-        g.setFont (Theme::display (18.0f));
-        g.drawText ("MIREKU", inner.removeFromTop (24.0f), juce::Justification::centred, false);
-        g.setColour (Theme::muted);
-        g.setFont (Theme::ui (10.0f));
-        g.drawText ("SOUND LIBRARY", inner.removeFromTop (16.0f), juce::Justification::centred, false);
-        // single gold flourish accent (kit) — used once, never as wallpaper
-        kit::drawFlourish (g, inner.withTrimmedTop (6.0f).reduced (24.0f, 2.0f), 0.75f);
+        // A gold frame with the portrait flush inside it: the black of the
+        // artwork runs to the frame, no second border, no caption (the artwork
+        // carries its own MIREKU lettering). Client, 2026-11-01.
+        const float corner = 18.0f;
+        auto plaque = r.reduced (2.0f);
+        g.setColour (juce::Colours::black);
+        g.fillRoundedRectangle (plaque, corner);
+        ux::drawBrandPortrait (g, plaque.reduced (4.0f), corner - 4.0f, false);
+        g.setColour (Theme::goldDark);
+        g.drawRoundedRectangle (plaque, corner, 2.5f);
+        g.setColour (Theme::goldHi.withAlpha (0.8f));
+        g.drawRoundedRectangle (plaque.reduced (1.5f), corner - 1.5f, 1.0f);
     }
 
 private:
@@ -467,6 +559,8 @@ private:
         juce::File file;
         int slot;
         int presetIndex;
+        bool child = false;             // drawn indented under the row above it
+        juce::StringArray tags;         // INSTRUMENT / MOOD / USE words it is found under
         juce::String favKey() const { return juce::String ((int) kind) + "|" + name; }
     };
 
@@ -491,8 +585,17 @@ private:
             g.fillRect (6, h - 1, w - 12, 1);
         }
         g.setColour (selected ? Theme::goldHi : r.kind == Row::Bundle ? Theme::cream : Theme::muted.brighter (0.3f));
-        g.setFont (Theme::ui (14.0f));
-        g.drawText (r.name, 12, 0, w - 40, h, juce::Justification::centredLeft);
+        g.setFont (Theme::ui (r.child ? 13.0f : 14.0f));
+        const int x = r.child ? 30 : 12;
+        if (r.child)
+        {
+            g.setColour (Theme::goldDark.withAlpha (selected ? 0.9f : 0.5f));
+            g.fillRect (18, h / 2, 6, 1);
+            g.setColour (selected ? Theme::goldHi : Theme::muted.brighter (0.3f));
+        }
+        // (the tags are not drawn on the row: client, 2026-11-03, "it's making the whole
+        // thing look clumsy"; they still drive the search and the filter)
+        g.drawText (r.name, x, 0, w - x - 28, h, juce::Justification::centredLeft);
         if (proc_.state.library.isFavorite (r.favKey()) && starIcon_ != nullptr)
             starIcon_->drawWithin (g, juce::Rectangle<float> ((float) w - 26.0f, (float) h * 0.5f - 8.0f, 16.0f, 16.0f),
                                    juce::RectanglePlacement::centred, 1.0f);
@@ -512,8 +615,32 @@ private:
             // artist sent to Explorer to rename a folder; it is `meta.name`,
             // one guarded property, and nothing on disk moves — see
             // authoring::renameInstrument.
-            m.addItem (3, r.kind == Row::Bundle ? "Rename sound..." : "Rename...");
+            // An instrument is renamed only where its bundle can be written:
+            // the studio's authoring build. A sealed instrument cannot be.
+            if (r.kind != Row::Bundle || proc_.state.library.isAuthoring())
+                m.addItem (3, r.kind == Row::Bundle ? "Rename sound..." : "Rename...");
             if (r.kind == Row::UserPreset || r.kind == Row::Performance) m.addItem (2, "Delete preset");
+            // TAGS: what the sound is filed under for the search and the filter.
+            // Ticks toggle one tag at a time; the list is saved in settings.json
+            // against the bundle's folder name, never in the bundle.
+            if (r.kind == Row::Bundle || r.kind == Row::Performance)
+            {
+                juce::PopupMenu tg;
+                int id = 100;
+                for (auto& g : tags::groups())
+                {
+                    tg.addSectionHeader (g.name);
+                    for (auto* w : g.words) tg.addItem (id++, w, true, r.tags.contains (w));
+                }
+                if (proc_.state.library.tagsEditedFor (r.file))
+                {
+                    tg.addSeparator();
+                    tg.addItem (98, "Back to automatic tags");
+                }
+                m.addSubMenu ("Tags", tg);
+            }
+            if (r.kind == Row::Performance)
+                m.addItem (97, "Add to setlist as a song");
 
             // MOVE TO ANOTHER CATEGORY. Only for an instrument, and only in
             // AUTHORING mode: it edits the bundle's own instrument.json, which
@@ -544,6 +671,15 @@ private:
             m.showMenuAsync (styledMenu (m, list_), [this, r, row] (int res)
             {
                 if (res == 1) proc_.state.library.toggleFavorite (r.favKey());
+                else if (res == 98) proc_.state.library.resetTags (r.file);
+                else if (res == 97) proc_.setlistAdd (r.name, r.name);
+                else if (res >= 100)
+                {
+                    int id = 100;
+                    for (auto& g : tags::groups())
+                        for (auto* w : g.words)
+                            if (id++ == res) proc_.state.library.toggleTag (r.file, w);
+                }
                 else if (res == 2) { r.file.moveToTrash(); }
                 else if (res == 3) { promptRename (row); return; }
                 else if (res == 4) { startMeasure (row); return; }
@@ -799,12 +935,13 @@ private:
     juce::uint32 overArmedAtMs_ = 0;
     static constexpr juce::uint32 kArmWindowMs = 6000;
     std::unique_ptr<juce::DrawableButton> filterBtn_;
+    ux::PlateButton clearBtn_ { "CLEAR" };
     std::unique_ptr<juce::Drawable> searchIcon_ { assets::makeIcon (assets::Icon::search, Theme::muted) };
     std::unique_ptr<juce::Drawable> starIcon_ { ux::makePackIcon (ux::PackIcon::star, Theme::gold) };
-    std::unique_ptr<juce::Drawable> shield_ { ux::makeShield() };
     juce::Rectangle<int> searchIconArea_, artArea_, infoArea_, warnArea_;
     juce::ListBox list_;
     std::vector<Row> rows_;
+    juce::StringArray tagFilter_;                   // ticked in the filter menu; all must be carried
 };
 
 //==============================================================================
@@ -931,6 +1068,7 @@ public:
             case FxType::tapeMachine:    return 1;   // orange, beside the tape delay
             case FxType::ringMod:        return 2;   // purple, with the modulations
             case FxType::modPedal:       return 2;   // purple, with the modulations
+            case FxType::rotary:         return 1;   // orange, a cabinet, beside the EP preamp
             default:                     return 5;   // widener
         }
     }
@@ -1185,45 +1323,19 @@ private:
 class MasterFxColumn : public juce::Component
 {
 public:
-    explicit MasterFxColumn (JMSignatureProcessor& p) : proc_ (p) { rebuild(); }
+    // OUTPUT COLUMN (client, 2026-11-01: "remove the master FX, we are not
+    // utilizing it, just leave the box as a decoration"). The plate stays at
+    // the right of the rack as the output meter with its dB ladder; the master
+    // rack's menu and knobs are gone from the UI. The engine's master rack
+    // itself is untouched and stays empty, so nothing is processed here.
+    explicit MasterFxColumn (JMSignatureProcessor& p) : proc_ (p) {}
 
-    void rebuild()
-    {
-        knobs_.clear();
-        auto& rack = proc_.state.masterRack;
-        unitName_.clear();
-        if (! rack.empty())
-        {
-            auto& spec = fxSpec (rack.front().type);
-            unitName_ = juce::String (spec.name).toUpperCase();
-            int n = 0;
-            for (auto& ps : spec.params)
-            {
-                if (ps.kind != ParamKind::Float) continue;
-                if (n >= 3) break;
-                auto* k = new ParamKnob (proc_, "master.fx0." + juce::String (ps.id), ps.label, &ps);
-                k->setShowValue (false);
-                k->setLabelBelow (true, 10.0f);
-                knobs_.add (k);
-                addAndMakeVisible (k);
-                ++n;
-            }
-        }
-        if (menuBtn_ == nullptr)
-        {
-            menuBtn_ = ux::makePackIconButton ("mfx", ux::PackIcon::kebab, Theme::muted);
-            menuBtn_->onClick = [this] { showMenu(); };
-            addAndMakeVisible (*menuBtn_);
-        }
-        resized();
-        repaint();
-    }
+    void rebuild() {}
 
     void refresh()
     {
-        for (auto* k : knobs_) k->refresh();
-        const float pk = juce::jmax (proc_.masterPeakL.load(), proc_.masterPeakR.load());
-        if (std::abs (pk - pk_) > 1.0e-3f) { pk_ = pk; repaint(); }
+        const float l = proc_.masterPeakL.load(), r = proc_.masterPeakR.load();
+        if (std::abs (l - pkL_) > 1.0e-3f || std::abs (r - pkR_) > 1.0e-3f) { pkL_ = l; pkR_ = r; repaint(); }
     }
 
     void resized() override
@@ -1231,84 +1343,45 @@ public:
         auto r = getLocalBounds();
         const float u = (float) r.getWidth() / 196.0f;
         auto S = [u] (int v) { return juce::roundToInt ((float) v * u); };
-        menuBtn_->setBounds (r.getRight() - S (26), S (8), S (18), S (18));
-        const int cx[3] = { S (46), S (104), S (46) };
-        const int cy[3] = { S (78), S (78), S (156) };
-        for (int i = 0; i < knobs_.size(); ++i)
-            knobs_[i]->setBounds (juce::Rectangle<int> (S (58), S (58))
-                                      .withCentre ({ cx[juce::jmin (i, 2)], cy[juce::jmin (i, 2)] }));
-        meterArea_ = juce::Rectangle<int> (S (148), S (48), S (22), S (146));
+        // The plate's frame is part of the nine-slice; the title sits INSIDE
+        // the frame, under the top rail. Two ladders, left and right (client,
+        // 2026-11-02: "make the output 2 instead of one meter"), side by side
+        // under it, with the dB ticks read off the right one and the L / R
+        // letters beneath.
+        meterL_ = juce::Rectangle<int> (S (62), S (62), S (16), S (122));
+        meterR_ = juce::Rectangle<int> (S (84), S (62), S (16), S (122));
     }
 
     void paint (juce::Graphics& g) override
     {
         auto r = getLocalBounds().toFloat();
+        const float u = r.getWidth() / 196.0f;
         kit::drawNineSlice (g, kit::image (kit::Img::panelMaster), r, 48, 48, 1.0f);
         g.setColour (Theme::goldHi);
-        g.setFont (Theme::display (15.0f));
-        g.drawText ("MASTER FX", r.withTrimmedTop (8.0f).withHeight (20.0f), juce::Justification::centred, false);
-        if (unitName_.isNotEmpty())
+        g.setFont (Theme::display (15.0f * u));
+        g.drawText ("OUTPUT", r.withTrimmedTop (34.0f * u).withHeight (20.0f * u), juce::Justification::centred, false);
+        for (int k = 0; k < 2; ++k)
         {
-            g.setColour (Theme::muted);
-            g.setFont (Theme::ui (9.0f));
-            g.drawText (unitName_, r.withTrimmedTop (28.0f).withHeight (12.0f), juce::Justification::centred, false);
+            auto m = (k == 0 ? meterL_ : meterR_).toFloat();
+            kit::drawLedMeterV (g, m, LevelMeter::norm (k == 0 ? pkL_ : pkR_));
+            g.setColour (Theme::muted.withAlpha (0.8f));
+            g.setFont (Theme::value (8.0f));
+            g.drawText (k == 0 ? "L" : "R", m.withY (m.getBottom() + 3.0f).withHeight (10.0f),
+                        juce::Justification::centred, false);
         }
-        else
-        {
-            g.setColour (Theme::muted);
-            g.setFont (Theme::ui (11.0f));
-            g.drawFittedText ("RACK EMPTY\nADD VIA MENU",
-                              r.reduced (44.0f, 70.0f).toNearestInt(), juce::Justification::centred, 2);
-        }
-        // dB ladder + kit LED meter
-        auto m = meterArea_.toFloat();
-        kit::drawLedMeterV (g, m, LevelMeter::norm (pk_));
+        auto m = meterR_.toFloat();
         g.setColour (Theme::muted.withAlpha (0.8f));
         g.setFont (Theme::value (8.0f));
         const char* ticks[] = { "0", "-12", "-24", "-36", "-60" };
         for (int i = 0; i < 5; ++i)
-            g.drawText (ticks[i], m.getRight() + 2.0f, m.getY() + m.getHeight() * (float) i / 4.6f - 5.0f,
+            g.drawText (ticks[i], m.getRight() + 4.0f, m.getY() + m.getHeight() * (float) i / 4.6f - 5.0f,
                         24.0f, 10.0f, juce::Justification::centredLeft, false);
     }
 
 private:
-    void showMenu()
-    {
-        juce::PopupMenu m, add, repl;
-        for (auto& s : fxRegistry()) add.addItem (100 + (int) s.type, s.name);
-        m.addSubMenu ("Add unit", add, (int) proc_.state.masterRack.size() < FxRackDsp::kMaxSlots);
-        if (! proc_.state.masterRack.empty())
-        {
-            for (auto& s : fxRegistry()) repl.addItem (300 + (int) s.type, s.name);
-            m.addSubMenu ("Replace first unit", repl);
-            m.addItem (2, "Remove first unit");
-        }
-        m.showMenuAsync (styledMenu (m, *menuBtn_), [this] (int r)
-        {
-            // R7 (item 1): the master rack is EMPTY by default and every unit it
-            // gains from here is an explicit act, so those arrive active; what
-            // it must never do is build itself a default rack that is on. It
-            // goes through the same clickless two-step as the slot racks.
-            auto next = proc_.state.masterRack;
-            if (r >= 300) { if (next.empty()) return;
-                            next.front() = defaultUnitState ((FxType) (r - 300), false); }
-            else if (r >= 100) { if ((int) next.size() >= FxRackDsp::kMaxSlots) return;
-                                 next.push_back (defaultUnitState ((FxType) (r - 100), false)); }
-            else if (r == 2 && ! next.empty()) next.erase (next.begin());
-            else return;
-            proc_.state.masterRack = next;
-            proc_.masterRack.applyStructuralChange (next);
-            rebuild();
-            proc_.stateChanged.sendChangeMessage();
-        });
-    }
-
     JMSignatureProcessor& proc_;
-    juce::String unitName_;
-    juce::OwnedArray<ParamKnob> knobs_;
-    std::unique_ptr<juce::DrawableButton> menuBtn_;
-    juce::Rectangle<int> meterArea_;
-    float pk_ = 0;
+    juce::Rectangle<int> meterL_, meterR_;
+    float pkL_ = 0, pkR_ = 0;
 };
 
 //==============================================================================
@@ -1340,7 +1413,9 @@ public:
         rackDsp_ = &proc_.slotRacks[(size_t) slot];
         slotLabel_ = juce::String::charToString ((juce::juce_wchar) ('A' + slot))
                      + "  (" + worldName (proc_.state.slots[(size_t) slot].world) + ")";
-        const int shown = juce::jmin (6, (int) rackState_->size());
+        // WIDE SCREENS: a wider strip shows more of the rack, never fewer than six.
+        const int capacity = juce::jmax (6, (stripRight() - Theme::L::fxUnitX) / (Theme::L::fxUnitW + Theme::L::fxUnitGap));
+        const int shown = juce::jmin (capacity, (int) rackState_->size());
         for (int i = 0; i < shown; ++i)
         {
             auto* pn = new FxUnitPanel (proc_, prefix_, i, (*rackState_)[(size_t) i], rackState_, rackDsp_);
@@ -1348,7 +1423,7 @@ public:
             panels_.add (pn);
             addAndMakeVisible (pn);
         }
-        addBtn_.setVisible (shown < 6 && (int) rackState_->size() < FxRackDsp::kMaxSlots);
+        addBtn_.setVisible (shown < capacity && (int) rackState_->size() < FxRackDsp::kMaxSlots);
         master_->rebuild();
         resized();
         repaint();
@@ -1422,7 +1497,7 @@ public:
 
         int want = 0;
         for (auto* p : panels_) want += p->naturalWidth();
-        const int avail = L::fxStripRight - L::fxUnitX - (n + 1) * L::fxUnitGap;   // +1 leaves room for ADD
+        const int avail = stripRight() - L::fxUnitX - (n + 1) * L::fxUnitGap;   // +1 leaves room for ADD
         const double k = want > avail ? (double) avail / (double) want : 1.0;
 
         int total = 0;
@@ -1472,7 +1547,16 @@ public:
             addBtn_.setBounds (juce::Rectangle<int> (110, 30)
                                    .withCentre ({ addX_ + L::fxUnitW / 2,
                                                   L::fxUnitY + L::fxUnitH / 2 }));
-        master_->setBounds (L::fxMasterX, L::fxMasterY, L::fxMasterW, L::fxMasterH);
+        master_->setBounds (stripRight(), L::fxMasterY, L::fxMasterW, L::fxMasterH);
+    }
+
+    /// Where the units end and the output column begins: the column is anchored
+    /// to the strip's right edge (4 px in, as on the 3:2 layout), so a wider
+    /// strip gives the units the room.
+    int stripRight() const
+    {
+        using L = Theme::L;
+        return juce::jmax (L::fxStripRight, getWidth() - (L::rackW - L::fxMasterX));
     }
 
     void paint (juce::Graphics& g) override
@@ -1900,12 +1984,11 @@ public:
             int i = 0;
             for (auto& spec : ctrls)
             {
-                const int* ctr = six ? L::mpSix[juce::jmin (i, 5)] : L::mpFive[juce::jmin (i, 4)];
                 auto* k = new ParamKnob (proc_, "slot" + slotStr + ".engine." + spec.id, spec.label, &spec);
                 k->setMotif (i % 5);
                 k->setAccent (Theme::worldAccent (world_));
                 k->setV2 (d, L::mpLabelOff, L::mpValueOff, 16.0f, 16.0f);
-                k->setBounds (juce::Rectangle<int> (d + 70, d + 100).withCentre ({ ctr[0], ctr[1] }));
+                k->setBounds (juce::Rectangle<int> (d + 70, d + 100).withCentre (heroKnobCentre (i, six)));
                 knobs_.add (k);
                 addAndMakeVisible (k);
                 ++i;
@@ -2014,6 +2097,9 @@ public:
                                     "Existing instruments are never overwritten.");
                 import->onClick = [this] { chooseX7lFiles(); };
                 addAndMakeVisible (import);
+#if MIREKU_PLAYER_BUILD
+                import->setVisible (false);        // the player's library is sealed; it imports nothing
+#endif
                 settingsWidgets_.add (import);
 
                 // Velocity response lives below the library row, as index 5.
@@ -2382,6 +2468,24 @@ public:
         for (auto* c : choices_) c->setVisible (v);
     }
 
+    /// WIDE SCREENS: the stage can be wider than its 3:2 width. The knob
+    /// surface takes the extra, the meter rides on its right, the tab strip
+    /// spans the stage, and the hero knobs spread across the surface in the
+    /// same proportions as on the approved layout.
+    int extraW() const { return juce::jmax (0, getWidth() - Theme::L::centerW); }
+    juce::Rectangle<int> surfaceRect() const
+    {
+        using L = Theme::L;
+        return { L::mpSurfX, L::mpSurfY, L::mpSurfW + extraW(), L::mpSurfH };
+    }
+    juce::Point<int> heroKnobCentre (int i, bool six) const
+    {
+        using L = Theme::L;
+        const int* ctr = six ? L::mpSix[juce::jmin (i, 5)] : L::mpFive[juce::jmin (i, 4)];
+        const float sx = (float) (L::mpSurfW + extraW()) / (float) L::mpSurfW;
+        return { L::mpSurfX + juce::roundToInt ((float) (ctr[0] - L::mpSurfX) * sx), ctr[1] };
+    }
+
     void resized() override
     {
         using L = Theme::L;
@@ -2390,17 +2494,24 @@ public:
         prevBtn_->setBounds (cx - 242, L::mpTitleY + 4, 26, 26);
         nextBtn_->setBounds (cx + 216, L::mpTitleY + 4, 26, 26);
         heartBtn_->setBounds (cx + 254, L::mpTitleY + 4, 26, 26);
-        meter_.setBounds (L::mpMeterX, L::mpMeterY, L::mpMeterW, L::mpMeterH);
+        meter_.setBounds (L::mpMeterX + extraW(), L::mpMeterY, L::mpMeterW, L::mpMeterH);
 
-        tabStrip_.setBounds (L::mpTabsX, L::mpTabsY, L::mpTabsW, L::mpTabsH);
+        tabStrip_.setBounds (L::mpTabsX, L::mpTabsY, L::mpTabsW + extraW(), L::mpTabsH);
         {
             auto tr = tabStrip_.getBounds().reduced (4, 4);
             const int tw = tr.getWidth() / 5;
             for (int i = 0; i < 5; ++i)
                 tabs_[(size_t) i].setBounds (tr.removeFromLeft (i == 4 ? tr.getWidth() : tw));
         }
+        if (tab_ == 0)
+        {
+            const bool six = knobs_.size() == 6;
+            for (int i = 0; i < knobs_.size(); ++i)
+                knobs_[i]->setBounds (juce::Rectangle<int> (L::mpKnobD + 70, L::mpKnobD + 100)
+                                          .withCentre (heroKnobCentre (i, six)));
+        }
 
-        const juce::Rectangle<int> surface (L::mpSurfX, L::mpSurfY, L::mpSurfW, L::mpSurfH);
+        const juce::Rectangle<int> surface = surfaceRect();
         if (browser_ != nullptr) browser_->setBounds (surface.reduced (60, 16));
 
         auto area = surface.reduced (40);
@@ -2492,8 +2603,7 @@ public:
 
         if (tab_ != 0 || browser_ != nullptr)   // overlay plaque over the surface
         {
-            auto surf = juce::Rectangle<float> ((float) L::mpSurfX, (float) L::mpSurfY,
-                                                (float) L::mpSurfW, (float) L::mpSurfH);
+            auto surf = surfaceRect().toFloat();
             g.setColour (juce::Colour (0xff0A0805).withAlpha (0.96f));
             g.fillRoundedRectangle (surf, 12.0f);
             g.setColour (Theme::goldDark);
@@ -2535,8 +2645,12 @@ public:
         g.setColour (Theme::gold.withAlpha (0.62f));
         g.drawRoundedRectangle (r.reduced (0.5f), 10.0f, 1.8f);
 
+        // the knob surface spans the stage: its right margin is the one the
+        // 3:2 layout has, whatever the stage's width (WIDE SCREENS)
+        using L = Theme::L;
         auto surf = juce::Rectangle<float> (r.getX() + L::mpSurfX, r.getY() + L::mpSurfY,
-                                            (float) L::mpSurfW, (float) L::mpSurfH);
+                                            r.getWidth() - L::mpSurfX - (L::centerW - L::mpSurfX - L::mpSurfW),
+                                            (float) L::mpSurfH);
         g.setColour (juce::Colours::black.withAlpha (0.5f));
         g.fillRoundedRectangle (surf.translated (0.0f, 4.0f), 14.0f);
         g.setColour (juce::Colour (0xff080604).withAlpha (0.93f));

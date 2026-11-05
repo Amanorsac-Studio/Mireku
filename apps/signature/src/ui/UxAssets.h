@@ -82,6 +82,44 @@ inline std::unique_ptr<juce::Drawable> makeShield()
 {
     return parseSvg (JMAssets::jmshieldreference_svg, JMAssets::jmshieldreference_svgSize);
 }
+
+//============================================================ brand portrait
+// The client's approved icon (MIREKU-Developer-Pack, 2026-10-31): an engraved
+// ivory portrait on black with gold MIREKU lettering. Raster only, so it is
+// never redrawn or stretched: it is fitted into a square, the black stays
+// opaque, and the corners are softened to sit on the chassis.
+inline const juce::Image& brandPortrait()
+{
+    static juce::Image img;
+    if (! img.isValid())
+        img = juce::ImageFileFormat::loadFrom (JMAssets::MIREKU512_png, (size_t) JMAssets::MIREKU512_pngSize);
+    return img;
+}
+inline void drawBrandPortrait (juce::Graphics& g, juce::Rectangle<float> r, float corner = 8.0f,
+                               bool ring = true)
+{
+    // The black of the artwork extends across the whole of `r`, so a wider
+    // plaque gets black margins beside the portrait rather than a smaller
+    // portrait or a stretched one (client, 2026-11-01).
+    const auto side = juce::jmin (r.getWidth(), r.getHeight());
+    const auto sq = r.withSizeKeepingCentre (side, side);
+    juce::Path clip;
+    clip.addRoundedRectangle (r, corner);
+    g.saveState();
+    g.reduceClipRegion (clip);
+    g.setColour (juce::Colours::black);
+    g.fillRect (r);
+    if (const auto& img = brandPortrait(); img.isValid())
+    {
+        g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
+        g.drawImageWithin (img, (int) sq.getX(), (int) sq.getY(), (int) sq.getWidth(), (int) sq.getHeight(),
+                           juce::RectanglePlacement::centred, false);
+    }
+    g.restoreState();
+    if (! ring) return;
+    g.setColour (Theme::goldDark.withAlpha (0.85f));
+    g.drawRoundedRectangle (r, corner, 1.0f);
+}
 inline std::unique_ptr<juce::DrawableButton> makePackIconButton (const juce::String& name, PackIcon ic,
                                                                  juce::Colour normal = Theme::gold)
 {

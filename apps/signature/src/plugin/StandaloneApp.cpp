@@ -287,17 +287,24 @@ public:
 
         mainWindow_ = std::make_unique<JMStandaloneWindow> (getApplicationName(),
                                                             userSettings, firstLaunch);
-        // item B — the gear icon in our own header now opens device settings
-        SettingsPanel::audioSettingsHook() = []
+        // The AUDIO / MIDI window (ui/AudioSettings.h) is ours now, drawn in
+        // the house chrome; it needs the holder's device manager and the
+        // settings file for the OUT -> device-channel mapping (MULTI OUT).
+        AudioMidiPanel::deviceManager() = &mainWindow_->getDeviceManager();
+        AudioMidiPanel::settingsStore() = userSettings;
+        if (auto* proc = dynamic_cast<JMSignatureProcessor*> (mainWindow_->getAudioProcessor()))
         {
-            if (auto* holder = juce::StandalonePluginHolder::getInstance())
-                holder->showAudioSettingsDialog();
-        };
+            mappingKeeper_ = std::make_unique<MappingKeeper> (*proc, mainWindow_->getDeviceManager());
+            AudioMidiPanel::applyStoredMapping (*proc);
+        }
         mainWindow_->setVisible (true);
     }
 
     void shutdown() override
     {
+        mappingKeeper_ = nullptr;
+        AudioMidiPanel::deviceManager() = nullptr;
+        AudioMidiPanel::settingsStore() = nullptr;
         SettingsPanel::audioSettingsHook() = nullptr;
         MidiDeviceRouter::releaseFromHolderHook() = nullptr;
         MidiDeviceRouter::active().store (false);
@@ -320,9 +327,23 @@ public:
     }
 
 private:
+    /// MULTI OUT: keeps the processor's view of the device current while the
+    /// AUDIO / MIDI window is closed — a device that is re-opened (another
+    /// type, a reconnect, a saved setup) re-applies the stored mapping and
+    /// re-publishes how many output channels it runs.
+    struct MappingKeeper : juce::ChangeListener
+    {
+        MappingKeeper (JMSignatureProcessor& p, juce::AudioDeviceManager& d) : proc (p), dm (d) { dm.addChangeListener (this); }
+        ~MappingKeeper() override { dm.removeChangeListener (this); }
+        void changeListenerCallback (juce::ChangeBroadcaster*) override { AudioMidiPanel::applyStoredMapping (proc); }
+        JMSignatureProcessor& proc;
+        juce::AudioDeviceManager& dm;
+    };
+
     JmLookAndFeel lnf_;
     juce::ApplicationProperties appProperties_;
     std::unique_ptr<JMStandaloneWindow> mainWindow_;
+    std::unique_ptr<MappingKeeper> mappingKeeper_;
 };
 
 } // namespace jm

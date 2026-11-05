@@ -1583,6 +1583,127 @@ private:
     SoftCeiling guard_ = makeLoopGuard();
 };
 
+//========================================================== 16. Rotary speaker
+// A Leslie for the organs (client, 2026-11-02). The signal is split at 800 Hz:
+// the top goes to the treble HORN, the bottom to the bass DRUM, and each rotor
+// spins past two microphones. A microphone hears three things from a spinning
+// mouth, and all three are here: the level rises as the mouth comes round to
+// face it (amplitude), the pitch bends up as it approaches and down as it
+// leaves (Doppler, a modulated delay), and the top end dulls as it faces away
+// (a one-pole that opens and closes with the angle). The horn does all three;
+// the drum, being a bass rotor, mostly the first. The right microphone sits
+// MIC WIDTH of a half turn round from the left, so it hears the same rotor a
+// fraction of a turn later; at 0 both channels hear one microphone and the
+// effect is mono. The drum turns the opposite way to the horn, as it does in
+// the cabinet, so the two never line up for long.
+//
+// SPEED is the half-moon switch. The horn weighs little and reaches a new
+// speed in about a second; the drum is heavy and takes four seconds to spin
+// up and six to slow down, which is the lurch a player leans on going from
+// chorale to tremolo. BRAKE lets both coast to a stop.
+class RotaryFx : public FxUnit
+{
+public:
+    RotaryFx() : FxUnit (FxType::rotary) {}
+    void prepare (double sr, int) override
+    {
+        sr_ = sr;
+        hornDl_.prepare (sr, 8.0f);
+        drumDl_.prepare (sr, 8.0f);
+        for (auto& x : xo_) x.setCutoff (800.0f, sr);
+        reset();
+    }
+    void reset() override
+    {
+        hornDl_.reset(); drumDl_.reset();
+        for (auto& x : xo_) x.reset();
+        for (auto& t : tone_) t.reset();
+        hornPh_ = 0.0; drumPh_ = 0.0;
+        hornHz_ = kHornSlow; drumHz_ = kDrumSlow;
+    }
+    void process (juce::AudioBuffer<float>& b, double) override
+    {
+        const int speed = (int) p (0);
+        const float drive = juce::jlimit (0.0f, 1.0f, p (1) / 100.0f);
+        const float horn  = juce::jlimit (0.0f, 1.0f, p (2) / 100.0f);
+        const float drum  = juce::jlimit (0.0f, 1.0f, p (3) / 100.0f);
+        const double micOff = 0.5 * juce::jlimit (0.0f, 1.0f, p (4) / 100.0f);  // right mic, in turns
+        const float wetG = juce::jlimit (0.0f, 1.0f, p (5) / 100.0f), dryG = 1.0f - wetG;
+        const int n = b.getNumSamples();
+        auto* L = b.getWritePointer (0);
+        auto* R = b.getNumChannels() > 1 ? b.getWritePointer (1) : L;
+
+        // where each rotor is heading, and how quickly it gets there
+        const float hornTarget = speed == 0 ? kHornSlow : speed == 1 ? kHornFast : 0.0f;
+        const float drumTarget = speed == 0 ? kDrumSlow : speed == 1 ? kDrumFast : 0.0f;
+        const float hornTau = hornTarget > hornHz_ ? 1.0f : 1.6f;          // seconds
+        const float drumTau = drumTarget > drumHz_ ? 4.0f : 6.0f;
+        const float hornA = 1.0f - std::exp (-1.0f / (hornTau * (float) sr_));
+        const float drumA = 1.0f - std::exp (-1.0f / (drumTau * (float) sr_));
+
+        // the valve amplifier: a soft clip whose gain rises with DRIVE, blended
+        // in so that DRIVE 0 is bit-exact dry
+        const float pre = 1.0f + 5.0f * drive, makeup = (1.0f + 1.2f * drive) / pre;
+
+        const double twoPi = juce::MathConstants<double>::twoPi;
+        const float msToSamp = (float) (sr_ / 1000.0);
+        const float hornDepth = 0.35f * horn, drumDepth = 0.12f * drum;   // ms of Doppler swing
+        const float hornAm = 0.7f * horn, drumAm = 0.5f * drum;
+        const float hornMakeup = 1.0f / (1.0f - 0.5f * hornAm), drumMakeup = 1.0f / (1.0f - 0.5f * drumAm);
+        // the horn's tone: wide open facing the microphone, closing to 12 kHz
+        // minus up to 9 kHz as it turns away
+        const float aFace = onePoleA (12000.0f), aAway = onePoleA (12000.0f - 9000.0f * horn);
+
+        for (int i = 0; i < n; ++i)
+        {
+            hornHz_ += hornA * (hornTarget - hornHz_);
+            drumHz_ += drumA * (drumTarget - drumHz_);
+            hornPh_ += hornHz_ / sr_; if (hornPh_ >= 1.0) hornPh_ -= 1.0;
+            drumPh_ -= drumHz_ / sr_; if (drumPh_ < 0.0)  drumPh_ += 1.0;
+
+            const float in[2] = { L[i], R[i] };
+            float lo[2], hi[2];
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                float x = in[ch];
+                if (drive > 0.0f) x += drive * (std::tanh (pre * x) * makeup - x);
+                lo[ch] = xo_[(size_t) ch * 2 + 1].process (xo_[(size_t) ch * 2].process (x));
+                hi[ch] = x - lo[ch];
+            }
+            hornDl_.push (hi[0], hi[1]);
+            drumDl_.push (lo[0], lo[1]);
+
+            float wet[2];
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                const double off = ch == 0 ? 0.0 : micOff;
+                const double ha = twoPi * (hornPh_ + off), da = twoPi * (drumPh_ + off);
+                const float hornFace = (float) std::cos (ha), drumFace = (float) std::cos (da);   // +1 facing the mic
+                float h = hornDl_.read (ch, (2.0f + hornDepth * (float) std::sin (ha)) * msToSamp);
+                float d = drumDl_.read (ch, (1.0f + drumDepth * (float) std::sin (da)) * msToSamp);
+                h *= hornMakeup * (1.0f - hornAm * 0.5f * (1.0f - hornFace));
+                d *= drumMakeup * (1.0f - drumAm * 0.5f * (1.0f - drumFace));
+                auto& t = tone_[(size_t) ch];
+                t.a = aAway + (aFace - aAway) * 0.5f * (1.0f + hornFace);
+                h = t.process (h);
+                wet[ch] = h + d;
+            }
+            L[i] = dryG * in[0] + wetG * wet[0];
+            R[i] = dryG * in[1] + wetG * wet[1];
+        }
+    }
+private:
+    static constexpr float kHornSlow = 0.8f, kHornFast = 6.8f, kDrumSlow = 0.66f, kDrumFast = 5.7f;
+    float onePoleA (float hz) const { return 1.0f - std::exp (-juce::MathConstants<float>::twoPi * hz / (float) sr_); }
+
+    double sr_ = 48000;
+    ModDelay hornDl_, drumDl_;
+    std::array<OnePoleLP, 4> xo_ {};       // two poles per channel at 800 Hz
+    std::array<OnePoleLP, 2> tone_ {};
+    double hornPh_ = 0.0, drumPh_ = 0.0;
+    float hornHz_ = kHornSlow, drumHz_ = kDrumSlow;
+};
+
 inline std::unique_ptr<FxUnit> createFxUnit (FxType t)
 {
     switch (t)
@@ -1602,6 +1723,7 @@ inline std::unique_ptr<FxUnit> createFxUnit (FxType t)
         case FxType::tapeMachine:   return std::make_unique<TapeMachineFx>();
         case FxType::ringMod:       return std::make_unique<RingModFx>();
         case FxType::modPedal:      return std::make_unique<ModPedalFx>();
+        case FxType::rotary:        return std::make_unique<RotaryFx>();
         default:                    return nullptr;
     }
 }

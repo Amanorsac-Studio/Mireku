@@ -340,7 +340,9 @@ public:
         sr_ = sampleRate;
         scratch_.setSize (2, maxBlock);
         for (auto& f : voicingChain_) f.prepare (sampleRate);
+        for (auto& f : tiltLp_) f.reset();
         motionLfo_.setRate (0.15f, sampleRate);
+        motionLfo_.phase = 0.0;
         for (auto& f : driveDc_) f.prepare (sampleRate);
         starveRamp_ = 1.0f / (float) juce::jmax (1.0, sampleRate * 0.005);   // 5 ms in/out
         starveLimit_ = (int) (sampleRate * 4.0);                             // 4 s hard stop
@@ -364,21 +366,50 @@ public:
     void setBundle (const BundlePtr& b)
     {
         std::vector<int> rr (b != nullptr ? b->inst.zones.size() : 0, 0);
-        const juce::SpinLock::ScopedLockType sl (lock_);
-        bundle_ = b;
-        rrCounters_ = std::move (rr);
-        // Round 5: drop the voices' SamplePtrs HERE, on the message thread. The
-        // old code left them dangling in silent voices, so the last reference to
-        // a ~1 MB SampleData was released (i.e. free()d) on the audio thread the
-        // next time that voice was stolen.
-        for (auto& v : voices_)
+        BundlePtr old;
         {
-            v.active = false;
-            if (v.sample != nullptr) { v.sample->voiceRefs--; v.sample = nullptr; }
+            const juce::SpinLock::ScopedLockType sl (lock_);
+            old = bundle_;
+            bundle_ = b;
+            rrCounters_ = std::move (rr);
+            // SEAMLESS SOUND SWITCHING (client, 2026-11-03: "when switching
+            // between performances make it smooth, not a hard pop; if I change
+            // performance while the pedal is still held I should hear the
+            // other sound"; Yamaha calls this SSS). The voices are NOT cut: a
+            // sounding voice holds its own SamplePtr and never reads bundle_
+            // again, so it carries on under the new instrument until its key
+            // is lifted and its release has run. New notes go to the new sound.
+            //
+            // Round 5's rule still holds: the last reference to a SampleData
+            // must not be released on the audio thread. The old bundle is kept
+            // in `retired_` until no voice plays from it (purgeRetired, below,
+            // message thread), so a voice ending on the audio thread only ever
+            // drops a reference that is not the last.
+            if (b != nullptr)
+                ampEnv_.setDefaults (b->inst.soundType == jmi::SoundType::Sustaining);
         }
-        if (b != nullptr)
-            ampEnv_.setDefaults (b->inst.soundType == jmi::SoundType::Sustaining);
+        if (old != nullptr && old != b) retired_.push_back (old);
+        purgeRetired();
     }
+
+    /// Drops retired bundles that no voice plays from any more. Message thread.
+    void purgeRetired()
+    {
+        std::vector<const SampleData*> live;
+        {
+            const juce::SpinLock::ScopedLockType sl (lock_);
+            for (auto& v : voices_)
+                if (v.active && v.sample != nullptr) live.push_back (v.sample.get());
+        }
+        retired_.erase (std::remove_if (retired_.begin(), retired_.end(), [&live] (const BundlePtr& rb)
+        {
+            for (auto& zone : rb->samples)
+                for (auto& sp : zone)
+                    if (std::find (live.begin(), live.end(), sp.get()) != live.end()) return false;
+            return true;
+        }), retired_.end());
+    }
+    int retiredBundles() const { return (int) retired_.size(); }      // test/introspection helper
     BundlePtr bundle() const { const juce::SpinLock::ScopedLockType sl (lock_); return bundle_; }
 
     AmpEnvParams& ampEnv() { return ampEnv_; }
@@ -570,6 +601,11 @@ public:
         for (auto& v : voices_) if (v.active) ++n;
         return n;
     }
+    bool isNoteActive (int note) const                // test/introspection helper
+    {
+        for (auto& v : voices_) if (v.active && v.note == note) return true;
+        return false;
+    }
     int sustainedVoices() const                       // test/introspection helper
     {
         int n = 0;
@@ -593,7 +629,9 @@ public:
     void render (juce::AudioBuffer<float>& out, int numSamples)
     {
         const juce::SpinLock::ScopedTryLockType sl (lock_);
-        if (! sl.isLocked() || bundle_ == nullptr) return;
+        if (! sl.isLocked()) return;
+        // (no bundle_ guard: a voice retired by setBundle keeps sounding even
+        // when the slot was left empty by the new performance)
 
         if (scratch_.getNumSamples() < numSamples)          // defensive (host misreported block size)
             scratch_.setSize (2, numSamples, false, false, true);
@@ -931,12 +969,42 @@ private:
     }
 
     //================================================= world voicing (post)
+    // One biquad per channel, transposed direct form II in DOUBLE, fed the
+    // coefficients juce::IIRCoefficients designs. It used to be juce::IIRFilter,
+    // which (a) keeps its state across prepare(), so the previous note's tail
+    // rang at the next note start, and (b) snaps its state to zero once per
+    // BLOCK when it is tiny, so a quiet onset rendered differently depending
+    // on where the block boundaries fell. Both were caught by the S4.1
+    // sample-rate / buffer-size matrix once a preset with Tine or Body off
+    // centre was in the session. This one is sample-exact for any block size.
     struct ShelfFilter
     {
-        juce::IIRFilter f[2];
-        void prepare (double) {}
-        void set (juce::IIRCoefficients c) { f[0].setCoefficients (c); f[1].setCoefficients (c); }
-        void process (float* l, float* r, int n) { f[0].processSamples (l, n); f[1].processSamples (r, n); }
+        double c[5] { 1.0, 0.0, 0.0, 0.0, 0.0 };     // b0 b1 b2 a1 a2, normalised by a0
+        double v1[2] { 0.0, 0.0 }, v2[2] { 0.0, 0.0 };
+        void prepare (double) { reset(); }
+        void reset() { v1[0] = v1[1] = v2[0] = v2[1] = 0.0; }
+        void set (juce::IIRCoefficients coeffs)
+        {
+            for (int i = 0; i < 5; ++i) c[i] = (double) coeffs.coefficients[i];
+        }
+        void process (float* l, float* r, int n)
+        {
+            float* ch[2] = { l, r };
+            for (int k = 0; k < 2; ++k)
+            {
+                double s1 = v1[k], s2 = v2[k];
+                float* x = ch[k];
+                for (int i = 0; i < n; ++i)
+                {
+                    const double in = (double) x[i];
+                    const double out = c[0] * in + s1;
+                    s1 = c[1] * in - c[3] * out + s2;
+                    s2 = c[2] * in - c[4] * out;
+                    x[i] = (float) out;
+                }
+                v1[k] = s1; v2[k] = s2;
+            }
+        }
     };
 
     void applyVoicing (float* L, float* R, int n)
@@ -990,6 +1058,7 @@ private:
     //==================================================================== data
     mutable juce::SpinLock lock_;
     BundlePtr bundle_;
+    std::vector<BundlePtr> retired_;                 // previous bundles still played by a voice (SSS)
     std::vector<int> rrCounters_;
     std::array<Voice, kMaxVoices> voices_;
     std::array<std::atomic<float>, 8> engineParams_ {};

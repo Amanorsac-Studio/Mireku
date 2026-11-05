@@ -41,6 +41,7 @@
 #include <juce_core/juce_core.h>
 #include <vector>
 #include "jmi_format.h"
+#include "Sealed.h"
 
 // Kept in step with CMakeLists `project(... VERSION ...)`, which defines this.
 #ifndef JM_APP_VERSION
@@ -85,7 +86,7 @@ inline juce::String modeBadge (Mode m)
 {
     // ASCII only: juce::String (const char*) is an ASCII constructor, and a
     // typographic dash smuggled in through it renders as mojibake.
-    return m == Mode::authoring ? "AUTHORING MODE - SAVES GO TO FACTORY" : juce::String();
+    return m == Mode::authoring ? "AUTHORING MODE" : juce::String();
 }
 
 //==============================================================================
@@ -487,6 +488,54 @@ inline WriteResult guardedReplace (const juce::File& target, const juce::String&
     r.backup = bak;
     if (bak != juce::File())
         r.note = "Previous version kept as " + bak.getFileName();
+    return r;
+}
+
+/// The same guard for a SEALED document (engine/Sealed.h): the previous file
+/// is kept as .bak, the new one is written sealed, decrypted straight back and
+/// handed to `validate` as text; on any failure the previous bytes come back.
+template <typename Validate>
+inline WriteResult guardedReplaceDocument (const juce::File& target, sealed::DocKind kind, const juce::String& text,
+                                           bool allowReplace, Validate&& validate)
+{
+    WriteResult r;
+    auto dir = target.getParentDirectory();
+    if (! dir.isDirectory() && ! dir.createDirectory().wasOk())
+    {
+        r.message = "Could not create " + dir.getFullPathName() + ". The folder may be read only.";
+        return r;
+    }
+    const bool existed = target.existsAsFile();
+    if (existed && ! allowReplace)
+    {
+        r.message = "\"" + target.getFileNameWithoutExtension() + "\" already exists";
+        r.file = target;
+        return r;
+    }
+    juce::MemoryBlock previous;
+    juce::File bak;
+    if (existed)
+    {
+        target.loadFileAsData (previous);
+        bak = target.getSiblingFile (target.getFileName() + ".bak");
+        bak.deleteFile();
+        if (! target.copyFileTo (bak)) bak = juce::File();
+    }
+    juce::String err;
+    if (! sealed::writeDocument (target, kind, text, &err)) { r.message = err; return r; }
+    juce::String back, why;
+    if (! sealed::readDocument (target, kind, back, &why) || ! validate (back, why))
+    {
+        if (existed) target.replaceWithData (previous.getData(), previous.getSize());
+        else target.deleteFile();
+        r.message = "the written file did not read back valid, so nothing was changed"
+                  + (why.isEmpty() ? juce::String() : " (" + why + ")");
+        return r;
+    }
+    r.ok = true;
+    r.file = target;
+    r.backup = bak;
+    if (bak != juce::File()) r.note = "Previous version kept as " + bak.getFileName();
     return r;
 }
 
@@ -1324,26 +1373,26 @@ inline CollectResult collect (const juce::File& libraryDir, const juce::File& pr
     // ------------------------------------------------------ performance presets
     auto perf = presetRoot.getChildFile ("Performance");
     int perfFactory = 0, perfUser = 0;
-    for (auto& f : perf.getChildFile ("Factory").findChildFiles (juce::File::findFiles, false, "*.json"))
+    for (auto& f : sealed::listDocuments (perf.getChildFile ("Factory")))
     {
         CollectedEntry e;
         e.kind = "performanceFactory";
         e.path = "performance/Factory/" + f.getFileName();
         e.origin = f.getFullPathName();
-        e.name = juce::JSON::parse (f.loadFileAsString())
+        e.name = sealed::readDocumentVar (f, sealed::performance)
                      .getProperty ("name", f.getFileNameWithoutExtension()).toString();
         e.bytes = f.getSize(); e.hash = contentHash (f);
         e.modifiedAt = f.getLastModificationTime().toISO8601 (true);
         e.authored = true;        // in authoring mode this folder IS the artist's output
         if (copyInto (f, destRoot.getChildFile (e.path))) { add (std::move (e)); ++perfFactory; }
     }
-    for (auto& f : perf.findChildFiles (juce::File::findFiles, false, "*.json"))
+    for (auto& f : sealed::listDocuments (perf))
     {
         CollectedEntry e;
         e.kind = "performanceUser";
         e.path = "performance/User/" + f.getFileName();
         e.origin = f.getFullPathName();
-        e.name = juce::JSON::parse (f.loadFileAsString())
+        e.name = sealed::readDocumentVar (f, sealed::performance)
                      .getProperty ("name", f.getFileNameWithoutExtension()).toString();
         e.bytes = f.getSize(); e.hash = contentHash (f);
         e.modifiedAt = f.getLastModificationTime().toISO8601 (true);
@@ -1358,14 +1407,14 @@ inline CollectResult collect (const juce::File& libraryDir, const juce::File& pr
         for (auto& wd : presetRoot.findChildFiles (juce::File::findDirectories, false))
         {
             if (wd.getFileName() == "Performance") continue;
-            for (auto& f : wd.findChildFiles (juce::File::findFiles, false, "*.json"))
+            for (auto& f : sealed::listDocuments (wd))
             {
                 CollectedEntry e;
                 e.kind = "worldPreset";
                 e.world = wd.getFileName();
                 e.path = "presets/" + e.world + "/" + f.getFileName();
                 e.origin = f.getFullPathName();
-                e.name = juce::JSON::parse (f.loadFileAsString())
+                e.name = sealed::readDocumentVar (f, sealed::preset)
                              .getProperty ("name", f.getFileNameWithoutExtension()).toString();
                 e.bytes = f.getSize(); e.hash = contentHash (f);
                 e.modifiedAt = f.getLastModificationTime().toISO8601 (true);
@@ -1580,7 +1629,8 @@ inline ImportResult importCollection (const juce::File& collectionRoot, const ju
             target.copyFileTo (bak);
         }
         target.getParentDirectory().createDirectory();
-        if (! target.replaceWithText (src.loadFileAsString())) { fail ("could not write " + target.getFullPathName()); continue; }
+        // bytes, not text: a sealed .jmi document comes back exactly as collected
+        if (! src.copyFileTo (target)) { fail ("could not write " + target.getFullPathName()); continue; }
         r.lines.add ("OK    " + rel + " -> " + target.getFullPathName());
         ++r.applied;
     }

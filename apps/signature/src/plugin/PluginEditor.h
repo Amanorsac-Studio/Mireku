@@ -6,6 +6,7 @@
 #pragma once
 #include "PluginProcessor.h"
 #include "../ui/Perform.h"
+#include "../ui/EditPage.h"
 #include "../ui/TesterGatePanel.h"
 
 namespace jm {
@@ -53,19 +54,28 @@ private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void setPage (int page);
     void rebuildCenter();
+    /// Places every band for a root of `rootW` design units wide (designW on
+    /// a 3:2 window, more on a wider one, never more than maxDesignW).
+    void layoutRoot (int rootW);
+    int rootW_ = Theme::M::designW;
 
     // fixed-coordinate root: children live at absolute 1536x1024 positions.
     // It is also the OverlayHost for the styled modal panels (R3 items B/C/F).
-    struct RootComponent : juce::Component, OverlayHost
+    struct RootComponent : juce::Component, OverlayHost, EditPageHost
     {
         void paint (juce::Graphics& g) override
         {
             g.setColour (Theme::bg);
-            g.fillRoundedRectangle (0.0f, 0.0f, (float) Theme::M::designW, (float) Theme::M::designH, 12.0f);
+            g.fillRoundedRectangle (0.0f, 0.0f, (float) getWidth(), (float) getHeight(), 12.0f);
         }
         void showOverlay (std::unique_ptr<juce::Component> content, int w, int h) override;
         void closeOverlay() override;
         void resized() override;
+        // the edit page lives on the editor; the root only routes the asks
+        void openEditPage (int tab, int macroIdx) override { if (onOpenEditPage) onOpenEditPage (tab, macroIdx); }
+        void closeEditPage() override                       { if (onCloseEditPage) onCloseEditPage(); }
+        std::function<void (int, int)> onOpenEditPage;
+        std::function<void()> onCloseEditPage;
 
         struct Scrim : juce::Component
         {
@@ -91,6 +101,19 @@ private:
     std::unique_ptr<BottomBar> bar_;
     std::unique_ptr<ModelPagePanel> modelPage_;
     std::unique_ptr<PerformCenterPanel> performPage_;
+    /// SETLIST: a page over the whole instrument (client, 2026-11-03), opened
+    /// from PERFORM; it outlives the centre rebuild a performance load causes.
+    std::unique_ptr<SetlistPanel> setlist_;
+    /// THE EDIT PAGE: Macros / Mod Matrix / LFO / Arp / Super Knob in the rack
+    /// band (client, 2026-11-03). Null while the rack is showing.
+    std::unique_ptr<EditPage> editPage_;
+public:
+    void showSetlist (bool on);
+    void showEditPage (int tab, int macroIdx = -1);
+    void closeEditPage();
+    EditPage* editPage() const { return editPage_.get(); }     // test hook
+    KeyboardStrip* keyboardStrip() const { return keyboard_.get(); }
+private:
     std::unique_ptr<KeyboardStrip> keyboard_;   // R4(2): keys + pitch/mod wheels
     /// TEST BUILDS ONLY — the key screen. Null in a release build.
     std::unique_ptr<TesterGatePanel> gate_;

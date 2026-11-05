@@ -1,8 +1,111 @@
-MIREKU 1.0.3 - test build
+MIREKU 1.1.0 - test build
 Amanorsac Studio
 
 
-0. WHAT CHANGED IN 1.0.3
+0. WHAT CHANGED IN 1.1.0
+
+   Installs over any earlier build. Presets, performances, the setlist and
+   the test key are kept; the key keeps the days it has left.
+
+     - THE LIBRARY IS SEALED. Each instrument is now ONE file, Name.jmi,
+       encrypted so that only MIREKU can play it. Set LIBRARY FOLDER to the
+       "MIREKU Library" folder you were sent and select RESCAN. The folders
+       of an earlier library still load on a machine that has them.
+     - EVERYTHING YOU SAVE IS A .jmi FILE. Presets, performances and the
+       setlist (with its scenes) are written as encrypted .jmi documents in
+       MIREKU's own folder; nothing is a .json file any more. Files written
+       by an earlier build are still read, and are left where they are.
+     - THIS IS THE PLAYER. Saving goes to your own presets and performances;
+       the library itself is never written. IMPORT LIBRARY, Measure levels,
+       Move to category and Rename sound are studio tools and are not here.
+     - THE TEST KEY now runs for 14 days from the day it was issued.
+
+   WHAT CHANGED IN 1.0.5
+
+     - OCTAVE and KEY RANGE PER ENGINE, on the BACK of each PERFORM card.
+       Click the card's letter (A, B, C, D) and the card turns over: OCT
+       (-2..+2), LOW and HIGH (the keys that engine answers), LEARN LOW and
+       LEARN HIGH (the next key you play), ALL KEYS. Click the letter again
+       to turn it back. Two engines whose ranges meet are a split; two that
+       overlap are a layer. The slot menu (three dots) has the same on the
+       model pages. The global TRANSPOSE and OCTAVE still move everything
+       together, on top. Saved with the performance.
+     - SEAMLESS SWITCHING. Changing performance no longer cuts the sound.
+       Notes you are holding, or still holding with the pedal, keep
+       sounding from the previous instrument until you let go, as on a
+       Yamaha Montage (SSS); the effects hand over without a click. New
+       notes go to the new sound.
+     - SETLIST. The SETLIST plate between MACRO 2 and MACRO 3 opens a page
+       over the whole instrument, on a kente backdrop. ADD SONG names a
+       song and picks the performance it plays; EDIT and REMOVE change it;
+       drag a song up or down the list to reorder the show. PREV and NEXT
+       step through it, a double-click loads a song, and a MIDI program
+       change n loads song n. The SUPER KNOB moves every macro linked to
+       it: right-click a macro on PERFORM to link it, and press SETTINGS
+       under the super knob (or double-click it) for its settings, which
+       open in the knob's own place: each macro gets LINK and its travel
+       (MIN to MAX, or inverted). The super knob can be MIDI-learned and
+       automated like a macro.
+     - SCENES. Along the foot of the setlist page. Set the song the way you
+       want it (worlds on or off, knobs, effects, macros, the super knob)
+       and press SAVE SCENE: everything about that moment is kept as a
+       scene of the song. Tap a scene to bring it all back; held notes
+       keep sounding. Right-click a scene to update it with what you hear
+       now, rename it or remove it. Scenes are saved with the setlist.
+     - THE EDIT PAGE. MOD MATRIX, LFO and ARP (bottom bar), a macro's
+       targets (double-click the macro) and the super knob settings no
+       longer pop out. They open in the band where the effects rack is,
+       the way the keyboard does, with tabs across the top (MACROS, MOD
+       MATRIX, LFO, ARP, SUPER KNOB) so you move between them without
+       leaving the page. On MACROS a second strip picks the macro. CLOSE,
+       or the lit bottom-bar plate, brings the rack back.
+     - THE KEYS PAGE WHEELS follow your controller: pitch bend and the mod
+       wheel from a MIDI keyboard move the on-screen PITCH and MOD wheels.
+     - INTELLIGENT BROWSER. Every sound carries INSTRUMENT, MOOD and USE tags
+       (Piano, Pad, Organ... Warm, Dark, Big... Worship, Jazz, Cinematic...)
+       read from its name and its world. The search box reads the tags, so
+       "warm pad" finds a sound named neither. The filter button (beside
+       the search box) ticks tags; every ticked tag must be carried. Beside the
+       search box, CLEAR drops the typed search and every ticked tag at
+       once. A performance takes the INSTRUMENT and MOOD tags of the sounds
+       in its slots. Right-click a row, TAGS, to see or correct a sound's
+       tags; corrections are kept in settings.json, never written into the
+       library.
+     - PERFORMANCES DELIVERED IN THE LIBRARY are listed. The PERFORM page's
+       FACTORY tab now reads the library folder's Performance\Factory and
+       Performance folders as well as MIREKU's own. A performance saved in
+       MIREKU under the same name takes the row; the library file is never
+       written.
+
+   WHAT CHANGED IN 1.0.4
+
+   Installs over any earlier build. The library, presets, performances and
+   the test key are kept; the key keeps the days it has left.
+
+     - JM ROTARY, a new unit in ADD UNIT, for organs. SPEED is the half-moon
+       switch: SLOW (chorale), FAST (tremolo) and BRAKE. DRIVE is the valve
+       amplifier in front of the cabinet. HORN and DRUM set how hard each
+       rotor moves the sound; MIC WIDTH sets how far apart the two
+       microphones sit (0 is one microphone, mono); MIX is dry to wet. The
+       light horn changes speed in about a second, the heavy drum takes four
+       to spin up and six to slow down, as on the real cabinet.
+     - The OUTPUT plate now shows two meters, L and R, one per channel.
+     - AUDIO / MIDI is a window of MIREKU's own, opened from the
+       gear's panel: driver, output device, sample rate, buffer size and the MIDI
+       inputs. The grey system dialog is gone.
+     - MULTI OUT. Each world (JM Set, MKS, FM, Strings) can be sent to its
+       own output, OUT 1 to OUT 4, in the same window. In the standalone each
+       OUT is mapped to a pair of channels on the interface; in a DAW the
+       plug-in offers four stereo outputs and the host routes them. A world
+       sent to an output the host has not enabled plays through OUT 1.
+     - The browser shows the names James gave his sounds again ("Mireku
+       Velvet Pads vip", not the folder name).
+     - A sound with TINE or BODY off centre started slightly differently
+       depending on the buffer size, and re-opening the audio device let the
+       previous note's tail ring into the next. Both fixed; every sound now
+       renders identically at every buffer size and sample rate.
+
+   WHAT CHANGED IN 1.0.3
 
    Installs over any earlier build. The library, presets, performances and
    the test key are kept; the key keeps the days it has left.
@@ -76,7 +179,7 @@ Amanorsac Studio
    This build requires the key sent with it. MIREKU asks for the key when it
    first opens. Paste it whole, including the dot, and select UNLOCK.
 
-   The key is stored, so it is asked for once per computer. It expires 30 days
+   The key is stored, so it is asked for once per computer. It expires 14 days
    after it was issued. After that date MIREKU opens but produces no sound until
    a new key is entered. Request a new key when the one in use runs out.
 
@@ -85,11 +188,14 @@ Amanorsac Studio
 
 3. THE SAMPLE LIBRARY
 
-   The library is delivered separately; it is not part of this installer.
+   The library is delivered separately, as a folder named "MIREKU Library";
+   it is not part of this installer. Each instrument in it is one sealed
+   .jmi file that only MIREKU can open.
 
-   Put the .jmi folders anywhere, then open the SETTINGS tab and set LIBRARY
-   FOLDER to the folder holding them. Select RESCAN. The four category tabs
-   fill with whatever was found.
+   Put the folder anywhere, then open the SETTINGS tab and set LIBRARY
+   FOLDER to it. Select RESCAN. The four category tabs fill with whatever
+   was found. Performances delivered in the folder's Performance\Factory
+   are listed on the PERFORM page's FACTORY tab.
 
    Installing and uninstalling never touch the library, the presets or the
    performances.
@@ -97,17 +203,25 @@ Amanorsac Studio
 
 4. AUDIO AND MIDI
 
-   In the standalone, open the audio settings and choose the interface driver.
-   Select ASIO where the interface provides one; it gives the lowest latency.
-   A buffer of 128 or 256 samples is a reasonable starting point.
+   In the standalone, select the gear, then AUDIO / MIDI..., and choose
+   the interface driver. Select ASIO where the interface provides one; it
+   gives the lowest latency. A buffer of 128 or 256 samples is a reasonable
+   starting point.
 
-   Connect a MIDI keyboard before opening MIREKU, or enable it in the same
-   settings panel afterwards.
+   MIDI inputs are listed in the same window. Connect a keyboard before
+   opening MIREKU, or select RESCAN MIDI afterwards.
+
+   MULTI OUT. Each world (JM Set, MKS, FM, Strings) can be sent to OUT 1,
+   OUT 2, OUT 3 or OUT 4. In the standalone each OUT is mapped to a pair of
+   channels on the interface in the same window. In a DAW the plug-in offers
+   four stereo outputs; enable them in the host and route each as a track.
+   A world sent to an output the host has not enabled plays through OUT 1.
 
 
 5. BUILDING PRESETS
 
-   Patches are saved into the library bundle they belong to.
+   Presets and performances are saved as .jmi files in MIREKU's own folder
+   (Documents\MIREKU\Presets), never into the library.
 
      SAVE AS              saves what is on screen as a new preset. It never
                           replaces an existing one.
@@ -118,19 +232,17 @@ Amanorsac Studio
                           and the arpeggiator. A patch cannot hold modulation;
                           a performance can.
 
-   To rename a sound, right-click it in the list and select "Rename sound".
-   To move a sound to another category, right-click it and select
-   "Move to category".
+   To rename one of your own presets or performances, right-click it in the
+   list and select "Rename".
 
 
 6. SENDING WORK BACK
 
-   Open the SETTINGS tab and select SHARE PRESETS. A folder is written
-   containing every preset, performance, and the category and name each sound
-   is filed under, with a manifest listing what is in it.
+   Everything you save lives in Documents\MIREKU\Presets: your presets by
+   world, your performances in Performance, and the setlist with its scenes
+   in Setlists. Zip that folder and send it back with your notes.
 
-   Send that folder back. Nothing is uploaded: MIREKU makes no network request
-   of any kind.
+   Nothing is uploaded: MIREKU makes no network request of any kind.
 
 
 7. REPORTING A PROBLEM

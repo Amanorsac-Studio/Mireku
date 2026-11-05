@@ -216,6 +216,21 @@ export const FX_REGISTRY: Record<FxType, FxSpec> = {
       { id: 'mono', label: 'Mono', kind: 'bool', default: false },
     ],
   },
+  // Rotary speaker (client, 2026-11-02): a horn and a bass drum behind an 800 Hz
+  // crossover, slow / fast / brake, a valve DRIVE in front and two microphones
+  // MIC WIDTH apart. Mirrors FxParams.h; the plugin is the reference implementation.
+  rotary: {
+    type: 'rotary',
+    name: 'JM Rotary',
+    params: [
+      { id: 'speed', label: 'Speed', kind: 'enum', choices: ['slow', 'fast', 'brake'], default: 'slow' },
+      { id: 'drive', label: 'Drive', kind: 'float', min: 0, max: 100, default: 20 },
+      { id: 'horn', label: 'Horn', kind: 'float', min: 0, max: 100, default: 60 },
+      { id: 'drum', label: 'Drum', kind: 'float', min: 0, max: 100, default: 50 },
+      { id: 'mic', label: 'Mic Width', kind: 'float', min: 0, max: 100, default: 70 },
+      { id: 'mix', label: 'Mix', kind: 'float', min: 0, max: 100, default: 100 },
+    ],
+  },
   // Amanorsac sound designer: resonant state-variable filter with a drive stage in front.
   svFilter: {
     type: 'svFilter',

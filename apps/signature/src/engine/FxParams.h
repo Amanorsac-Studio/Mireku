@@ -21,6 +21,9 @@ enum class FxType : int {
     // Added 2026-10-30: the MODULATION pedal (chorus / flanger / phaser /
     // wow+flutter behind one intensity knob). Takes 14.
     modPedal,
+    // Added 2026-11-02: the ROTARY speaker for organs (horn and drum, slow /
+    // fast / brake). Takes 15.
+    rotary,
     Count
 };
 constexpr int kNumFxTypes = (int) FxType::Count;
@@ -226,6 +229,21 @@ inline const std::array<FxSpec, kNumFxTypes>& fxRegistry()
             { "intensity", "Intensity", ParamKind::Float, 0, 100, 50 },
             { "mix", "Mix", ParamKind::Float, 0, 100, 50 },
             { "mono", "Mono", ParamKind::Bool, 0, 1, 0 } } },
+        // ROTARY SPEAKER (client, 2026-11-02, "a rotary for organs"). A horn
+        // and a bass drum behind an 800 Hz crossover, each spinning past two
+        // microphones. SPEED is the Leslie half-moon switch: slow (chorale),
+        // fast (tremolo) and brake; the horn is light and changes speed in
+        // about a second, the drum is heavy and takes several. DRIVE is the
+        // valve amplifier in front of the cabinet, HORN and DRUM are how hard
+        // each rotor moves the sound, MIC WIDTH is how far apart the two
+        // microphones sit (0 is one microphone, mono).
+        { FxType::rotary, "rotary", "JM Rotary", {
+            { "speed", "Speed", ParamKind::Enum, 0, 2, 0, { "slow", "fast", "brake" } },
+            { "drive", "Drive", ParamKind::Float, 0, 100, 20 },
+            { "horn", "Horn", ParamKind::Float, 0, 100, 60 },
+            { "drum", "Drum", ParamKind::Float, 0, 100, 50 },
+            { "mic", "Mic Width", ParamKind::Float, 0, 100, 70 },
+            { "mix", "Mix", ParamKind::Float, 0, 100, 100 } } },
     } };
     return reg;
 }

@@ -303,3 +303,17 @@ footer nav { display: flex; gap: 18px; flex-wrap: wrap; }
   .photos figure:nth-child(1) { grid-column: 1 / -1; grid-row: span 2; }
 }
 @media (max-width: 520px) { .photos { grid-template-columns: 1fr; grid-auto-rows: 320px; } .photos figure:nth-child(1) { grid-row: span 1; } .photos figure:nth-child(1) img { object-position: 50% 40%; } }
+
+/* ---------- releases ---------- */
+.releases { list-style: none; padding: 0; margin: 28px 0 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 18px; }
+.release { display: block; width: 100%; padding: 0; border: 0; background: none; color: inherit; text-align: left; cursor: pointer; font: inherit; }
+.release img { width: 100%; height: auto; aspect-ratio: 1; border-radius: 10px; border: 1px solid var(--line);
+               box-shadow: 0 16px 40px -20px rgba(0,0,0,.9); transition: transform .25s ease, box-shadow .25s ease, border-color .25s; }
+.release:hover img { transform: translateY(-3px); border-color: var(--gold-lo); box-shadow: 0 20px 44px -18px rgba(217,164,65,.4); }
+.release[aria-pressed="true"] img { border-color: var(--gold); box-shadow: 0 0 0 2px var(--gold), 0 20px 44px -18px rgba(217,164,65,.55); }
+.release .rt { display: block; margin-top: 10px; font: 700 15px/1.2 "Barlow SC", sans-serif; letter-spacing: .04em; color: var(--text); }
+.release .rm { display: block; margin-top: 4px; font: 600 12px/1 "Barlow SC", sans-serif; letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+.release[aria-pressed="true"] .rt { color: var(--gold-hi); }
+.now { margin: 30px 0 0; font: 600 14px/1 "Barlow SC", sans-serif; letter-spacing: .16em; text-transform: uppercase; color: var(--gold); }
+.now + .player { margin-top: 12px; }
+@media (max-width: 520px) { .releases { grid-template-columns: repeat(2, 1fr); gap: 14px; } }

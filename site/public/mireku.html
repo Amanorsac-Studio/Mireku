@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>MIREKU</title>
+<!--
+  Paystack returns a buyer to <this site>/mireku?purchased=1, because the
+  shared create-app-paystack function sends every buyer back to "/<app id>".
+  This page only passes them on to their account, where the key appears.
+-->
+<script>
+  (function () {
+    var q = location.search && /purchased=1/.test(location.search) ? '?purchased=1' : '';
+    location.replace('/account' + q);
+  })();
+</script>
+<noscript><meta http-equiv="refresh" content="0; url=/account"></noscript>
+</head>
+<body style="background:#0a0907;color:#efe6d4;font-family:system-ui,sans-serif">
+<p><a href="/account" style="color:#f3c96f">Continue to your account</a></p>
+</body>
+</html>

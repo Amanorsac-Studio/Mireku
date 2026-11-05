@@ -1,0 +1,24 @@
+/* The MIREKU site on Cloudflare Workers.
+
+   Workers Builds is connected to this repository's main branch with the
+   root directory "site", so this file is read from here.
+
+   "name" MUST match the Worker's name in the Cloudflare dashboard, or the
+   build stops. It is set to "mireku"; change it if your Worker is called
+   something else.
+
+   Static files only: there is no Worker script. A request for /account
+   is answered with public/account.html, and anything that matches no
+   file gets public/404.html with a 404 status. */
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mireku",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./public",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "404-page"
+  },
+  "preview_urls": true,
+  "observability": { "enabled": true }
+}

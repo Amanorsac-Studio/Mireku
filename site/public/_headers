@@ -15,3 +15,21 @@
 
 /images/*
   Cache-Control: public, max-age=604800
+
+# Pages: always ask for a fresh copy, so an update shows on the next visit
+# instead of after the browser's cache expires. Cheap: an unchanged page
+# answers 304 Not Modified.
+/
+  Cache-Control: no-cache
+/*.html
+  Cache-Control: no-cache
+/about
+  Cache-Control: no-cache
+/account
+  Cache-Control: no-cache
+/mireku
+  Cache-Control: no-cache
+
+# Scripts and styles change with the pages, so they are checked too.
+/assets/*
+  Cache-Control: no-cache

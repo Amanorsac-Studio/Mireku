@@ -31,7 +31,7 @@
       <a class="hide-sm" href="#stage">On stage</a>
       <a class="hide-sm" href="/about">About James</a>
       <a href="/account">Account</a>
-      <a class="btn small" href="#buy">Get MIREKU</a>
+      <a class="btn small" href="#buy" data-nav-buy>Notify me</a>
     </nav>
   </div>
 </header>
@@ -45,7 +45,7 @@
     <p class="by">JM Set · MKS · FM · Strings</p>
     <p class="lead">James Mireku's keyboard sounds in one instrument, built for the stage. Seventy-eight of his electric pianos, synths, FM keys, strings, pads and choirs, four at a time, with his own performances ready to play.</p>
     <div class="cta">
-      <a class="btn" href="#buy" data-buy-label>Get MIREKU</a>
+      <a class="btn" href="#buy" data-buy-label>Notify me</a>
       <a class="btn ghost" href="#worlds">Explore the sounds</a>
     </div>
     <p class="price-note" data-price-note></p>
@@ -207,7 +207,30 @@
         <li>Your licence key and downloads on your account page</li>
         <li>Pay with mobile money, bank transfer or a card</li>
       </ul>
-      <button class="btn" type="button" data-buy disabled>Coming soon</button>
+      <!-- Until MIREKU is on sale: a "tell me when it's out" sign-up. -->
+      <form class="interest" id="interest" novalidate>
+        <h3>Be the first to know</h3>
+        <p class="muted">Leave your number and we will message you when MIREKU is out.</p>
+        <div class="field">
+          <label for="i-name">Your name</label>
+          <input id="i-name" name="name" autocomplete="name" maxlength="120" required>
+        </div>
+        <div class="field">
+          <label for="i-phone">Phone or WhatsApp number</label>
+          <input id="i-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+233 24 123 4567" maxlength="24" required>
+        </div>
+        <div class="field">
+          <label for="i-email">Email <span class="opt">(optional)</span></label>
+          <input id="i-email" name="email" type="email" autocomplete="email" maxlength="200">
+        </div>
+        <div class="hp" aria-hidden="true"><label for="i-web">Leave this empty</label><input id="i-web" name="website" tabindex="-1" autocomplete="off"></div>
+        <label class="consent"><input type="checkbox" id="i-ok" required>
+          <span>Message me about MIREKU by WhatsApp, text or email. I can ask to be removed at any time.</span></label>
+        <button class="btn" type="submit">Notify me</button>
+        <p class="msg" id="i-msg" role="status"></p>
+        <p class="fine">We use your details only to tell you about MIREKU. <a href="https://amanorsac.studio/privacy">Privacy</a></p>
+      </form>
+      <button class="btn" type="button" data-buy disabled hidden>Coming soon</button>
       <p class="msg" data-buy-msg role="status"></p>
       <p class="switch">Already bought it? <a href="/account">Open your account</a></p>
     </div>

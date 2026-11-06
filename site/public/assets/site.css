@@ -317,3 +317,15 @@ footer nav { display: flex; gap: 18px; flex-wrap: wrap; }
 .now { margin: 30px 0 0; font: 600 14px/1 "Barlow SC", sans-serif; letter-spacing: .16em; text-transform: uppercase; color: var(--gold); }
 .now + .player { margin-top: 12px; }
 @media (max-width: 520px) { .releases { grid-template-columns: repeat(2, 1fr); gap: 14px; } }
+
+/* ---------- the sign-up while MIREKU is not yet on sale ---------- */
+.interest { text-align: left; border-top: 1px solid var(--line); padding-top: 24px; margin-top: 6px; }
+.interest h3 { font-size: 22px; color: var(--gold-hi); margin-bottom: 6px; }
+.interest > .muted { margin-bottom: 18px; }
+.interest .opt { letter-spacing: .04em; text-transform: none; font-family: Inter, sans-serif; font-weight: 400; }
+.interest .hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+.consent { display: flex; gap: 12px; align-items: flex-start; margin: 6px 0 20px; font-size: 14px; color: var(--muted); cursor: pointer; }
+.consent input { width: 20px; height: 20px; margin-top: 1px; accent-color: var(--gold); flex: none; }
+.interest .btn { width: 100%; }
+.interest .fine { font-size: 13px; color: var(--muted); margin: 14px 0 0; }
+.buybox .interest .field input { background: #0b0a08; }

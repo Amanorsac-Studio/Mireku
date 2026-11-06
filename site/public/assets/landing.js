@@ -43,6 +43,11 @@
     sub.textContent = (o.price.usd ? 'About ' + o.price.usd + '. ' : '') + 'One payment. ' + (o.price.note || '');
     note.textContent = o.price.display + ' · ' + (o.price.note || 'Mobile money, bank transfer or a local card.');
     heroLabel.textContent = 'Buy MIREKU · ' + o.price.display;
+    var navBuy = document.querySelector('[data-nav-buy]');
+    if (navBuy) navBuy.textContent = 'Get MIREKU';
+    var form = document.getElementById('interest');
+    if (form) form.hidden = true;               // on sale: the sign-up gives way to the button
+    btn.hidden = false;
     btn.disabled = false;
     btn.textContent = 'Buy MIREKU';
   });
@@ -57,4 +62,45 @@
       msg.textContent = e.message;
     });
   });
+
+  /* ---- "tell me when it's out" ----
+     Adds one row to Supabase's mireku_interest table with the public key.
+     The table accepts new rows and nothing else (studio/supabase-mireku-
+     interest.sql), so this page can write to the list but never read it. */
+  var form = document.getElementById('interest');
+  if (form) {
+    var C = window.MIREKU;
+    var imsg = document.getElementById('i-msg');
+    var say = function (t, k) { imsg.className = 'msg' + (k ? ' ' + k : ''); imsg.textContent = t; };
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var name = document.getElementById('i-name').value.trim();
+      var phone = document.getElementById('i-phone').value.trim().replace(/\s+/g, ' ');
+      var email = document.getElementById('i-email').value.trim();
+      var digits = phone.replace(/[^0-9]/g, '');
+      if (!name) return say('Enter your name.', 'err');
+      if (!/^\+?[0-9][0-9 ()-]{5,22}$/.test(phone) || digits.length < 7 || digits.length > 15)
+        return say('Enter a phone number with its country code, such as +233 24 123 4567.', 'err');
+      if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return say('That email address does not look right.', 'err');
+      if (!document.getElementById('i-ok').checked) return say('Tick the box so we may message you.', 'err');
+      var submit = form.querySelector('button[type=submit]');
+      if (document.getElementById('i-web').value) { form.reset(); return say('Thank you. You are on the list.', 'ok'); }   // a bot filled the hidden field
+      submit.disabled = true;
+      say('Saving…');
+      fetch(C.SUPABASE_URL + '/rest/v1/mireku_interest', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', apikey: C.SUPABASE_KEY,
+                   Authorization: 'Bearer ' + C.SUPABASE_KEY, Prefer: 'return=minimal' },
+        body: JSON.stringify({ name: name, phone: phone, email: email || null, consent: true, source: 'jamesmireku.com' })
+      }).then(function (r) {
+        submit.disabled = false;
+        if (r.ok) { form.reset(); return say('Thank you, ' + name.split(' ')[0] + '. We will message you when MIREKU is out.', 'ok'); }
+        if (r.status === 409) return say('That number is already on the list. We will be in touch.', 'ok');
+        say('Your details could not be saved just now. Try again in a few minutes.', 'err');
+      }).catch(function () {
+        submit.disabled = false;
+        say('Your details could not be saved. Check your connection and try again.', 'err');
+      });
+    });
+  }
 })();

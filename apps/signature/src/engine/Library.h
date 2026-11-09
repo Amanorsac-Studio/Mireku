@@ -889,9 +889,9 @@ public:
         if (auto* slots = v.getProperty ("slots", juce::var()).getArray())
             for (auto& s : *slots)
             {
-                juce::File dir (s.getProperty ("bundleDir", "").toString());
-                const BundleInfo* b = find (dir);
-                if (b == nullptr) b = findByFolderName (dir.getFileName());
+                const auto stored = s.getProperty ("bundleDir", "").toString();
+                const BundleInfo* b = find (juce::File (stored));
+                if (b == nullptr) b = findByStoredPath (stored);
                 if (b == nullptr) continue;
                 for (auto& t : b->tags)
                 {
@@ -965,6 +965,20 @@ public:
         for (auto& b : bundles_)
             if (b.dir.getFileName().equalsIgnoreCase (folderName)) return &b;
         return nullptr;
+    }
+    /// The last element of a path as it was STORED, whichever system wrote it.
+    /// James's performances carry Windows paths. On a Mac juce::File treats a
+    /// backslash as an ordinary character, so File::getFileName() returned the
+    /// whole path, no instrument matched, and every slot of every performance
+    /// fell back to the first instrument of its world (2026-11-09).
+    static juce::String leafOfStoredPath (const juce::String& stored)
+    {
+        return stored.substring (juce::jmax (stored.lastIndexOfChar ('/'), stored.lastIndexOfChar ('\\')) + 1);
+    }
+    /// An instrument by the path a saved slot holds, from any machine.
+    const BundleInfo* findByStoredPath (const juce::String& stored) const
+    {
+        return findByFolderName (leafOfStoredPath (stored));
     }
 
     // ----------------------------------------------------------------- load

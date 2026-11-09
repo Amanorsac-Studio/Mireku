@@ -2405,14 +2405,16 @@ int JMSignatureProcessor::restoreSlotBundles()
 
         const BundleInfo* bi = state.library.find (want);
         if (bi == nullptr)
-            bi = state.library.findByFolderName (want.getFileName());   // same bundle, another root
+            bi = state.library.findByStoredPath (s.bundleDir);   // same bundle, another root or system
         if (bi == nullptr)
         {
             // The saved path has gone (a renamed folder, another machine, a
             // library that moved). Stand another instrument of the same world
             // in for it rather than leaving the slot silent, and say so.
             bi = state.library.firstForWorld (s.world);
-            if (bi != nullptr) substituted.add (want.getFileNameWithoutExtension() + " -> " + bi->name);
+            if (bi != nullptr)
+                substituted.add (Library::leafOfStoredPath (s.bundleDir).upToLastOccurrenceOf (".", false, false)
+                                 + " -> " + bi->name);
         }
         if (bi == nullptr) continue;
 
@@ -2434,6 +2436,9 @@ int JMSignatureProcessor::restoreSlotBundles()
     if (! substituted.isEmpty())
         juce::Logger::writeToLog ("MIREKU: instruments no longer in the library were substituted: "
                                   + substituted.joinIntoString (", "));
+    // said in the status bar too: a swapped instrument must never be silent
+    state.libraryNotice = substituted.isEmpty() ? juce::String()
+                                                : "Not in your library: " + substituted.joinIntoString (", ");
     if (restored > 0)
     {
         syncAllToDsp();
@@ -2751,7 +2756,7 @@ void JMSignatureProcessor::syncSlotToDsp (int i)
             // nothing for that world the slot is left genuinely empty — an
             // empty slot the player can see beats a ghost he cannot find.
             if (state.library.find (dir) == nullptr)
-                if (auto* same = state.library.findByFolderName (dir.getFileName()))
+                if (auto* same = state.library.findByStoredPath (s.bundleDir))
                 {
                     // the instrument itself, filed under another library root
                     dir = same->dir;
@@ -2760,7 +2765,7 @@ void JMSignatureProcessor::syncSlotToDsp (int i)
                 }
             if (state.library.find (dir) == nullptr)
             {
-                const auto missing = s.bundleName.isNotEmpty() ? s.bundleName : dir.getFileName();
+                const auto missing = s.bundleName.isNotEmpty() ? s.bundleName : Library::leafOfStoredPath (s.bundleDir);
                 if (auto* sub = state.library.firstForWorld (s.world))
                 {
                     dir = sub->dir;
@@ -2781,7 +2786,7 @@ void JMSignatureProcessor::syncSlotToDsp (int i)
                 juce::Logger::writeToLog ("MIREKU: " + state.libraryNotice);
             }
             juce::String err;
-            if (auto b = dir.isDirectory() ? state.library.loadBundle (dir, err) : nullptr)
+            if (auto b = dir.exists() ? state.library.loadBundle (dir, err) : nullptr)   // a folder, or a sealed file
             {
                 eng.setBundle (b);
                 // keep engine params from state (setBundle resets env defaults)

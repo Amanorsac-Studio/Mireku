@@ -98,6 +98,23 @@ static void testSealedInstrument()
     }
     CHECK (lib.findByFolderName ("AOFAS Vector.jmi") != nullptr, "a performance naming it by file name finds it");
 
+    // A performance saved on Windows, opened anywhere. This suite runs on the
+    // macOS release job too, which is the machine this bug lived on.
+    CHECK (Library::leafOfStoredPath ("C:\\Users\\jmire\\Desktop\\MIREKU Libary\\@All\\Mireku Grand c7 .jmi") == "Mireku Grand c7 .jmi",
+           "the instrument name comes out of a Windows path, trailing space kept");
+    CHECK (Library::leafOfStoredPath ("/Users/james/MIREKU Library/JM MKS 20.jmi") == "JM MKS 20.jmi",
+           "and out of a Mac path");
+    CHECK (Library::leafOfStoredPath ("C:\\One\\Two/Three\\Name.jmi") == "Name.jmi" && Library::leafOfStoredPath ("Name.jmi") == "Name.jmi",
+           "and out of a mixed path or a bare name");
+    {
+        const auto* winHit = lib.findByStoredPath ("C:\\Users\\jmire\\Desktop\\MIREKU Libary\\@All\\AOFAS Vector.jmi");
+        const auto* macHit = lib.findByStoredPath ("/Users/james/Somewhere Else/aofas vector.JMI");
+        CHECK (winHit != nullptr && winHit->dir == f, "a slot saved on Windows finds its instrument in this library");
+        CHECK (macHit != nullptr && macHit->dir == f, "so does one saved on a Mac, whatever the case");
+        CHECK (lib.findByStoredPath ("C:\\Users\\jmire\\Gone.jmi") == nullptr && lib.findByStoredPath ("") == nullptr,
+               "an instrument the library does not have is reported missing, not matched");
+    }
+
     juce::String err;
     auto b = lib.loadBundle (f, err);
     CHECK (b != nullptr, "the sealed instrument loads through Library::loadBundle");

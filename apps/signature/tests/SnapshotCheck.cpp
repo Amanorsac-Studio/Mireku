@@ -394,10 +394,61 @@ static int renderMarketing (const juce::File& libDir, const juce::File& outDir,
     return 0;
 }
 
+//==============================================================================
+// EVERY SHIPPED PERFORMANCE FINDS ITS OWN INSTRUMENTS (2026-11-09). NOT a CTest:
+// it needs the real library.
+//
+//   MirekuSnapshot --check-performances <library folder>
+//
+// For every performance in <library>/Performance[/Factory]: resolve each slot by
+// the path it stores, then load the performance and confirm the engine is playing
+// exactly that instrument. Writes nothing; the library path is for this process.
+static int checkPerformances (const juce::File& libDir)
+{
+    JMSignatureProcessor proc;
+    proc.state.library.setLibraryDirTransient (libDir);
+    proc.prepareToPlay (48000.0, 256);
+    int perfs = 0, slotsOk = 0, slotsBad = 0;
+    for (auto& dir : { libDir.getChildFile ("Performance").getChildFile ("Factory"), libDir.getChildFile ("Performance") })
+        for (auto& f : sealed::listDocuments (dir))
+        {
+            ++perfs;
+            const auto v = sealed::readDocumentVar (f, sealed::performance);
+            juce::StringArray want;
+            if (auto* slots = v.getProperty ("slots", juce::var()).getArray())
+                for (auto& s : *slots) want.add (s.getProperty ("bundleDir", "").toString());
+            const bool loaded = proc.loadPerformancePreset (f);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (60);
+            for (int i = 0; i < juce::jmin (4, want.size()); ++i)
+            {
+                if (want[i].isEmpty()) continue;
+                const auto leaf = Library::leafOfStoredPath (want[i]);
+                const auto* found = proc.state.library.findByStoredPath (want[i]);
+                auto b = proc.engines[(size_t) i].bundle();
+                const bool ok = loaded && found != nullptr && b != nullptr
+                                && b->dir == found->dir && b->dir.getFileName().equalsIgnoreCase (leaf);
+                if (ok) ++slotsOk;
+                else
+                {
+                    ++slotsBad;
+                    std::printf ("  WRONG  %s slot %c wants %s, plays %s\n", f.getFileName().toRawUTF8(), 'A' + i,
+                                 leaf.toRawUTF8(), b != nullptr ? b->dir.getFileName().toRawUTF8() : "nothing");
+                }
+            }
+            if (proc.state.libraryNotice.isNotEmpty())
+                std::printf ("  NOTICE %s: %s\n", f.getFileName().toRawUTF8(), proc.state.libraryNotice.toRawUTF8());
+        }
+    proc.releaseResources();
+    std::printf ("%d performances: %d slots play their own instrument, %d do not\n", perfs, slotsOk, slotsBad);
+    return slotsBad == 0 && perfs > 0 ? 0 : 1;
+}
+
 int main (int argc, char** argv)
 {
     std::setvbuf (stdout, nullptr, _IONBF, 0);     // a crash must not swallow the lines before it
     juce::ScopedJuceInitialiser_GUI init;
+    if (argc >= 3 && juce::String (argv[1]) == "--check-performances")
+        return checkPerformances (juce::File (juce::String::fromUTF8 (argv[2])));
     if (argc >= 4 && juce::String (argv[1]) == "--marketing")
     {
         int w = 1920, h = 1080;

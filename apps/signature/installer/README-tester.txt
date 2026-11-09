@@ -1,8 +1,19 @@
-MIREKU 1.1.0 - test build
+MIREKU 1.1.1 - test build
 Amanorsac Studio
 
 
-0. WHAT CHANGED IN 1.1.0
+0. WHAT CHANGED IN 1.1.1
+
+   Installs over 1.1.0. Presets, performances, the setlist and the test key
+   are kept; the key keeps the days it has left.
+
+     - MAC: performances now play the instruments they were saved with. On a
+       Mac, a performance made on Windows played the first sound of each
+       category instead.
+     - If an instrument really is missing from the library, the status bar
+       now says which one and what is playing in its place.
+
+   WHAT CHANGED IN 1.1.0
 
    Installs over any earlier build. Presets, performances, the setlist and
    the test key are kept; the key keeps the days it has left.

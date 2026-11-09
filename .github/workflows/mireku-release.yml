@@ -80,7 +80,7 @@ jobs:
   macos-pkg:
     # A tag build always makes both. A hand-started build can leave macOS out.
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.windows_only }}
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 120
     env:
       MIREKU_TESTER: ${{ inputs.tester && '1' || '0' }}

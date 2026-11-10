@@ -98,9 +98,67 @@ JMSignatureProcessor::JMSignatureProcessor()
         if (! list.empty())
             loadBundleIntoSlot (i, list.front());
     }
+    // the player's controller map, from settings.json
+    if (persistMidiMap() && state.library.midiMapSetting().isObject())
+    {
+        state.midiMap.fromVar (state.library.midiMapSetting());
+        state.midiMap.dirty.store (false);
+    }
     publishModulation();
     stateChanged.addChangeListener (this);
     startTimerHz (30);
+}
+
+juce::String JMSignatureProcessor::builtInControllerPath (int cc)
+{
+    switch (cc)
+    {
+        case 7:  return "host.masterVol";
+        case 16: return "host.macro1";
+        case 17: return "host.macro2";
+        case 18: return "host.macro3";
+        case 19: return "host.macro4";
+        default: return {};
+    }
+}
+
+juce::String JMSignatureProcessor::describeMidi (juce::uint32 packed)
+{
+    if (packed == 0) return "Nothing received yet";
+    const int status = (int) (packed >> 16) & 0xff, d1 = (int) (packed >> 8) & 0x7f, d2 = (int) packed & 0x7f;
+    const auto ch = "  (channel " + juce::String ((status & 0x0f) + 1) + ")";
+    switch (status & 0xf0)
+    {
+        case 0x90: return (d2 > 0 ? "Note on  " : "Note off  ") + juce::MidiMessage::getMidiNoteName (d1, true, true, 3)
+                          + (d2 > 0 ? "  velocity " + juce::String (d2) : juce::String()) + ch;
+        case 0x80: return "Note off  " + juce::MidiMessage::getMidiNoteName (d1, true, true, 3) + ch;
+        case 0xb0: return "CC " + juce::String (d1) + "  value " + juce::String (d2) + ch;
+        case 0xc0: return "Program change " + juce::String (d1) + ch;
+        case 0xd0: return "Aftertouch " + juce::String (d1) + ch;
+        case 0xa0: return "Key aftertouch " + juce::String (d2) + ch;
+        case 0xe0: return "Pitch bend " + juce::String (((d2 << 7) | d1) - 8192) + ch;
+        default:   return "Message " + juce::String::toHexString (status) + ch;
+    }
+}
+
+juce::StringArray JMSignatureProcessor::learnablePaths() const
+{
+    juce::StringArray out;
+    out.add ("host.masterVol");
+    out.add ("host.superKnob");
+    for (int m = 0; m < 4; ++m) out.add ("host.macro" + juce::String (m + 1));
+    for (int s = 0; s < 4; ++s)
+    {
+        out.add ("host.slotVol" + juce::String (s));
+        out.add ("host.slotPan" + juce::String (s));
+        for (auto& c : worldEngineControls (state.slots[(size_t) s].world))
+            out.add ("slot" + juce::String (s) + ".engine." + juce::String (c.id));
+        auto& rack = state.slots[(size_t) s].rack;
+        for (size_t u = 0; u < rack.size(); ++u)
+            for (auto& p : fxSpec (rack[u].type).params)
+                out.add ("slot" + juce::String (s) + ".fx" + juce::String ((int) u) + "." + juce::String (p.id));
+    }
+    return out;
 }
 
 //==============================================================================
@@ -247,6 +305,15 @@ void JMSignatureProcessor::refreshMidiDevices()
 // message is routed to no slot"; only the panic messages ignore it.
 void JMSignatureProcessor::handleRoutedMessage (const juce::MidiMessage& m, juce::uint8 mask, int offset)
 {
+    // THE MONITOR: the last channel message that arrived, for the MIDI page
+    if (m.getRawDataSize() >= 1 && m.getRawData()[0] < 0xf0)
+    {
+        const auto* raw = m.getRawData();
+        const int size = m.getRawDataSize();
+        midiMonitorLast.store (((juce::uint32) raw[0] << 16) | ((juce::uint32) (size > 1 ? raw[1] : 0) << 8)
+                                   | (juce::uint32) (size > 2 ? raw[2] : 0), std::memory_order_relaxed);
+        midiMonitorCount.fetch_add (1, std::memory_order_relaxed);
+    }
     const int shift = (int) transposeParam->load() + 12 * (int) octaveParam->load();
 
     // ------------------------------------------------------ MODULATION PHASE 2
@@ -293,10 +360,14 @@ void JMSignatureProcessor::handleRoutedMessage (const juce::MidiMessage& m, juce
             const int note = juce::jlimit (0, 127, m.getNoteNumber() + shift);
             const juce::uint8 rm = rangeMask (m.getNoteNumber());
             const juce::uint8 dm = (juce::uint8) (directMask & rm), am = (juce::uint8) (arpMask & rm);
+            // SOFT PEDAL (CC 67): the una corda of a grand, as a lighter touch.
+            // Two thirds of the played velocity, so the softer layers answer.
+            const int vel = softPedal_.load (std::memory_order_relaxed)
+                              ? juce::jmax (1, (m.getVelocity() * 2 + 1) / 3) : (int) m.getVelocity();
             for (int i = 0; i < 4; ++i)
                 if ((dm & (1u << i)) != 0 && slotEnable[(size_t) i]->load() >= 0.5f)
-                    engines[(size_t) i].noteOn (slotNote (i, m.getNoteNumber()), m.getVelocity());
-            if (am != 0) arp.noteOn (note, m.getVelocity(), am, offset, arpSink);
+                    engines[(size_t) i].noteOn (slotNote (i, m.getNoteNumber()), vel);
+            if (am != 0) arp.noteOn (note, vel, am, offset, arpSink);
             // MODULATION PHASE 1: velocity / key track / random are per-note
             // sources, and the 0-held-notes -> 1 edge is what drives First-note
             // retrigger and the LFO fade-in for these GLOBAL LFOs. The PLAYED
@@ -322,7 +393,8 @@ void JMSignatureProcessor::handleRoutedMessage (const juce::MidiMessage& m, juce
         {
             // SETLIST: program change n steps to entry n; loading happens on
             // the message thread (pollPendingProgram, from the UI timer).
-            if (mask != 0) pendingProgram_.store (m.getProgramChangeNumber());
+            // with BANK SELECT (CC 0) in front, song = bank x 128 + program
+            if (mask != 0) pendingProgram_.store (bankMsb_.load (std::memory_order_relaxed) * 128 + m.getProgramChangeNumber());
         }
         else if (m.isChannelPressure())
         {
@@ -393,6 +465,19 @@ void JMSignatureProcessor::handleRoutedMessage (const juce::MidiMessage& m, juce
                     }
                 }
                 state.learn.lastIncomingCc.store (cc);
+            }
+            else if (cc == 66 && ! state.midiMap.isLearned (cc))   // sostenuto
+            {
+                for (int i = 0; i < 4; ++i)
+                    if (direct (i)) engines[(size_t) i].sostenutoPedal (val >= 64);
+            }
+            else if (cc == 67 && ! state.midiMap.isLearned (cc))   // soft pedal
+            {
+                if (mask != 0) softPedal_.store (val >= 64, std::memory_order_relaxed);
+            }
+            else if (cc == 0 && ! state.midiMap.isLearned (cc))    // bank select, for program change
+            {
+                if (mask != 0) bankMsb_.store (val, std::memory_order_relaxed);
             }
             else if (mask != 0)                               // learned CCs → message thread
             {
@@ -1056,6 +1141,10 @@ void JMSignatureProcessor::timerCallback()
     if constexpr (tester::kEnabled)
         if (++testerTick_ >= 30 * 30) { testerTick_ = 0; applyTesterVerdict (tester_.refresh()); }
 
+    // the player's controller map is saved the moment it changes
+    if (state.midiMap.dirty.exchange (false) && persistMidiMap())
+        state.library.setMidiMapSetting (state.midiMap.toVar());
+
     // learned CC events
     int s1, n1, s2, n2;
     ccFifo.prepareToRead (ccFifo.getNumReady(), s1, n1, s2, n2);
@@ -1070,6 +1159,7 @@ void JMSignatureProcessor::timerCallback()
             return;
         }
         auto path = state.midiMap.pathForCc (e.cc);
+        if (path.isEmpty()) path = builtInControllerPath (e.cc);     // standard controllers, unless re-learned
         if (path.isNotEmpty())
             setParamNormalized (path, (float) e.value / 127.0f);
     };
@@ -2806,7 +2896,7 @@ bool JMSignatureProcessor::applyPerformanceVar (const juce::var& v, const juce::
     if (v.hasProperty ("masterRack")) state.masterRack = rackFromVar (v.getProperty ("masterRack", juce::var()));
     state.macrosFromVar (v.getProperty ("macros", juce::var()));
     if (v.hasProperty ("mod")) state.mod.fromVar (v.getProperty ("mod", juce::var()));
-    if (v.hasProperty ("midiMap")) state.midiMap.fromVar (v.getProperty ("midiMap", juce::var()));
+    // (the controller map is the PLAYER'S now: a performance never replaces it)
     if (auto* hp = v.getProperty ("hostParams", juce::var()).getDynamicObject())
         for (auto& prop : hp->getProperties())
         {
@@ -3004,7 +3094,9 @@ void JMSignatureProcessor::setStateInformation (const void* data, int size)
     state.masterRack = rackFromVar (v.getProperty ("masterRack", juce::var()));
     state.macrosFromVar (v.getProperty ("macros", juce::var()));
     state.mod.fromVar (v.getProperty ("mod", juce::var()));   // absent in version 1
-    state.midiMap.fromVar (v.getProperty ("midiMap", juce::var()));
+    // A session made before the map became the player's still carries one; it
+    // is taken only when the player has none of his own.
+    if (state.midiMap.size() == 0) state.midiMap.fromVar (v.getProperty ("midiMap", juce::var()));
     midiRouting.fromVar (v.getProperty ("midiRouting", juce::var()));
     refreshMidiDevices();                                    // re-open what was saved
     if (auto* outs = v.getProperty ("slotOutputs", juce::var()).getArray())

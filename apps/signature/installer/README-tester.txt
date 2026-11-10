@@ -1,8 +1,34 @@
-MIREKU 1.1.1 - test build
+MIREKU 1.1.2 - test build
 Amanorsac Studio
 
 
-0. WHAT CHANGED IN 1.1.1
+0. WHAT CHANGED IN 1.1.2
+
+   Installs over 1.1.1 or 1.1.0. Presets, performances, the setlist and the
+   test key are kept; the key keeps the days it has left.
+
+     - THE LIBRARY INSTALLS ITSELF. It is one file now. Choose it in the
+       INSTALL LIBRARY panel and MIREKU puts everything in place. See 3.
+     - CHANGING PERFORMANCE IS SMOOTH. The next performance is prepared in
+       the background while the current one keeps playing; the window no
+       longer stops. Going back to a performance you just used is instant.
+     - LESS PROCESSOR USE. With nothing playing, the effects rest. Loading
+       sounds in the background takes about a quarter of the work it did.
+       Large piano performances no longer reload their samples while you
+       play.
+     - THE MASTER VOLUME AND THE LIMITER STAY PUT when you change performance
+       or scene. They are yours, not the performance's.
+     - THE METERS READ TRUE. 0 dB is the top; green to -18, yellow to -6,
+       red only at the very top. An instrument's meter now shows what it
+       sends to the mix, after its VOL knob.
+     - ADD UNIT no longer lands on the OUTPUT meter when the rack is full.
+     - MIDI CONTROLS, under the gear: every assignment in one list, a LEARN
+       button, and a line showing the last message received. Assignments now
+       stay through every performance. Sostenuto and soft pedals, master
+       volume on CC 7 and the macros on CC 16 to 19 work with nothing to
+       learn. See 4.
+
+   WHAT CHANGED IN 1.1.1
 
    Installs over 1.1.0. Presets, performances, the setlist and the test key
    are kept; the key keeps the days it has left.
@@ -199,14 +225,22 @@ Amanorsac Studio
 
 3. THE SAMPLE LIBRARY
 
-   The library is delivered separately, as a folder named "MIREKU Library";
-   it is not part of this installer. Each instrument in it is one sealed
-   .jmi file that only MIREKU can open.
+   The library is ONE file, "MIREKU Library.mirekupack", downloaded
+   separately. There is nothing to unzip and nothing to move.
 
-   Put the folder anywhere, then open the SETTINGS tab and set LIBRARY
-   FOLDER to it. Select RESCAN. The four category tabs fill with whatever
-   was found. Performances delivered in the folder's Performance\Factory
-   are listed on the PERFORM page's FACTORY tab.
+   The first time MIREKU opens without a library it shows INSTALL LIBRARY.
+   Select CHOOSE THE LIBRARY FILE and pick the file you downloaded. MIREKU
+   checks it, puts every instrument and performance in its own folder
+   (Documents\MIREKU\Library) and shows them. To use another disk, select
+   CHANGE first.
+
+   The same panel is under the gear, "Install library or update". A small
+   update file with new performances installs the same way and adds to what
+   is there.
+
+   Each instrument is one sealed .jmi file that only MIREKU can open. If you
+   already unpacked a library folder for an earlier build it still works:
+   gear, Preferences, BROWSE to the folder.
 
    Installing and uninstalling never touch the library, the presets or the
    performances.
@@ -221,6 +255,18 @@ Amanorsac Studio
 
    MIDI inputs are listed in the same window. Connect a keyboard before
    opening MIREKU, or select RESCAN MIDI afterwards.
+
+   MIDI CONTROLS. The gear, MIDI controls, lists every assignment with its
+   controller number, and shows the last message that arrived so you can see
+   what a knob sends. LEARN A CONTROL picks a control from a list; then move
+   a knob, fader or pedal. Right-clicking any knob and selecting MIDI Learn
+   does the same. Assignments are yours: they stay through every performance.
+
+   These work with nothing learned: pitch bend, mod wheel (CC 1), sustain
+   (64), sostenuto (66), soft pedal (67), expression (11), master volume
+   (7), macros 1 to 4 (16 to 19), all sound off (120), all notes off (123),
+   and program change n for song n of the setlist. An assignment of your
+   own to one of those numbers takes its place.
 
    MULTI OUT. Each world (JM Set, MKS, FM, Strings) can be sent to OUT 1,
    OUT 2, OUT 3 or OUT 4. In the standalone each OUT is mapped to a pair of

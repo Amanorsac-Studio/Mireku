@@ -543,8 +543,20 @@ int main (int argc, char** argv)
     // every check here asserts state straight after a gesture; the background
     // path is switched on by the one test that is about it
     JMSignatureProcessor::backgroundLoads() = false;
+    JMSignatureProcessor::persistMidiMap() = false;       // never write the player's own controller map
     if (argc >= 3 && juce::String (argv[1]) == "--check-performances")
         return checkPerformances (juce::File (juce::String::fromUTF8 (argv[2])));
+    // MirekuSnapshot --install-pack <file.mirekupack> <folder>: what the INSTALL
+    // LIBRARY panel does, without the panel; prints the result and the time.
+    if (argc >= 4 && juce::String (argv[1]) == "--install-pack")
+    {
+        librarypack::Progress pr;
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        const auto r = librarypack::install (juce::File (juce::String::fromUTF8 (argv[2])), juce::File (juce::String::fromUTF8 (argv[3])), pr);
+        std::printf ("%s\n%d written, %d unchanged, %.2f GB in %.1f s\n", r.message.toRawUTF8(), r.written, r.unchanged,
+                     (double) pr.bytesDone.load() / 1.0e9, (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0);
+        return r.ok ? 0 : 1;
+    }
     if (argc >= 3 && juce::String (argv[1]) == "--bench-sealed")
         return benchSealed (juce::File (juce::String::fromUTF8 (argv[2])));
     if (argc >= 3 && juce::String (argv[1]) == "--bench")
@@ -2414,6 +2426,190 @@ int main (int argc, char** argv)
                     kb->followMidi();
                     CHECK (std::abs (kb->pitchWheel().value() - 0.5f) < 1.0e-3f, "...back to centre when the bend returns");
                 }
+            }
+
+            // ================================================= 1.1.2 (2026-11-10)
+            std::printf ("\n== 1.1.2: the master stays, the meter scale, ADD UNIT, background loads, MIDI ==\n");
+            {
+                auto pumpMs = [] (int ms) { juce::MessageManager::getInstance()->runDispatchLoopUntil (ms); };
+                auto* mv = proc.apvts.getParameter ("masterVol");
+                auto* lim = proc.apvts.getParameter ("limiter");
+                auto* sv = proc.apvts.getParameter ("slotVol0");
+                const float mv0 = mv->getValue(), lim0 = lim->getValue(), sv0 = sv->getValue();
+
+                // ---- (a) a performance or a scene never moves the master
+                mv->setValueNotifyingHost (0.90f);
+                lim->setValueNotifyingHost (1.0f);
+                sv->setValueNotifyingHost (0.80f);
+                const auto snap = proc.performanceVar ("Master Probe");      // carries 0.90, limiter on, slot A 0.80
+                mv->setValueNotifyingHost (0.35f);
+                lim->setValueNotifyingHost (0.0f);
+                sv->setValueNotifyingHost (0.20f);
+                CHECK (proc.applyPerformanceVar (snap, "Master Probe"), "a performance recalls");
+                pumpMs (60);
+                CHECK (std::abs (mv->getValue() - 0.35f) < 1.0e-4f, "the MASTER VOLUME stays where the player left it");
+                CHECK (lim->getValue() < 0.5f, "and so does the LIMITER switch");
+                CHECK (std::abs (sv->getValue() - 0.80f) < 1.0e-4f, "while the performance's own slot volume comes back");
+                {
+                    juce::MemoryBlock session;
+                    mv->setValueNotifyingHost (0.66f);
+                    proc.getStateInformation (session);
+                    mv->setValueNotifyingHost (0.10f);
+                    proc.setStateInformation (session.getData(), (int) session.getSize());
+                    pumpMs (60);
+                    CHECK (std::abs (mv->getValue() - 0.66f) < 1.0e-3f, "a DAW session still restores the master volume");
+                }
+
+                // ---- (b) the meter scale
+                CHECK (LevelMeter::fracForDb (0.0f) == 1.0f && LevelMeter::fracForDb (6.0f) == 1.0f && LevelMeter::fracForDb (-60.0f) == 0.0f,
+                       "0 dBFS is the top of the meter and -60 the bottom");
+                CHECK (std::abs (LevelMeter::fracForDb (-18.0f) - 8.0f / 13.0f) < 1.0e-5f
+                       && std::abs (LevelMeter::fracForDb (-6.0f) - 11.0f / 13.0f) < 1.0e-5f
+                       && std::abs (LevelMeter::fracForDb (-1.0f) - 12.0f / 13.0f) < 1.0e-5f,
+                       "green ends at -18, yellow at -6, and the last segment starts at -1 dBFS");
+                bool rising = true;
+                for (float d = -60.0f; d < 0.0f; d += 0.5f) rising = rising && LevelMeter::fracForDb (d + 0.5f) > LevelMeter::fracForDb (d);
+                CHECK (rising, "the scale rises all the way");
+                CHECK (LevelMeter::norm (0.5f) < 11.0f / 13.0f + 0.01f, "a -6 dBFS signal sits at the top of the yellow, not in the red");
+
+                // ---- (c) ADD UNIT never lands on the OUTPUT column
+                {
+                    const auto keepRack = proc.state.slots[0].rack;
+                    FxRackState five;
+                    for (auto t : { FxType::tapeMachine, FxType::hallShimmer, FxType::vintageEq, FxType::plateReverb, FxType::jmChorus })
+                        five.push_back (defaultUnitState (t, false));
+                    proc.state.slots[0].rack = five;
+                    proc.state.currentPage = 4;
+                    proc.stateChanged.sendSynchronousChangeMessage();
+                    auto* strip = findOne<FxRackStrip> (*ed);
+                    auto* out = findOne<MasterFxColumn> (*ed);
+                    ux::PlateButton* add = nullptr;
+                    if (strip != nullptr)
+                        for (auto* c : strip->getChildren())
+                            if (auto* pb = dynamic_cast<ux::PlateButton*> (c))
+                                if (pb->getButtonText().contains ("ADD UNIT")) add = pb;
+                    CHECK (strip != nullptr && out != nullptr && add != nullptr && add->isVisible(), "with five units the ADD UNIT button is offered");
+                    if (add != nullptr && out != nullptr)
+                    {
+                        std::printf ("    ADD UNIT x %d..%d, OUTPUT starts at %d\n", add->getX(), add->getRight(), out->getX());
+                        CHECK (add->getRight() <= out->getX(), "and it sits clear of the OUTPUT column");
+                        bool clear = true;
+                        std::vector<FxUnitPanel*> units;
+                        findAll<FxUnitPanel> (*strip, units);
+                        for (auto* u : units) clear = clear && ! u->getBounds().intersects (add->getBounds());
+                        CHECK (units.size() == 5 && clear, "and clear of all five units");
+                    }
+                    savePng (*ed, "release112-add-unit.png");
+                    proc.state.slots[0].rack = keepRack;
+                    proc.stateChanged.sendSynchronousChangeMessage();
+                }
+
+                // ---- (d) a performance is prepared in the background
+                if (proc.engines[1].bundle() != nullptr)
+                {
+                    auto saved = proc.savePerformanceSnapshot ("Background Probe");
+                    const auto want = proc.engines[1].bundle()->dir;
+                    proc.engines[1].setBundle (nullptr);
+                    proc.forgetRecentBundles();
+                    JMSignatureProcessor::backgroundLoads() = true;
+                    const bool started = proc.requestPerformance (saved.file);
+                    CHECK (started && proc.performanceLoading() == "Background Probe" && proc.engines[1].bundle() == nullptr,
+                           "requesting a performance returns at once; its instrument is being prepared");
+                    CHECK (proc.state.libraryNotice.contains ("Loading"), "and the status bar says it is loading");
+                    for (int i = 0; i < 300 && proc.performanceLoading().isNotEmpty(); ++i) pumpMs (50);
+                    CHECK (proc.performanceLoading().isEmpty() && proc.engines[1].bundle() != nullptr
+                           && proc.engines[1].bundle()->dir == want,
+                           "when it is ready the performance is applied, with the right instrument in the slot");
+                    CHECK (! proc.state.libraryNotice.contains ("Loading"), "and the loading line is gone");
+                    proc.requestPerformance (saved.file);
+                    CHECK (proc.performanceLoading().isEmpty(), "asking again is instant: every instrument is already in memory");
+                    CHECK (proc.recentBundleCount() >= 1, "recently used instruments are kept ready");
+                    JMSignatureProcessor::backgroundLoads() = false;
+                    pumpMs (60);
+                    saved.file.deleteFile();
+                    saved.file.getSiblingFile (saved.file.getFileName() + ".bak").deleteFile();
+                }
+
+                // ---- (e) MIDI: the player's map, the standard controllers, the page
+                {
+                    proc.state.midiMap.clear();
+                    proc.prepareToPlay (48000.0, 512);
+                    juce::AudioBuffer<float> buf (proc.getTotalNumOutputChannels(), 512);
+                    auto send = [&] (const juce::MidiMessage& m)
+                    {
+                        juce::MidiBuffer mb;
+                        mb.addEvent (m, 0);
+                        buf.clear();
+                        proc.processBlock (buf, mb);
+                        pumpMs (120);                               // the 30 Hz timer applies controllers
+                    };
+                    auto* m1 = proc.apvts.getParameter ("macro1");
+                    auto* m2 = proc.apvts.getParameter ("macro2");
+                    auto* m3 = proc.apvts.getParameter ("macro3");
+                    m1->setValueNotifyingHost (0.0f); m2->setValueNotifyingHost (0.0f); m3->setValueNotifyingHost (0.0f);
+
+                    send (juce::MidiMessage::controllerEvent (1, 7, 64));
+                    CHECK (std::abs (mv->getValue() - 64.0f / 127.0f) < 0.02f, "CC 7 moves the master volume with nothing learned");
+                    send (juce::MidiMessage::controllerEvent (1, 16, 127));
+                    CHECK (m1->getValue() > 0.98f, "CC 16 moves MACRO 1 with nothing learned");
+                    CHECK (JMSignatureProcessor::describeMidi (proc.midiMonitorLast.load()).startsWith ("CC 16  value 127"),
+                           "the monitor names the last message");
+
+                    proc.state.midiMap.set (7, "host.macro2");      // the player re-learns CC 7
+                    const float mvBefore = mv->getValue();
+                    send (juce::MidiMessage::controllerEvent (1, 7, 127));
+                    CHECK (m2->getValue() > 0.98f && std::abs (mv->getValue() - mvBefore) < 1.0e-4f,
+                           "a controller the player learned takes the place of the built-in one");
+
+                    const auto snap2 = proc.performanceVar ("Map Probe");
+                    proc.state.midiMap.set (74, "host.macro3");
+                    proc.applyPerformanceVar (snap2, "Map Probe");
+                    pumpMs (60);
+                    CHECK (proc.state.midiMap.size() == 2 && proc.state.midiMap.pathForCc (74) == "host.macro3",
+                           "loading a performance leaves the player's assignments alone");
+
+                    MidiControlsPanel page (proc);
+                    page.setSize (MidiControlsPanel::kWidth, MidiControlsPanel::kHeight);
+                    CHECK (page.rowCount() == 2 && page.rowText (0).contains ("CC 7") && page.rowText (1).contains ("CC 74"),
+                           "the MIDI page lists every assignment with its controller number");
+                    std::printf ("    rows: %s ; %s\n", page.rowText (0).toRawUTF8(), page.rowText (1).toRawUTF8());
+                    page.armLearn ("host.superKnob");
+                    CHECK (page.learnText().contains ("move a knob"), "LEARN A CONTROL asks for a knob to be moved");
+                    send (juce::MidiMessage::controllerEvent (1, 21, 90));
+                    pumpMs (200);
+                    CHECK (proc.state.midiMap.pathForCc (21) == "host.superKnob" && page.rowCount() == 3,
+                           "moving a knob assigns it, and the page shows the new row");
+                    CHECK (page.monitorText().startsWith ("CC 21"), "the page's monitor line shows what arrived");
+                    savePng (page, "release112-midi-page.png");
+                    page.pressClear (0);
+                    pumpMs (120);
+                    CHECK (page.rowCount() == 2 && ! proc.state.midiMap.isLearned (7), "CLEAR removes one assignment");
+                    page.pressClearAll();
+                    pumpMs (60);
+                    CHECK (page.rowCount() == 0 && proc.state.midiMap.size() == 0, "CLEAR ALL removes them all");
+                    send (juce::MidiMessage::controllerEvent (1, 7, 100));
+                    CHECK (std::abs (mv->getValue() - 100.0f / 127.0f) < 0.02f, "and CC 7 is the master volume again");
+
+                    juce::MidiBuffer off;
+                    off.addEvent (juce::MidiMessage::allSoundOff (1), 0);
+                    buf.clear();
+                    proc.processBlock (buf, off);
+                    m1->setValueNotifyingHost (0.0f); m2->setValueNotifyingHost (0.0f); m3->setValueNotifyingHost (0.0f);
+                }
+
+                // ---- (f) the install panel knows a library is already there
+                {
+                    LibraryInstallPanel panel (proc);
+                    panel.setSize (LibraryInstallPanel::kWidth, LibraryInstallPanel::kHeight);
+                    CHECK (panel.destination() == proc.state.library.libraryDir(),
+                           "with a library in place, an update installs into that same folder");
+                    CHECK (panel.statusText().contains ("instruments are installed"), "and the panel says how many instruments are there");
+                    savePng (panel, "release112-install-panel.png");
+                }
+
+                mv->setValueNotifyingHost (mv0);
+                lim->setValueNotifyingHost (lim0);
+                sv->setValueNotifyingHost (sv0);
             }
         }
         delete ed;

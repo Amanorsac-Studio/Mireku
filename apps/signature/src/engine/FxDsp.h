@@ -2001,7 +2001,7 @@ private:
     mutable juce::SpinLock lock_;
     std::vector<Slot> slots_;
     juce::AudioBuffer<float> dry_;
-    static constexpr float kSilence = 1.0e-7f;       // -140 dBFS
+    static constexpr float kSilence = 1.0e-6f;       // -120 dBFS: under the floor of a 20-bit converter
     std::atomic<bool> wake_ { true };                // any change to the rack: compute again
     juce::int64 quietSamples_ = 0;                   // audio thread only
     bool asleep_ = false;

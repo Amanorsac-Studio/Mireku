@@ -391,6 +391,29 @@ struct MidiMap                       // CC → learnable parameter path
 {
     std::map<int, juce::String> ccToPath;
     juce::CriticalSection lock;
+    /// Set by every change; the processor's timer saves the map when it sees it.
+    std::atomic<bool> dirty { false };
+    /// Which controller numbers are learned, readable by the AUDIO thread
+    /// without the lock: a learned controller always wins over a built-in one.
+    std::array<std::atomic<bool>, 128> learned {};
+    bool isLearned (int cc) const noexcept { return cc >= 0 && cc < 128 && learned[(size_t) cc].load (std::memory_order_relaxed); }
+    void refreshLearned()                // call with `lock` held
+    {
+        for (int i = 0; i < 128; ++i) learned[(size_t) i].store (ccToPath.count (i) > 0, std::memory_order_relaxed);
+        dirty.store (true);
+    }
+    void clear()
+    {
+        const juce::ScopedLock sl (lock);
+        ccToPath.clear();
+        refreshLearned();
+    }
+    int size() const { const juce::ScopedLock sl (lock); return (int) ccToPath.size(); }
+    std::vector<std::pair<int, juce::String>> list() const
+    {
+        const juce::ScopedLock sl (lock);
+        return { ccToPath.begin(), ccToPath.end() };
+    }
 
     juce::String pathForCc (int cc) const
     {
@@ -404,12 +427,20 @@ struct MidiMap                       // CC → learnable parameter path
         for (auto it = ccToPath.begin(); it != ccToPath.end();)   // one path per CC & vice versa
             it = it->second == path ? ccToPath.erase (it) : std::next (it);
         ccToPath[cc] = path;
+        refreshLearned();
+    }
+    void removeCc (int cc)
+    {
+        const juce::ScopedLock sl (lock);
+        ccToPath.erase (cc);
+        refreshLearned();
     }
     void removePath (const juce::String& path)
     {
         const juce::ScopedLock sl (lock);
         for (auto it = ccToPath.begin(); it != ccToPath.end();)
             it = it->second == path ? ccToPath.erase (it) : std::next (it);
+        refreshLearned();
     }
     int ccForPath (const juce::String& path) const
     {
@@ -431,6 +462,7 @@ struct MidiMap                       // CC → learnable parameter path
         if (auto* o = v.getDynamicObject())
             for (auto& prop : o->getProperties())
                 ccToPath[prop.name.toString().getIntValue()] = prop.value.toString();
+        refreshLearned();
     }
 };
 

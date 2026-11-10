@@ -154,6 +154,29 @@ public:
     // meters / status (UI reads)
     std::atomic<float> masterPeakL { 0 }, masterPeakR { 0 };
     std::atomic<float> masterPrePeak { 0 };       // OUT 1 before the limiter
+
+    //==========================================================================
+    // MIDI CONTROLS (client, 2026-11-10: "a place in settings to see all the
+    // MIDI learn options... and some standard MIDI stuff that works
+    // automatically").
+    //
+    //   * The learned map is the PLAYER'S: it is kept in settings.json and no
+    //     performance changes it (state.midiMap; saved by the timer when dirty).
+    //   * Controllers that work with nothing learned: sustain 64, sostenuto 66,
+    //     soft 67, mod wheel 1, expression 11, master volume 7, macros 1-4 on
+    //     16-19, all sound / notes off 120 / 123, program change (with bank
+    //     select 0) to a song. A learned controller always wins over these.
+    //   * The monitor: the last message that arrived, for the MIDI page.
+    /// Packed status << 16 | data1 << 8 | data2 of the last message, and a
+    /// counter that moves on every message.
+    std::atomic<juce::uint32> midiMonitorLast { 0 }, midiMonitorCount { 0 };
+    static juce::String describeMidi (juce::uint32 packed);
+    /// The control a built-in controller number moves ("" when it has none).
+    static juce::String builtInControllerPath (int cc);
+    /// Every control MIDI learn can be pointed at, in menu order.
+    juce::StringArray learnablePaths() const;
+    /// The self-checks must not write the player's own controller map.
+    static bool& persistMidiMap() { static bool on = true; return on; }
     std::atomic<float> cpuLoad { 0 };
     std::atomic<int> totalVoices { 0 };
     std::array<std::atomic<float>, 4> slotPeak {};
@@ -200,6 +223,7 @@ public:
     /// else loaded here and now. Message thread.
     BundlePtr obtainBundle (const juce::File& dir, juce::String& err);
     int recentBundleCount() const { return (int) recentBundles_.size(); }      // test hook
+    void forgetRecentBundles() { recentBundles_.clear(); }                     // test hook
     static juce::File performancePresetDir() { return Library::userPresetDir().getChildFile ("Performance"); }
     /// Already scanned as factory content by the browser; in AUTHORING mode it
     /// is also where a performance snapshot is SAVED.
@@ -535,6 +559,8 @@ private:
 
     struct CcEvent { int cc; int value; };
     juce::AbstractFifo ccFifo { 256 };
+    std::atomic<bool> softPedal_ { false };       // CC 67
+    std::atomic<int> bankMsb_ { 0 };              // CC 0, for program change to a song
     std::array<CcEvent, 256> ccEvents;
 
     std::array<float, 4> lastMacroValue { -1, -1, -1, -1 };

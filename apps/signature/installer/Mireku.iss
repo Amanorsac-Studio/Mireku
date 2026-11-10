@@ -15,7 +15,7 @@
 ; Documents, so an install or an uninstall never touches them.
 
 #define AppName      "MIREKU"
-#define AppVersion   "1.1.1"
+#define AppVersion   "1.1.2"
 #define Publisher    "Amanorsac Studio"
 
 ; A TEST build (build-windows-installer.ps1 -Tester) differs in exactly three

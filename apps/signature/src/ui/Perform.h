@@ -8,6 +8,8 @@
 #include "Panels.h"
 #include "Macro.h"
 #include "ModPanels.h"
+#include "LibraryInstall.h"
+#include "MidiControls.h"
 
 namespace jm {
 
@@ -1854,7 +1856,11 @@ private:
         juce::PopupMenu m;
         m.addSectionHeader ("Settings");
         m.addItem (1, "Audio / MIDI...");
+        m.addItem (7, "MIDI controls...");
         m.addItem (2, "Preferences...");
+        m.addSeparator();
+        m.addSectionHeader ("Library");
+        m.addItem (6, "Install library or update...");
         m.addItem (3, "Rescan Library");
         m.addSeparator();
         // AUTHORING MODE: the mode switch and the round trip (collect/import).
@@ -1866,8 +1872,11 @@ private:
                                                         : "Authoring mode (off - release build)...");
         m.addSeparator();
 #endif
+#if ! MIREKU_PLAYER_BUILD
+        // the player needs no licence (its README says so), so it is not offered one
         m.addSectionHeader ("Licence");
         m.addItem (4, proc_.state.library.hasLicenseKey() ? "Licence (active)..." : "Activate licence...");
+#endif
         m.showMenuAsync (styledMenu (m, *gearBtn_), [this] (int r)
         {
             if (r == 1)
@@ -1883,6 +1892,18 @@ private:
                                        SettingsPanel::kWidth, SettingsPanel::kHeight);
             }
             else if (r == 3) { proc_.state.library.rescan(); proc_.stateChanged.sendChangeMessage(); }
+            else if (r == 6)
+            {
+                if (auto* host = OverlayHost::find (this))
+                    host->showOverlay (std::make_unique<LibraryInstallPanel> (proc_),
+                                       LibraryInstallPanel::kWidth, LibraryInstallPanel::kHeight);
+            }
+            else if (r == 7)
+            {
+                if (auto* host = OverlayHost::find (this))
+                    host->showOverlay (std::make_unique<MidiControlsPanel> (proc_),
+                                       MidiControlsPanel::kWidth, MidiControlsPanel::kHeight);
+            }
             else if (r == 4) showLicence();
             else if (r == 5)
             {

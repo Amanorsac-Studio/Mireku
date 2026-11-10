@@ -9,6 +9,7 @@
 #include "engine/AppState.h"
 #include "engine/Tags.h"
 #include "engine/Limiter.h"
+#include "engine/LibraryPack.h"
 #include "../../../shared/tester-gate/TesterGate.h"
 
 using namespace jm;
@@ -267,6 +268,7 @@ static void testPitchBend()
 }
 
 //==============================================================================
+static void testSostenuto (const BundlePtr& bundle);      // tests/Release112.inc
 static void testCC64 (const BundlePtr& bundle)
 {
     std::printf ("\n== CC64 sustain logic (§5.4) ==\n");
@@ -375,6 +377,7 @@ static void testRealBundle()
     CHECK (peak > 0.001f && peak < 4.0f, "render output audible and sane");
 
     testCC64 (b);
+    testSostenuto (b);
 }
 
 //==============================================================================
@@ -1640,6 +1643,8 @@ static void testArpStateRoundTrip()
 #include "WorldVoicing.inc"
 // SEALED LIBRARY - encrypted instruments and documents (2026-11-04).
 #include "Sealed.inc"
+// 1.1.2: library pack, sostenuto, resting rack, controller map flags.
+#include "Release112.inc"
 
 //==============================================================================
 //==============================================================================
@@ -2045,6 +2050,9 @@ int main()
     testRotaryMicWidth();
     testSealedDocuments();
     testSealedInstrument();
+    testLibraryPack();
+    testRackRestsWhenSilent();
+    testMidiMapFlags();
     testFdnEchoDensity();
     // WORLD VOICING
     testWorldVoicingControls();

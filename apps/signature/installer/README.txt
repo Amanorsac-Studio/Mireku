@@ -1,4 +1,4 @@
-MIREKU 1.1.1
+MIREKU 1.1.2
 Amanorsac Studio
 
 
@@ -12,15 +12,17 @@ Amanorsac Studio
 
 2. THE SAMPLE LIBRARY
 
-   The library is delivered separately, as a folder named "MIREKU Library".
-   Each instrument in it is one sealed .jmi file that only MIREKU can open.
+   The library is ONE file, "MIREKU Library.mirekupack", delivered
+   separately. There is nothing to unzip and nothing to move.
 
-   Put the folder anywhere, then open the SETTINGS tab and set LIBRARY
-   FOLDER to it. Select RESCAN. The four category tabs fill with whatever
-   was found.
+   The first time MIREKU opens without a library it shows INSTALL LIBRARY.
+   Select CHOOSE THE LIBRARY FILE and pick the file. MIREKU checks it, puts
+   every instrument and performance in its own folder
+   (Documents\MIREKU\Library) and shows them. To use another disk, select
+   CHANGE first. The same panel is under the gear, "Install library or
+   update"; an update file with new performances installs the same way.
 
-   Performances delivered with the library, in its Performance\Factory
-   folder, are listed on the PERFORM page's FACTORY tab beside MIREKU's own.
+   Each instrument is one sealed .jmi file that only MIREKU can open.
 
    Installing and uninstalling never touch the library, the presets or the
    performances.
@@ -36,10 +38,17 @@ Amanorsac Studio
    MIDI inputs are listed in the same window. Connect a keyboard before
    opening MIREKU, or select RESCAN MIDI afterwards.
 
-   MIDI LEARN. Right-click any knob and select MIDI Learn, then move a
-   control on the keyboard; the knob follows it from then on. Right-click
-   again to clear it. CC 11 (expression) rides the master level without
-   learning, and is a source in the MOD MATRIX.
+   MIDI CONTROLS. The gear, MIDI controls, lists every assignment with its
+   controller number, and shows the last message that arrived so you can see
+   what a knob sends. LEARN A CONTROL picks a control from a list; then move
+   a knob, fader or pedal. Right-clicking any knob and selecting MIDI Learn
+   does the same. Assignments are yours: they stay through every performance.
+
+   These work with nothing learned: pitch bend, mod wheel (CC 1), sustain
+   (64), sostenuto (66), soft pedal (67), expression (11), master volume
+   (7), macros 1 to 4 (16 to 19), all sound off (120), all notes off (123),
+   and program change n for song n of the setlist. An assignment of your
+   own to one of those numbers takes its place.
 
    OCTAVE and TRANSPOSE. The two steppers on PERFORM move every engine.
    Click a card's letter on PERFORM and it turns over to that engine's own

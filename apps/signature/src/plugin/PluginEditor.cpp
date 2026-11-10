@@ -143,6 +143,20 @@ JMSignatureEditor::JMSignatureEditor (JMSignatureProcessor& p)
     }
 
     startTimerHz (15);
+
+    // FIRST LAUNCH: no instruments anywhere means the library has not been
+    // installed yet, so the panel that installs it is the first thing shown.
+    // (The self-checks run against the test library and never reach this.)
+    if (proc_.state.library.bundles().empty())
+    {
+        juce::Component::SafePointer<JMSignatureEditor> safe (this);
+        juce::MessageManager::callAsync ([safe]
+        {
+            if (safe == nullptr || ! safe->proc_.state.library.bundles().empty()) return;
+            safe->root_.showOverlay (std::make_unique<LibraryInstallPanel> (safe->proc_),
+                                     LibraryInstallPanel::kWidth, LibraryInstallPanel::kHeight);
+        });
+    }
 }
 
 JMSignatureEditor::~JMSignatureEditor()

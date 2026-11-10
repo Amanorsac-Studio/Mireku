@@ -523,12 +523,42 @@ public:
     {
         const juce::SpinLock::ScopedLockType sl (lock_);
         for (auto& v : voices_)
-            if (v.active && v.note == note && ! v.releasing && ! v.sustained)
+            if (v.active && v.note == note && ! v.releasing && ! v.sustained && ! v.sostOff)
             {
-                if (sustainDown_) v.sustained = true;      // §5.4: defer note-off
+                if (v.sosten && sostenutoDown_) v.sostOff = true;   // held by the middle pedal
+                else if (sustainDown_) v.sustained = true;          // §5.4: defer note-off
                 else v.release();
             }
     }
+
+    /// SOSTENUTO (CC 66, 2026-11-10): the middle pedal of a grand. Pressing it
+    /// catches the notes whose keys are down AT THAT MOMENT and holds them until
+    /// it is lifted; notes played afterwards are not held. The sustain pedal
+    /// still works on top of it.
+    void sostenutoPedal (bool down)
+    {
+        const juce::SpinLock::ScopedLockType sl (lock_);
+        if (down && ! sostenutoDown_)
+        {
+            for (auto& v : voices_)
+                if (v.active && ! v.releasing && ! v.sustained) v.sosten = true;
+        }
+        else if (! down)
+        {
+            for (auto& v : voices_)
+            {
+                if (v.active && v.sostOff)
+                {
+                    v.sostOff = false;
+                    if (sustainDown_) v.sustained = true;
+                    else v.release();
+                }
+                v.sosten = false;
+            }
+        }
+        sostenutoDown_ = down;
+    }
+    bool sostenutoDown() const { return sostenutoDown_; }
 
     /// CLIENT REVIEW ROUND 4 (item 2) — pitch bend, previously omitted for v1.
     /// `semitones` is the already-scaled bend (the processor multiplies the
@@ -591,8 +621,10 @@ public:
         {
             if (tail && v.active) v.release();
             else { v.active = false; if (v.sample != nullptr) { v.sample->voiceRefs--; v.sample = nullptr; } }
+            v.sosten = v.sostOff = false;
         }
         sustainDown_ = false;
+        sostenutoDown_ = false;
     }
 
     int activeVoices() const
@@ -692,6 +724,7 @@ private:
     struct Voice
     {
         bool active = false, releasing = false, sustained = false;
+        bool sosten = false, sostOff = false;          // caught by sostenuto; its key has since been released
         int note = 60, vel = 100, zone = 0;
         SamplePtr sample;
         double pos = 0, ratio = 1.0;
@@ -741,6 +774,7 @@ private:
         if (v->sample != nullptr) v->sample->voiceRefs--;
 
         v->active = true; v->releasing = false; v->sustained = false;
+        v->sosten = false; v->sostOff = false;
         v->note = note; v->vel = vel; v->zone = zoneIdx;
         v->sample = rrList[(size_t) rrIdx];
         v->pos = 0;
@@ -1077,6 +1111,7 @@ private:
     std::atomic<int> velFixed_ { 100 };
     std::atomic<int> velDepth_ { 64 }, velOffset_ { 64 };
     bool sustainDown_ = false;
+    bool sostenutoDown_ = false;
     std::atomic<float> bendSemis_ { 0.0f };      // round 4 (item 2)
     double bendCur_ = 1.0;                       // smoothed rate multiplier
     int world_ = 0;

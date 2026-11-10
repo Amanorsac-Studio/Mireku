@@ -776,6 +776,10 @@ public:
                         userTags_[prop.name.toString().toLowerCase()] = list;
                     }
                 licenseKey_ = o->getProperty ("licenseKey").toString();
+                // THE PLAYER'S CONTROLLER MAP (2026-11-10): MIDI learn belongs
+                // to the player and his keyboard, so it lives here and not in
+                // a performance, which used to replace it on every load.
+                midiMap_ = o->getProperty ("midiMap");
                 // VELOCITY CURVE is global and belongs to the PLAYER's keyboard,
                 // not to any patch, so it lives here beside the library path and
                 // never travels in a preset. Absent key -> "normal", i.e. the
@@ -830,6 +834,7 @@ public:
             o->setProperty ("tags", juce::var (to));
         }
         o->setProperty ("licenseKey", licenseKey_);
+        if (midiMap_.isObject()) o->setProperty ("midiMap", midiMap_);
         o->setProperty ("mode", authoring::modeId (settingsMode_));
         o->setProperty ("velocityCurve", velCurve_.isEmpty() ? "normal" : velCurve_);
         o->setProperty ("fixedVelocity", velFixed_);
@@ -921,6 +926,11 @@ public:
         saveSettings();
     }
     /// A performance DOCUMENT (sealed .jmi or the old .json), as against a bundle.
+    /// The controller map as stored: { "<cc>": "<control path>" }. Void when
+    /// the player has never learned anything.
+    juce::var midiMapSetting() const { return midiMap_; }
+    void setMidiMapSetting (const juce::var& v) { midiMap_ = v; saveSettings(); }
+
     static bool isPerformanceFile (const juce::File& f)
     {
         return f.existsAsFile() && sealed::hasDocumentExtension (f) && ! sealed::isSealedBundleFile (f);
@@ -1196,6 +1206,7 @@ private:
     }
 
     juce::AudioFormatManager fm_;
+    juce::var midiMap_;
     juce::File libraryDir_;
     mutable juce::File settingsLibraryDir_;          // what settings.json holds (never the override)
     authoring::Mode mode_ = authoring::Mode::authoring;

@@ -110,3 +110,19 @@ The site's address is **https://jamesmireku.com** (custom domain on the
 - Barlow Semi Condensed and Inter fonts: SIL Open Font License 1.1.
 - `assets/vendor/supabase-2.116.0.js`: supabase-js, MIT licence (the same
   build amanorsac.studio serves).
+
+## MIREKU's own account emails
+
+Sign-up, password-reset and sign-in emails for people who started on
+jamesmireku.com are sent by `worker.js` from `hello@jamesmireku.com`, with the
+jamesmireku.com Resend account. Supabase hands every account email to
+amanorsac.studio; `studio/potfoliowebsite-mireku-emails.patch` makes that code
+pass MIREKU's on to `https://jamesmireku.com/api/auth-email`, still carrying
+Supabase's signature, which `worker.js` checks before sending anything. If the
+MIREKU email fails, amanorsac.studio sends its own instead.
+
+Secrets on the `mireku` Worker (never in a file): `RESEND_API_KEY` (Resend,
+sending access, jamesmireku.com only) and `AUTH_HOOK_SECRET` (the same value
+as Supabase → Authentication → Hooks → Send Email hook secret).
+
+Tests: `node site/test/worker.test.mjs`.

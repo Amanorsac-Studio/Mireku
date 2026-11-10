@@ -1,0 +1,44 @@
+--- a/worker.js
++++ b/worker.js
+@@ -2277,6 +2277,13 @@
+   reauthentication: { subject: 'Your Amanorsac Studio code', eyebrow: 'Your account', heading: 'Your code.',
+                       intro: 'Type this code where the site asks for it. It works for a few minutes.', label: null, fine: '' }
+ };
++/* True when an account email should send the person back to jamesmireku.com. */
++function isMirekuReturn(redirect) {
++  try {
++    const u = new URL(String(redirect || ''));
++    return u.protocol === 'https:' && (u.hostname === 'jamesmireku.com' || u.hostname === 'www.jamesmireku.com');
++  } catch (e) { return false; }
++}
+ async function authEmailHook(request, env) {
+   const say = (obj, status) => new Response(JSON.stringify(obj), { status: status || 200, headers: { 'content-type': 'application/json' } });
+   const secret = env.AUTH_HOOK_SECRET || '';
+@@ -2294,6 +2301,27 @@
+   let body = {};
+   try { body = JSON.parse(raw); } catch (e) { return say({ error: { http_code: 400, message: 'Bad body.' } }, 400); }
+   const user = body.user || {}, d = body.email_data || {};
++
++  /* MIREKU. Someone who started on jamesmireku.com gets MIREKU's own email,
++     sent by that site from its own address. This passes Supabase's request
++     on exactly as it came, signature and all, so the MIREKU Worker checks it
++     the same way this one just did. If that does not work for any reason,
++     the studio's own email below goes instead: a late link is better than
++     none. env.MIREKU is an optional service binding to the "mireku" Worker;
++     without it the request goes over the internet to the same address. */
++  if (isMirekuReturn(d.redirect_to)) {
++    try {
++      const fwd = new Request('https://jamesmireku.com/api/auth-email', {
++        method: 'POST', body: raw,
++        headers: { 'content-type': 'application/json', 'webhook-id': id, 'webhook-timestamp': ts,
++                   'webhook-signature': request.headers.get('webhook-signature') || '' }
++      });
++      const r = env.MIREKU ? await env.MIREKU.fetch(fwd) : await fetch(fwd);
++      if (r.ok) return say({});
++      console.error('MIREKU letter failed, sending the studio one:', r.status, await r.text());
++    } catch (e) { console.error('MIREKU letter failed, sending the studio one:', e && e.message); }
++  }
++
+   const to = String(d.email_action_type === 'email_change' && d.new_email ? d.new_email : user.email || '').toLowerCase();
+   const type = String(d.email_action_type || '');
+   const letter = AUTH_LETTERS[type];

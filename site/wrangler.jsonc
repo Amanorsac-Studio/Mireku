@@ -7,15 +7,22 @@
    build stops. It is set to "mireku"; change it if your Worker is called
    something else.
 
-   Static files only: there is no Worker script. A request for /account
-   is answered with public/account.html, and anything that matches no
-   file gets public/404.html with a 404 status. */
+   Files first: a request for /account is answered with
+   public/account.html without running any code. Only a request that no
+   file matches reaches worker.js, which answers /api/auth-email (MIREKU's
+   own account emails) and hands everything else back to the files, so
+   an unknown address still gets public/404.html with a 404 status.
+
+   Secrets, set in Cloudflare and never written here: RESEND_API_KEY and
+   AUTH_HOOK_SECRET (see worker.js). */
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "mireku",
+  "main": "worker.js",
   "compatibility_date": "2026-10-01",
   "assets": {
     "directory": "./public",
+    "binding": "ASSETS",
     "html_handling": "auto-trailing-slash",
     "not_found_handling": "404-page"
   },

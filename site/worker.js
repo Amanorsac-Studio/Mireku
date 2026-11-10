@@ -1,0 +1,187 @@
+/* =====================================================================
+   jamesmireku.com: the one piece of code that runs on a server.
+
+   Every page, image and font is a file, served by Cloudflare before this
+   script is ever asked. This answers only what no file can:
+
+     POST /api/auth-email   MIREKU's own sign-up, password-reset and
+                            sign-in emails, sent from jamesmireku.com.
+
+   WHY IT ARRIVES HERE. MIREKU shares its Supabase project, and so its
+   accounts, with amanorsac.studio, and a Supabase project hands its
+   emails to ONE address: amanorsac.studio/api/auth-email. That code
+   passes a request on to this one, unchanged, when the person started
+   on jamesmireku.com (the email's return address is on this site).
+   Everyone else keeps getting the Amanorsac Studio email.
+
+   WHO MAY ASK. Only Supabase. The request still carries Supabase's own
+   signature (Standard Webhooks: HMAC-SHA256 over "id.timestamp.body"),
+   and this checks it with the same secret, AUTH_HOOK_SECRET, before it
+   sends anything. A request that does not verify, is more than five
+   minutes old, or would send someone a link back to another site, is
+   refused. If this fails for any reason, amanorsac.studio sends its own
+   email instead, so nobody is left without their link.
+
+   Secrets (Cloudflare -> mireku -> Settings -> Variables and Secrets):
+     RESEND_API_KEY    the jamesmireku.com Resend account, sending only
+     AUTH_HOOK_SECRET  the same value as Supabase's Send Email hook secret
+   Never in this file, never in the repository.
+   ===================================================================== */
+
+const SITE = 'https://jamesmireku.com';
+const SUPABASE_URL = 'https://kdxckigyhpnwhwgjdgqq.supabase.co';
+const FROM = 'MIREKU <hello@jamesmireku.com>';
+const REPLY_TO = 'hello@amanorsac.studio';
+
+const LETTERS = {
+  signup: {
+    subject: 'Confirm your email for MIREKU', heading: 'One press and you are in.',
+    intro: 'Thank you for making a MIREKU account. Press the button to confirm your email. Your licence key and downloads will live on your account page at jamesmireku.com.',
+    label: 'Confirm my email',
+    fine: 'Your account is with Amanorsac Studio, who make MIREKU with James Mireku, so the same email and password also open amanorsac.studio. If you did not make an account, ignore this and nothing more will come.'
+  },
+  recovery: {
+    subject: 'Reset your MIREKU password', heading: 'Set a new password.',
+    intro: 'Somebody asked to reset the password for this address on jamesmireku.com. If that was you, press the button and choose a new one.',
+    label: 'Choose a new password',
+    fine: 'The link works once, for one hour. The same password also opens amanorsac.studio. If you did not ask for this, ignore it: nothing changes until the button is pressed.'
+  },
+  magiclink: {
+    subject: 'Your MIREKU sign-in link', heading: 'Sign in with one press.',
+    intro: 'Here is the sign-in link you asked for on jamesmireku.com. It works once, for an hour.',
+    label: 'Sign me in', fine: 'If you did not ask for this, ignore it.'
+  },
+  invite: {
+    subject: 'You have been invited to MIREKU', heading: 'You have an account waiting.',
+    intro: 'An account has been made for you on jamesmireku.com. Press the button to accept it and choose your password.',
+    label: 'Accept the invitation', fine: 'If you were not expecting this, ignore it.'
+  },
+  email_change: {
+    subject: 'Confirm your new email for MIREKU', heading: 'Confirm your new address.',
+    intro: 'You asked to change the email on your MIREKU account. Press the button to confirm the new address.',
+    label: 'Confirm the new address', fine: 'If you did not ask for this, ignore it and your address stays as it was.'
+  },
+  reauthentication: {
+    subject: 'Your MIREKU code', heading: 'Your code.',
+    intro: 'Type this code where jamesmireku.com asks for it. It works for a few minutes.', label: null, fine: ''
+  }
+};
+
+const json = (obj, status) => new Response(JSON.stringify(obj), { status: status || 200, headers: { 'content-type': 'application/json' } });
+const fail = (status, message) => json({ error: { http_code: status, message } }, status);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const looksLikeEmail = s => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s) && s.length <= 254;
+
+/* Constant-time comparison: how long it takes must not say how close a guess was. */
+function same(a, b) {
+  a = String(a); b = String(b);
+  let d = a.length ^ b.length;
+  for (let i = 0; i < Math.max(a.length, b.length); i++) d |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
+  return d === 0;
+}
+
+/** True when `redirect` sends the person back to this site, and nowhere else. */
+export function isOurs(redirect) {
+  try {
+    const u = new URL(String(redirect || ''));
+    return u.protocol === 'https:' && (u.hostname === 'jamesmireku.com' || u.hostname === 'www.jamesmireku.com');
+  } catch (e) { return false; }
+}
+
+export async function verifySignature(secret, headers, raw, nowSeconds) {
+  const id = headers.get('webhook-id') || '', ts = headers.get('webhook-timestamp') || '';
+  const sigs = (headers.get('webhook-signature') || '').split(' ').filter(Boolean).map(s => s.replace(/^v1,/, ''));
+  if (!secret || !id || !ts || !sigs.length) return false;
+  if (!/^\d+$/.test(ts) || Math.abs(nowSeconds - Number(ts)) > 300) return false;
+  const keyBytes = Uint8Array.from(atob(secret.replace(/^(v1,)?whsec_/, '')), c => c.charCodeAt(0));
+  const key = await crypto.subtle.importKey('raw', keyBytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(id + '.' + ts + '.' + raw)));
+  const want = btoa(String.fromCharCode.apply(null, mac));
+  return sigs.some(s => same(s, want));
+}
+
+/* The letter, in MIREKU's colours: near-black, gold, the badge at the top.
+   Tables and inline styles, because that is all an email client reads. */
+export function letterHtml(o) {
+  const font = "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;";
+  const paras = (t, style) => String(t || '').trim().split(/\n\n+/).filter(Boolean)
+    .map(p => '<p style="margin:0 0 16px;' + style + '">' + esc(p).replace(/\n/g, '<br>') + '</p>').join('');
+  return '<!doctype html><html lang="en-GB"><head><meta charset="utf-8">' +
+    '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark">' +
+    '<title>' + esc(o.subject) + '</title></head>' +
+    '<body style="margin:0;padding:0;background:#0a0907;' + font + '-webkit-font-smoothing:antialiased">' +
+    '<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:#0a0907">' + esc(o.preheader) + '</div>' +
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#0a0907">' +
+    '<tr><td align="center" style="padding:30px 12px 40px">' +
+    '<table role="presentation" width="560" cellpadding="0" cellspacing="0" border="0" style="width:560px;max-width:100%">' +
+    '<tr><td align="center" style="padding:0 0 22px"><a href="' + SITE + '" style="text-decoration:none">' +
+      '<img src="' + SITE + '/images/email/mireku-badge.png" width="140" height="113" alt="MIREKU" ' +
+      'style="display:block;width:140px;height:113px;border:0;border-radius:10px"></a></td></tr>' +
+    '<tr><td style="background:#15120d;border:1px solid #3a2f1c;border-radius:16px;padding:34px 30px 22px">' +
+      '<p style="margin:0 0 12px;font-size:12px;letter-spacing:.18em;text-transform:uppercase;font-weight:700;color:#d9a441">MIREKU · Your account</p>' +
+      '<h1 style="margin:0 0 18px;font-size:27px;line-height:1.25;font-weight:700;color:#f3c96f">' + esc(o.heading) + '</h1>' +
+      paras(o.intro, 'font-size:16.5px;line-height:1.65;color:#efe6d4') +
+      (o.code ? '<p style="margin:4px 0 22px;font-size:30px;letter-spacing:.2em;font-weight:700;color:#f3c96f">' + esc(o.code) + '</p>' : '') +
+      (o.cta ? '<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:8px 0 26px"><tr>' +
+        '<td style="border-radius:10px;background:#d9a441">' +
+        '<a href="' + esc(o.cta.href) + '" style="display:inline-block;padding:15px 30px;font-size:16px;font-weight:700;color:#1a1206;text-decoration:none;border-radius:10px">' +
+        esc(o.cta.label) + '</a></td></tr></table>' : '') +
+      paras(o.fine, 'font-size:13.5px;line-height:1.55;color:#a69a86') +
+    '</td></tr>' +
+    '<tr><td align="center" style="padding:22px 10px 0;font-size:12.5px;line-height:1.6;color:#a69a86">' +
+      'MIREKU · James Mireku\'s sounds · made with Amanorsac Studio<br>' +
+      '<a href="' + SITE + '" style="color:#d9a441;text-decoration:none">jamesmireku.com</a>' +
+    '</td></tr></table></td></tr></table></body></html>';
+}
+
+/** Builds the email for one Supabase hook payload, or null when it is not ours to send. */
+export function buildLetter(body) {
+  const user = body.user || {}, d = body.email_data || {};
+  const type = String(d.email_action_type || '');
+  const letter = LETTERS[type];
+  const to = String(type === 'email_change' && d.new_email ? d.new_email : user.email || '').toLowerCase();
+  if (!letter || !looksLikeEmail(to) || !isOurs(d.redirect_to)) return null;
+  const hash = type === 'email_change' && d.token_hash_new ? d.token_hash_new : d.token_hash;
+  const link = SUPABASE_URL + '/auth/v1/verify?token=' + encodeURIComponent(hash || '') +
+               '&type=' + encodeURIComponent(type) + '&redirect_to=' + encodeURIComponent(d.redirect_to);
+  const code = letter.label ? '' : String(d.token || '');
+  const text = letter.intro + '\n\n' + (letter.label ? link : 'Your code: ' + code) + '\n\n' +
+               (letter.fine ? letter.fine + '\n\n' : '') + 'MIREKU · made with Amanorsac Studio\n' + SITE + '\n';
+  const html = letterHtml({ subject: letter.subject, preheader: letter.intro.slice(0, 120), heading: letter.heading,
+                            intro: letter.intro, code, cta: letter.label ? { href: link, label: letter.label } : null, fine: letter.fine });
+  return { from: FROM, to: [to], reply_to: REPLY_TO, subject: letter.subject, text, html };
+}
+
+async function authEmail(request, env) {
+  if (!env.RESEND_API_KEY || !env.AUTH_HOOK_SECRET) return fail(503, 'MIREKU emails are not set up yet.');
+  const raw = await request.text();
+  if (!(await verifySignature(env.AUTH_HOOK_SECRET, request.headers, raw, Date.now() / 1000))) return fail(401, 'Bad signature.');
+  let body;
+  try { body = JSON.parse(raw); } catch (e) { return fail(400, 'Bad body.'); }
+  const msg = buildLetter(body);
+  if (!msg) return fail(400, 'Not a MIREKU email.');
+  const r = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + env.RESEND_API_KEY },
+    body: JSON.stringify(msg)
+  });
+  if (!r.ok) {
+    console.error('MIREKU email failed:', body.email_data && body.email_data.email_action_type, r.status, await r.text());
+    return fail(502, 'The email could not be sent.');
+  }
+  return json({});
+}
+
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    if (url.pathname === '/api/auth-email') {
+      if (request.method !== 'POST') return fail(405, 'Use POST.');
+      try { return await authEmail(request, env); }
+      catch (e) { console.error('auth-email:', e && e.message); return fail(500, 'Something went wrong.'); }
+    }
+    // Anything else that no file answered: the 404 page, as before.
+    return env.ASSETS.fetch(request);
+  }
+};

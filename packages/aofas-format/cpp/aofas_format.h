@@ -36,6 +36,33 @@
 
 #include "../../jmi-format/cpp/jmi_format.h"
 
+// 4-lane 32-bit vectors for ChaCha20::xorStream. SSE2 is part of x86-64 and
+// NEON of arm64, so neither needs a CPU check; anything else takes the scalar
+// loop.
+#if defined (__SSE2__) || defined (_M_X64) || defined (_M_AMD64)
+ #include <emmintrin.h>
+ #define AOFAS_SIMD 1
+ typedef __m128i aofas_v32;
+ #define aofas_set1(x)    _mm_set1_epi32 ((int) (x))
+ #define aofas_load(p)    _mm_loadu_si128 ((const __m128i*) (p))
+ #define aofas_store(p,v) _mm_storeu_si128 ((__m128i*) (p), (v))
+ #define aofas_add(a,b)   _mm_add_epi32 ((a), (b))
+ #define aofas_xor(a,b)   _mm_xor_si128 ((a), (b))
+ #define aofas_rotl(a,n)  _mm_or_si128 (_mm_slli_epi32 ((a), (n)), _mm_srli_epi32 ((a), 32 - (n)))
+#elif defined (__aarch64__) || defined (_M_ARM64)
+ #include <arm_neon.h>
+ #define AOFAS_SIMD 1
+ typedef uint32x4_t aofas_v32;
+ #define aofas_set1(x)    vdupq_n_u32 ((uint32_t) (x))
+ #define aofas_load(p)    vld1q_u32 ((const uint32_t*) (p))
+ #define aofas_store(p,v) vst1q_u32 ((uint32_t*) (p), (v))
+ #define aofas_add(a,b)   vaddq_u32 ((a), (b))
+ #define aofas_xor(a,b)   veorq_u32 ((a), (b))
+ #define aofas_rotl(a,n)  vorrq_u32 (vshlq_n_u32 ((a), (n)), vshrq_n_u32 ((a), 32 - (n)))
+#else
+ #define AOFAS_SIMD 0
+#endif
+
 namespace aofas {
 
 // ============================================================================
@@ -242,6 +269,59 @@ public:
     {
         size_t off = 0;
         uint32_t ctr = counter;
+
+        // FOUR BLOCKS AT A TIME, IN SIMD (2026-11-10). The loop below this one
+        // makes one 64-byte block per call and XORs it a byte at a time: 71 MB/s
+        // measured on a 587 MB piano, which is what a performance change cost.
+        // Here each of the sixteen state words is one 4-lane vector (SSE2 on
+        // x86-64, NEON on arm64, both always present on those targets), so four
+        // blocks are made together. The keystream is byte for byte the same; the
+        // RFC 8439 vectors in the test file run through this path too. The
+        // word-wise XOR assumes a little-endian host, which every target is.
+       #if AOFAS_SIMD
+        if (len >= 256)
+        {
+            uint32_t base[16];
+            base[0] = 0x61707865u; base[1] = 0x3320646eu; base[2] = 0x79622d32u; base[3] = 0x6b206574u;
+            for (int i = 0; i < 8; ++i) base[4 + i] = getU32LE (key + i * 4);
+            base[12] = 0;
+            for (int i = 0; i < 3; ++i) base[13 + i] = getU32LE (nonce + i * 4);
+
+            while (len - off >= 256)
+            {
+                const uint32_t ctrs[4] = { ctr, ctr + 1, ctr + 2, ctr + 3 };
+                aofas_v32 v[16], init[16];
+                for (int i = 0; i < 16; ++i) init[i] = aofas_set1 (base[i]);
+                init[12] = aofas_load (ctrs);
+                for (int i = 0; i < 16; ++i) v[i] = init[i];
+
+                #define AOFAS_QR(a, b, c, d) \
+                    v[a] = aofas_add (v[a], v[b]); v[d] = aofas_xor (v[d], v[a]); v[d] = aofas_rotl (v[d], 16); \
+                    v[c] = aofas_add (v[c], v[d]); v[b] = aofas_xor (v[b], v[c]); v[b] = aofas_rotl (v[b], 12); \
+                    v[a] = aofas_add (v[a], v[b]); v[d] = aofas_xor (v[d], v[a]); v[d] = aofas_rotl (v[d], 8);  \
+                    v[c] = aofas_add (v[c], v[d]); v[b] = aofas_xor (v[b], v[c]); v[b] = aofas_rotl (v[b], 7);
+                for (int r = 0; r < 10; ++r)
+                {
+                    AOFAS_QR (0, 4, 8, 12)  AOFAS_QR (1, 5, 9, 13)  AOFAS_QR (2, 6, 10, 14)  AOFAS_QR (3, 7, 11, 15)
+                    AOFAS_QR (0, 5, 10, 15) AOFAS_QR (1, 6, 11, 12) AOFAS_QR (2, 7, 8, 13)   AOFAS_QR (3, 4, 9, 14)
+                }
+                #undef AOFAS_QR
+
+                uint32_t t[16][4];
+                for (int i = 0; i < 16; ++i) aofas_store (t[i], aofas_add (v[i], init[i]));
+                for (int w = 0; w < 4; ++w)
+                {
+                    uint32_t m[16];
+                    std::memcpy (m, in + off, 64);
+                    for (int i = 0; i < 16; ++i) m[i] ^= t[i][w];
+                    std::memcpy (out + off, m, 64);
+                    off += 64;
+                }
+                ctr += 4;
+            }
+        }
+       #endif
+
         while (off < len)
         {
             auto ks = block (key, ctr, nonce);

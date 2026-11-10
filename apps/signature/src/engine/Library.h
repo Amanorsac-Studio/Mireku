@@ -64,6 +64,10 @@ inline std::atomic<juce::int64>& coarseNowMs()
 //   loader thread — owns `full`: allocates, publishes, retires.
 //   message thread— owns `head`: allocated once in Library::loadBundle, never
 //                   touched again while the SampleData lives.
+/// Audio-thread demand, counted so an idle loader need not scan to find it.
+/// First touched by the loader thread at start-up, never first by the audio thread.
+inline std::atomic<juce::uint32>& sampleDemandEpoch() { static std::atomic<juce::uint32> e { 0 }; return e; }
+
 struct SampleData
 {
     /// Where the audio comes from: a WAV inside a folder bundle (`file`), or a
@@ -247,7 +251,11 @@ struct SampleData
     /// WAIT-FREE demand signal: one relaxed store, polled by the loader thread.
     /// Safe to call every block — that is exactly what makes starvation
     /// recoverable for a HELD note, which the old note-on-only retry was not.
-    void requestAudio() noexcept { wantsAudio.store (true, std::memory_order_relaxed); }
+    void requestAudio() noexcept
+    {
+        wantsAudio.store (true, std::memory_order_relaxed);
+        sampleDemandEpoch().fetch_add (1, std::memory_order_relaxed);   // lets an idle loader skip its scan
+    }
 
 private:
     void charge (juce::int64 delta)
@@ -343,10 +351,27 @@ using BundlePtr = std::shared_ptr<LoadedBundle>;
 class SampleLoader : private juce::Thread
 {
 public:
-    /// Eager fill target — the loader promotes samples up to here on its own.
-    static constexpr juce::int64 kEagerBytes = 768LL * 1024 * 1024;
+    /// THE MEMORY BUDGET FOLLOWS THE COMPUTER (2026-11-10). It was a fixed 1 GB,
+    /// and ten of James's 22 performances need more than that when fully loaded
+    /// (the largest, 1.9 GB): for those the loader dropped bodies that had been
+    /// silent for ten seconds and decrypted them again when played, for ever.
+    /// The ceiling is now 35% of the installed memory, never under 1 GB and never
+    /// over 6 GB; a test may pin it.
+    static juce::int64& budgetOverride() { static juce::int64 b = 0; return b; }
     /// Hard ceiling. Past this, promotion only happens by reclaiming an idle body.
-    static constexpr juce::int64 kMaxResidentBytes = 1024LL * 1024 * 1024;
+    static juce::int64 maxResidentBytes()
+    {
+        if (budgetOverride() > 0) return budgetOverride();
+        static const juce::int64 b = []
+        {
+            const juce::int64 gb = 1024LL * 1024 * 1024;
+            const juce::int64 ram = (juce::int64) juce::SystemStats::getMemorySizeInMegabytes() * 1024 * 1024;
+            return juce::jlimit (gb, 6 * gb, ram * 35 / 100);
+        }();
+        return b;
+    }
+    /// Eager fill target — the loader promotes samples up to here on its own.
+    static juce::int64 eagerBytes() { return maxResidentBytes() * 3 / 4; }
     /// A body is only reclaimable once no voice holds it and it has been quiet.
     static constexpr juce::int64 kIdleMs = 10000;
 
@@ -355,7 +380,9 @@ public:
     SampleLoader() : juce::Thread ("JM Sample Loader")
     {
         fm_.registerBasicFormats();
-        startThread (Priority::normal);
+        // LOW priority: it decrypts in the background and must never compete
+        // with the audio or the screen for a core.
+        startThread (Priority::low);
     }
     ~SampleLoader() override { stopThread (5000); }
 
@@ -405,20 +432,36 @@ private:
         std::vector<SamplePtr> live;
         while (! threadShouldExit())
         {
+            const auto t0 = juce::Time::getMillisecondCounterHiRes();
             const int did = serviceOnce (live);
             live.clear();                            // never pin a swapped-out bundle across a wait
             if (threadShouldExit()) break;
-            // 1 ms after real work (keep going), 5 ms while anything is still
-            // unpromoted (so a starved held note is rescued within ~5 ms),
-            // 100 ms once everything that fits is resident.
-            wait (did == 2 ? 1 : (did == 1 ? 5 : 100));
+            // 1 ms after URGENT work (a note is waiting), 5 ms while anything is
+            // still unpromoted (so a starved held note is rescued within ~5 ms),
+            // 100 ms once everything that fits is resident. EAGER work is PACED:
+            // it rests for as long as it worked (20 ms at most), so filling
+            // memory after a performance change takes half a core, not a whole
+            // one, and never arrives as one burst.
+            const int took = (int) (juce::Time::getMillisecondCounterHiRes() - t0);
+            wait (did == 3 ? 1 : did == 2 ? juce::jlimit (1, 20, took) : (did == 1 ? 5 : 100));
         }
     }
 
-    /// Returns 2 = promoted something, 1 = idle but work outstanding, 0 = settled.
+    /// Returns 3 = promoted on demand, 2 = promoted eagerly or tidied, 1 = idle
+    /// but work outstanding, 0 = settled.
     int serviceOnce (std::vector<SamplePtr>& live)
     {
-        coarseNowMs().store (juce::Time::currentTimeMillis(), std::memory_order_relaxed);
+        const auto nowMs = juce::Time::currentTimeMillis();
+        coarseNowMs().store (nowMs, std::memory_order_relaxed);
+        // WAITING ON THE BUDGET IS NOT WORK. When memory is full and nothing is
+        // asking, the outcome of a scan cannot change until the audio thread
+        // asks for a sample; this used to lock and walk every sample 200 times a
+        // second for as long as an over-budget performance was loaded.
+        const auto epoch = sampleDemandEpoch().load (std::memory_order_relaxed);
+        if (waitingOnBudget_ && epoch == lastEpoch_ && nowMs - lastFullScanMs_ < 250) return 1;
+        lastEpoch_ = epoch;
+        lastFullScanMs_ = nowMs;
+        waitingOnBudget_ = false;
         snapshot (live);
 
         // Pass A — demand from the render path. Highest priority, and the reason
@@ -431,11 +474,11 @@ private:
         {
             settled_.store (false, std::memory_order_release);
             promote (*urgent, true);
-            return 2;
+            return 3;
         }
 
         // Pass B — eager fill, in enrolment order, until the eager target.
-        if (residentByteCounter().load (std::memory_order_relaxed) < kEagerBytes)
+        if (residentByteCounter().load (std::memory_order_relaxed) < eagerBytes())
         {
             for (auto& s : live)
                 if (! s->isFullyResident())
@@ -448,7 +491,12 @@ private:
         else
         {
             for (auto& s : live)
-                if (! s->isFullyResident()) { settled_.store (false, std::memory_order_release); return 1; }
+                if (! s->isFullyResident())
+                {
+                    settled_.store (false, std::memory_order_release);
+                    waitingOnBudget_ = true;
+                    return 1;
+                }
         }
 
         // Pass C — hand back heads that the body has made redundant, once the
@@ -481,7 +529,7 @@ private:
         s.wantsAudio.store (false, std::memory_order_relaxed);
         if (s.isFullyResident()) return false;
         const juce::int64 need = (juce::int64) s.numChannels * s.lengthFrames * (juce::int64) sizeof (float);
-        if (residentByteCounter().load (std::memory_order_relaxed) + need > kMaxResidentBytes)
+        if (residentByteCounter().load (std::memory_order_relaxed) + need > maxResidentBytes())
             if (! reclaim (need, &s)) return false;
 
         juce::AudioBuffer<float> b;
@@ -505,13 +553,13 @@ private:
         const auto now = juce::Time::currentTimeMillis();
         for (auto& s : live)
         {
-            if (residentByteCounter().load (std::memory_order_relaxed) + need <= kMaxResidentBytes) return true;
+            if (residentByteCounter().load (std::memory_order_relaxed) + need <= maxResidentBytes()) return true;
             if (s.get() == keep) continue;
             if (s->voiceRefs.load (std::memory_order_relaxed) != 0) continue;
             if (now - s->lastUseMs.load (std::memory_order_relaxed) < kIdleMs) continue;
             s->retireFull();
         }
-        return residentByteCounter().load (std::memory_order_relaxed) + need <= kMaxResidentBytes;
+        return residentByteCounter().load (std::memory_order_relaxed) + need <= maxResidentBytes();
     }
 
     juce::AudioFormatManager fm_;
@@ -519,6 +567,9 @@ private:
     std::vector<std::weak_ptr<SampleData>> reg_;
     std::atomic<bool> settled_ { true };
     std::atomic<juce::int64> promotions_ { 0 };
+    bool waitingOnBudget_ = false;               // loader thread only
+    juce::uint32 lastEpoch_ = 0;
+    juce::int64 lastFullScanMs_ = 0;
 };
 
 //==============================================================================

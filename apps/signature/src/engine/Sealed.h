@@ -290,25 +290,42 @@ public:
         if (bps == 0 || ch <= 0) return false;
         count = (int) juce::jmin<juce::int64> (count, (juce::int64) s->frames - from);
         if (count <= 0 || from < 0) { dst.setSize (ch, 0); return count == 0; }
-        const uint64_t byteFrom = (uint64_t) from * (uint64_t) ch * (uint64_t) bps;
-        const uint64_t byteTo = byteFrom + (uint64_t) count * (uint64_t) ch * (uint64_t) bps;
-        std::vector<uint8_t> raw ((size_t) (byteTo - byteFrom));
-        {
-            aofas::Error e;
-            const std::lock_guard<std::mutex> g (m_);
-            if (! archive_.read (streamId, byteFrom, byteTo, raw.data(), e)) return false;
-        }
         dst.setSize (ch, count, false, false, true);
-        const uint8_t* p = raw.data();
-        for (int i = 0; i < count; ++i)
-            for (int c = 0; c < ch; ++c, p += bps)
+        float* out[8] = {};
+        const int chans = juce::jmin (ch, 8);
+        for (int c = 0; c < chans; ++c) out[c] = dst.getWritePointer (c);
+
+        // In slices of about a megabyte: the lock is held for one slice, not for
+        // a whole ten-second piano note, so the screen thread reading a HEAD is
+        // never queued behind the loader thread reading a BODY of the same file;
+        // and the bytes are converted straight into the buffer, slice by slice.
+        const int frameBytes = ch * bps;
+        const int sliceFrames = juce::jmax (1, (1 << 20) / frameBytes);
+        std::vector<uint8_t> raw ((size_t) sliceFrames * (size_t) frameBytes);
+        for (int done = 0; done < count;)
+        {
+            const int n = juce::jmin (sliceFrames, count - done);
+            const uint64_t byteFrom = (uint64_t) (from + done) * (uint64_t) frameBytes;
             {
-                float v;
-                if (bps == 2)      v = (float) (int16_t) (p[0] | (p[1] << 8)) / 32768.0f;
-                else if (bps == 3) v = (float) ((int32_t) ((p[0] << 8) | (p[1] << 16) | (p[2] << 24)) >> 8) / 8388608.0f;
-                else { uint32_t u = (uint32_t) p[0] | ((uint32_t) p[1] << 8) | ((uint32_t) p[2] << 16) | ((uint32_t) p[3] << 24); std::memcpy (&v, &u, 4); }
-                dst.setSample (c, i, v);
+                aofas::Error e;
+                const std::lock_guard<std::mutex> g (m_);
+                if (! archive_.read (streamId, byteFrom, byteFrom + (uint64_t) n * (uint64_t) frameBytes, raw.data(), e)) return false;
             }
+            const uint8_t* p = raw.data();
+            if (bps == 2)
+                for (int i = 0; i < n; ++i)
+                    for (int c = 0; c < ch; ++c, p += 2)
+                    { if (c < chans) out[c][done + i] = (float) (int16_t) (p[0] | (p[1] << 8)) * (1.0f / 32768.0f); }
+            else if (bps == 3)
+                for (int i = 0; i < n; ++i)
+                    for (int c = 0; c < ch; ++c, p += 3)
+                    { if (c < chans) out[c][done + i] = (float) ((int32_t) (((uint32_t) p[0] << 8) | ((uint32_t) p[1] << 16) | ((uint32_t) p[2] << 24)) >> 8) * (1.0f / 8388608.0f); }
+            else
+                for (int i = 0; i < n; ++i)
+                    for (int c = 0; c < ch; ++c, p += 4)
+                    { if (c < chans) std::memcpy (&out[c][done + i], p, 4); }
+            done += n;
+        }
         return true;
     }
 

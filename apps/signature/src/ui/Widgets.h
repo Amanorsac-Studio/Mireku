@@ -1492,11 +1492,23 @@ public:
         l_ = l; r_ = r; repaint();
     }
     void setHorizontal (bool h) { horiz_ = h; }
-    static float norm (float lvl)
+    /// THE METER SCALE (client, 2026-11-10: "re-calibrate it so the sounds don't
+    /// appear to be clipping"). 0 dBFS is the TOP of the ladder, and the LED
+    /// art's zones (8 green, 3 yellow, 1 orange, 1 red of 13) each mean
+    /// something: green to -18, yellow to -6, orange to -1, and the last, red
+    /// segment only from -1 dBFS up. The old scale put 0 dBFS at 91% and
+    /// started orange at -4, so an ordinary level looked like an overload.
+    static float fracForDb (float db)
     {
-        const float db = juce::Decibels::gainToDecibels (lvl + 1.0e-6f);
-        return juce::jlimit (0.0f, 1.0f, (db + 60.0f) / 66.0f);
+        static constexpr float pts[][2] = { { -60.0f, 0.0f }, { -18.0f, 8.0f / 13.0f }, { -6.0f, 11.0f / 13.0f },
+                                            { -1.0f, 12.0f / 13.0f }, { 0.0f, 1.0f } };
+        if (db <= pts[0][0]) return 0.0f;
+        for (int i = 1; i < 5; ++i)
+            if (db <= pts[i][0])
+                return pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * (db - pts[i - 1][0]) / (pts[i][0] - pts[i - 1][0]);
+        return 1.0f;
     }
+    static float norm (float lvl) { return fracForDb (juce::Decibels::gainToDecibels (lvl + 1.0e-6f)); }
     void paint (juce::Graphics& g) override
     {
         auto r = getLocalBounds().toFloat();

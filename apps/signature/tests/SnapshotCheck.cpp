@@ -443,12 +443,116 @@ static int checkPerformances (const juce::File& libDir)
     return slotsBad == 0 && perfs > 0 ? 0 : 1;
 }
 
+//==============================================================================
+// MEASURING (2026-11-10). NOT CTests: they need the real library, and their
+// numbers are for comparing one build with the next on the same machine.
+//
+//   MirekuSnapshot --bench-sealed <sealed .jmi>          decrypt speed, MB/s
+//   MirekuSnapshot --bench <library> [performance...]    per performance: load
+//       time, cost of a silent second of audio, cost of a played second, and
+//       the peak levels a six-note chord reaches (slots, and OUT 1 before the
+//       limiter). With no names, every performance in the library.
+static int benchSealed (const juce::File& f)
+{
+    sealed::SealedBundle sb;
+    juce::String err;
+    if (! sb.open (f, err)) { std::printf ("%s\n", err.toRawUTF8()); return 2; }
+    juce::int64 bytes = 0;
+    int n = 0;
+    juce::AudioBuffer<float> buf;
+    const auto t0 = juce::Time::getMillisecondCounterHiRes();
+    for (auto& z : sb.instrument().zones)
+        for (auto& rr : z.roundRobins)
+        {
+            const int id = sb.streamFor (rr.file);
+            const auto* st = sb.stream (id);
+            if (st == nullptr || ! sb.readFrames (id, 0, (int) st->frames, buf)) { std::printf ("read failed: %s\n", rr.file.c_str()); return 3; }
+            bytes += (juce::int64) st->byteLength;
+            ++n;
+        }
+    const double s = (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0;
+    std::printf ("%s: %d samples, %.1f MB in %.2f s = %.0f MB/s\n", f.getFileName().toRawUTF8(), n,
+                 (double) bytes / 1.0e6, s, (double) bytes / 1.0e6 / s);
+    return 0;
+}
+
+static int benchPerformances (const juce::File& libDir, juce::StringArray only)
+{
+    JMSignatureProcessor proc;
+    proc.state.library.setLibraryDirTransient (libDir);
+    const double sr = 48000.0;
+    const int bs = 256;
+    proc.prepareToPlay (sr, bs);
+    juce::AudioBuffer<float> buf (proc.getTotalNumOutputChannels(), bs);
+    const int blocksPerSec = (int) (sr / bs);
+    auto run = [&] (double seconds, bool noteOns, float& slotMax, float& preMax) -> double
+    {
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        const int blocks = (int) (seconds * blocksPerSec);
+        for (int b = 0; b < blocks; ++b)
+        {
+            juce::MidiBuffer midi;
+            if (noteOns && b == 0)
+                for (int note : { 36, 48, 55, 60, 64, 67 })
+                    midi.addEvent (juce::MidiMessage::noteOn (1, note, (juce::uint8) 100), 0);
+            buf.clear();
+            proc.processBlock (buf, midi);
+            for (int i = 0; i < 4; ++i) slotMax = juce::jmax (slotMax, proc.slotPeak[(size_t) i].load());
+            preMax = juce::jmax (preMax, proc.masterPrePeak.load());
+        }
+        return (juce::Time::getMillisecondCounterHiRes() - t0) / (seconds * 10.0);     // % of real time
+    };
+    auto db = [] (float g) { return juce::Decibels::gainToDecibels (g + 1.0e-9f); };
+
+    std::printf ("%-26s %8s %9s %9s %9s %9s\n", "performance", "load ms", "idle %", "play %", "slot dB", "out dB");
+    double loadSum = 0, idleSum = 0, playSum = 0;
+    int count = 0, over = 0;
+    for (auto& dir : { libDir.getChildFile ("Performance").getChildFile ("Factory"), libDir.getChildFile ("Performance") })
+        for (auto& f : sealed::listDocuments (dir))
+        {
+            const auto name = f.getFileNameWithoutExtension();
+            if (! only.isEmpty() && ! only.contains (name)) continue;
+            const auto t0 = juce::Time::getMillisecondCounterHiRes();
+            const bool ok = proc.loadPerformancePreset (f);
+            const double loadMs = juce::Time::getMillisecondCounterHiRes() - t0;
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (80);        // the rack hand-over
+            float s0 = 0, p0 = 0, sPk = 0, pPk = 0;
+            run (4.0, false, s0, p0);                                               // settle: tails die, racks rest
+            const double idle = run (3.0, false, s0, p0);
+            const double play = run (3.0, true, sPk, pPk);
+            juce::MidiBuffer off;
+            off.addEvent (juce::MidiMessage::allSoundOff (1), 0);
+            buf.clear();
+            proc.processBlock (buf, off);
+            std::printf ("%-26s %8.0f %9.2f %9.2f %9.1f %9.1f%s\n", name.substring (0, 26).toRawUTF8(), loadMs, idle, play,
+                         db (sPk), db (pPk), ok ? (pPk > 1.0f ? "  OVER 0 dBFS before the limiter" : "") : "  LOAD FAILED");
+            loadSum += loadMs; idleSum += idle; playSum += play; ++count;
+            if (pPk > 1.0f) ++over;
+        }
+    if (count > 0)
+        std::printf ("%-26s %8.0f %9.2f %9.2f   (%d of %d reach the limiter)\n", "AVERAGE", loadSum / count, idleSum / count,
+                     playSum / count, over, count);
+    proc.releaseResources();
+    return count > 0 ? 0 : 1;
+}
+
 int main (int argc, char** argv)
 {
     std::setvbuf (stdout, nullptr, _IONBF, 0);     // a crash must not swallow the lines before it
     juce::ScopedJuceInitialiser_GUI init;
+    // every check here asserts state straight after a gesture; the background
+    // path is switched on by the one test that is about it
+    JMSignatureProcessor::backgroundLoads() = false;
     if (argc >= 3 && juce::String (argv[1]) == "--check-performances")
         return checkPerformances (juce::File (juce::String::fromUTF8 (argv[2])));
+    if (argc >= 3 && juce::String (argv[1]) == "--bench-sealed")
+        return benchSealed (juce::File (juce::String::fromUTF8 (argv[2])));
+    if (argc >= 3 && juce::String (argv[1]) == "--bench")
+    {
+        juce::StringArray only;
+        for (int i = 3; i < argc; ++i) only.add (juce::String::fromUTF8 (argv[i]));
+        return benchPerformances (juce::File (juce::String::fromUTF8 (argv[2])), only);
+    }
     if (argc >= 4 && juce::String (argv[1]) == "--marketing")
     {
         int w = 1920, h = 1080;

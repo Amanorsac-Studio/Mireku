@@ -1827,6 +1827,7 @@ public:
     {
         const juce::SpinLock::ScopedLockType sl (lock_);
         for (auto& s : slots_) s.mix.setTargetValue (0.0f);
+        wake_.store (true, std::memory_order_relaxed);
     }
 
     /// Steps 1 + 2, scheduled. MESSAGE THREAD ONLY.
@@ -1881,6 +1882,7 @@ public:
         }
         const juce::SpinLock::ScopedLockType sl (lock_);
         slots_ = std::move (next);
+        wake_.store (true, std::memory_order_relaxed);
     }
 
     void setParam (int slot, const std::string& id, float v)
@@ -1888,6 +1890,7 @@ public:
         const juce::SpinLock::ScopedLockType sl (lock_);
         if (slot >= 0 && slot < (int) slots_.size() && slots_[(size_t) slot].unit)
             slots_[(size_t) slot].unit->setParam (id, v);
+        wake_.store (true, std::memory_order_relaxed);
     }
     /// MODULATION PHASE 1 — audio-thread parameter write. Uses the same TRY-lock
     /// discipline as process(): if the message thread is mid-rebuild we skip this
@@ -1898,6 +1901,7 @@ public:
         if (! sl.isLocked()) return;
         if (slot >= 0 && slot < (int) slots_.size() && slots_[(size_t) slot].unit)
             slots_[(size_t) slot].unit->setParamIndexed (paramIndex, v);
+        wake_.store (true, std::memory_order_relaxed);
     }
     void setBypassedRt (int slot, bool b)
     {
@@ -1907,6 +1911,7 @@ public:
         {
             slots_[(size_t) slot].bypassed = b;
             slots_[(size_t) slot].mix.setTargetValue (b ? 0.0f : 1.0f);
+            wake_.store (true, std::memory_order_relaxed);
         }
     }
     int numUnits() const
@@ -1922,6 +1927,7 @@ public:
             slots_[(size_t) slot].bypassed = b;
             slots_[(size_t) slot].mix.setTargetValue (b ? 0.0f : 1.0f);
         }
+        wake_.store (true, std::memory_order_relaxed);
     }
     float widenerCorrelation() const
     {
@@ -1937,11 +1943,27 @@ public:
         const juce::SpinLock::ScopedTryLockType sl (lock_);
         if (! sl.isLocked()) return;                 // rack being rebuilt: pass dry this block
         const int n = buffer.getNumSamples();
+
+        // A SILENT RACK RESTS (2026-11-10). With nothing played, every unit that
+        // was switched on still ran every block: measured, an idle performance
+        // cost almost as much as a played one (5.5% against 6.8% of a core on
+        // average). The rack now stops computing once silence has gone IN and
+        // silence has come OUT for two whole seconds, which is after any reverb
+        // or delay tail has died, and it starts again on the first non-silent
+        // sample or on any change to it. A unit that makes sound on its own
+        // (tape hiss) never produces silence, so it never rests.
+        const float inPeak = buffer.getMagnitude (0, n);
+        const bool woken = wake_.exchange (false, std::memory_order_relaxed);
+        if (inPeak > kSilence || woken) { quietSamples_ = 0; asleep_ = false; }
+        else if (asleep_) return;
+
+        bool settling = false;
         for (auto& s : slots_)
         {
             if (! s.unit) continue;
             if (s.bypassed && ! s.mix.isSmoothing() && s.mix.getCurrentValue() < 0.001f)
                 continue;                            // fully bypassed: skip (fade already done)
+            settling = settling || s.mix.isSmoothing();
             for (int ch = 0; ch < 2; ++ch)
                 dry_.copyFrom (ch, 0, buffer, juce::jmin (ch, buffer.getNumChannels() - 1), 0, n);
             s.unit->process (buffer, bpm);
@@ -1958,7 +1980,16 @@ public:
                 }
             }
         }
+
+        if (inPeak <= kSilence && ! settling && buffer.getMagnitude (0, n) <= kSilence)
+        {
+            quietSamples_ += n;
+            asleep_ = quietSamples_ >= (juce::int64) (sr_ * 2.0);
+        }
+        else quietSamples_ = 0;
     }
+
+    bool isAsleep() const { return asleep_; }        // test / instrumentation helper
 
 private:
     struct Slot
@@ -1970,6 +2001,10 @@ private:
     mutable juce::SpinLock lock_;
     std::vector<Slot> slots_;
     juce::AudioBuffer<float> dry_;
+    static constexpr float kSilence = 1.0e-7f;       // -140 dBFS
+    std::atomic<bool> wake_ { true };                // any change to the rack: compute again
+    juce::int64 quietSamples_ = 0;                   // audio thread only
+    bool asleep_ = false;
     double sr_ = 0; int maxBlock_ = 512;
     /// lifetime token for applyStructuralChange's deferred second step: the
     /// rack is owned by the processor, which a 25 ms timer must never outlive

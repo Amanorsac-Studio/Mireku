@@ -1489,6 +1489,7 @@ static void testRenameMigration()
 //==============================================================================
 int main (int argc, char* argv[])
 {
+    JMSignatureProcessor::backgroundLoads() = false;      // these checks assert state straight after a load
     bool doNull = true, doMatrix = true, doRegression = true, doNeutral = true,
          doMigration = true, doMultiOut = true, rebaseline = false, measureApply = false;
     juce::File neutralLibrary (JM_LIBRARY_TESTDATA);

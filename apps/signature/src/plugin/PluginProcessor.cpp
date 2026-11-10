@@ -103,8 +103,83 @@ JMSignatureProcessor::JMSignatureProcessor()
     startTimerHz (30);
 }
 
+//==============================================================================
+// The worker that prepares a performance's instruments off the message thread.
+// One job at a time; a newer request replaces one that has not started.
+struct JMSignatureProcessor::PerformanceLoader : private juce::Thread
+{
+    struct Job
+    {
+        juce::var v;
+        juce::String name;
+        std::vector<juce::File> need;
+        int generation = 0;
+    };
+
+    explicit PerformanceLoader (JMSignatureProcessor& p) : juce::Thread ("MIREKU Performance Loader"), proc (p)
+    {
+        startThread (Priority::normal);
+    }
+    ~PerformanceLoader() override
+    {
+        signalThreadShouldExit();
+        wake.signal();
+        stopThread (20000);
+    }
+    void post (Job j)
+    {
+        {
+            const juce::ScopedLock sl (lock);
+            pending = std::make_unique<Job> (std::move (j));
+        }
+        wake.signal();
+    }
+
+private:
+    void run() override
+    {
+        while (! threadShouldExit())
+        {
+            std::unique_ptr<Job> job;
+            {
+                const juce::ScopedLock sl (lock);
+                job = std::move (pending);
+            }
+            if (job == nullptr) { wake.wait (500); continue; }
+
+            // Library::loadBundle reads files and enrols samples with the
+            // loader (its own lock); it touches no state the message thread
+            // changes, which is what makes it safe to call from here.
+            std::vector<BundlePtr> loaded;
+            for (auto& dir : job->need)
+            {
+                if (threadShouldExit()) return;
+                juce::String err;
+                if (auto b = proc.state.library.loadBundle (dir, err)) loaded.push_back (std::move (b));
+                else juce::Logger::writeToLog ("MIREKU: could not prepare " + dir.getFullPathName() + ": " + err);
+            }
+            juce::MessageManager::callAsync ([&p = proc, weak = std::weak_ptr<int> (proc.aliveToken_),
+                                              loaded = std::move (loaded), v = job->v, name = job->name,
+                                              generation = job->generation]
+            {
+                if (weak.expired()) return;
+                for (auto& b : loaded) p.rememberBundle (b);          // kept even if superseded
+                if (generation != p.perfGeneration_) return;          // a newer request took over
+                p.loadingName_.clear();
+                p.applyPerformanceVar (v, name);
+            });
+        }
+    }
+
+    JMSignatureProcessor& proc;
+    juce::CriticalSection lock;
+    std::unique_ptr<Job> pending;
+    juce::WaitableEvent wake;
+};
+
 JMSignatureProcessor::~JMSignatureProcessor()
 {
+    perfLoader_.reset();                 // joins the worker before anything it reads goes away
     aliveToken_.reset();                 // a pending rack hand-over timer must not find us gone
     stateChanged.removeChangeListener (this);
     stopTimer();
@@ -659,7 +734,7 @@ bool JMSignatureProcessor::setlistGo (int index)
     }
     setlist.current = index;
     setlist.currentScene = -1;                       // the song itself, no scene on top yet
-    return loadPerformancePreset (f);
+    return requestPerformance (f);
 }
 
 bool JMSignatureProcessor::pollPendingProgram()
@@ -807,6 +882,7 @@ void JMSignatureProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     // safety limiter, post master volume (R3/D) — one per output in use, so
     // every output leaves with the same look-ahead latency
     const bool limiterOn = limiterParam != nullptr && limiterParam->load() >= 0.5f;
+    masterPrePeak.store (outBufs[0].getMagnitude (0, n));          // before the limiter (diagnosis)
     for (int k = 0; k < kNumOutputs; ++k)
     {
         if (! used[k]) { outputPeak[(size_t) k].store (0.0f); continue; }
@@ -945,7 +1021,11 @@ void JMSignatureProcessor::renderChunk (juce::AudioBuffer<float>& buffer, int st
             outView.addFrom (0, 0, slotView, 0, 0, len, vol * std::cos (a) * kPanK);
             outView.addFrom (1, 0, slotView, 1, 0, len, vol * std::sin (a) * kPanK);
         }
-        if (start == 0) slotPeak[(size_t) i].store (slotView.getMagnitude (0, len));
+        // the slot meter reads what the slot SENDS to the mix (after its VOL),
+        // not the level inside its rack: a slot turned down no longer looks hot
+        if (start == 0)
+            slotPeak[(size_t) i].store (slotView.getMagnitude (0, len)
+                                        * juce::Decibels::decibelsToGain (vs.getCurrentValue(), -60.0f));
     }
     if (start == 0) totalVoices.store (voices);
 
@@ -1733,7 +1813,7 @@ bool JMSignatureProcessor::handleLearnClick (const juce::String& path)
 void JMSignatureProcessor::loadBundleIntoSlot (int slot, const BundleInfo& info)
 {
     juce::String err;
-    auto b = state.library.loadBundle (info.dir, err);
+    auto b = obtainBundle (info.dir, err);
     if (b == nullptr)
     {
         juce::Logger::writeToLog ("MIREKU: bundle load failed: " + err);
@@ -2323,6 +2403,7 @@ JMSignatureProcessor::applyBundleLevels (const authoring::MeasuredLevels& measur
         if (state.slots[(size_t) i].bundleDir != path) continue;
         juce::String err;
         auto b = state.library.loadBundle (measured.bundleDir, err);
+        rememberBundle (b);                      // the copy in the recent list is the old measurement
         if (b == nullptr)
         {
             out.note = "reload failed: " + err;
@@ -2419,7 +2500,7 @@ int JMSignatureProcessor::restoreSlotBundles()
         if (bi == nullptr) continue;
 
         juce::String err;
-        auto b = state.library.loadBundle (bi->dir, err);
+        auto b = obtainBundle (bi->dir, err);
         if (b == nullptr)
         {
             juce::Logger::writeToLog ("MIREKU: could not re-attach " + bi->dir.getFullPathName()
@@ -2641,7 +2722,73 @@ void JMSignatureProcessor::ensureFactoryPerformancePresets()
 
 bool JMSignatureProcessor::loadPerformancePreset (const juce::File& f)
 {
+    ++perfGeneration_;                   // a background request still in flight is superseded
+    loadingName_.clear();
     return applyPerformanceVar (sealed::readDocumentVar (f, sealed::performance), f.getFileNameWithoutExtension());
+}
+
+void JMSignatureProcessor::rememberBundle (const BundlePtr& b)
+{
+    if (b == nullptr) return;
+    recentBundles_.erase (std::remove_if (recentBundles_.begin(), recentBundles_.end(),
+                                          [&b] (const BundlePtr& r) { return r == b || r->dir == b->dir; }),
+                          recentBundles_.end());
+    recentBundles_.push_back (b);
+    while ((int) recentBundles_.size() > kRecentBundles) recentBundles_.erase (recentBundles_.begin());
+}
+
+BundlePtr JMSignatureProcessor::obtainBundle (const juce::File& dir, juce::String& err)
+{
+    // already playing in a slot: the same instrument is shared, not loaded twice
+    for (auto& e : engines)
+        if (auto b = e.bundle())
+            if (b->dir == dir) { rememberBundle (b); return b; }
+    // used a moment ago: going back to a performance costs nothing
+    for (auto& b : recentBundles_)
+        if (b->dir == dir) { auto keep = b; rememberBundle (keep); return keep; }
+    auto b = state.library.loadBundle (dir, err);
+    rememberBundle (b);
+    return b;
+}
+
+bool JMSignatureProcessor::requestPerformance (const juce::File& f)
+{
+    if (! backgroundLoads()) return loadPerformancePreset (f);
+    const auto v = sealed::readDocumentVar (f, sealed::performance);
+    if (! v.isObject()) return false;
+    const auto name = f.getFileNameWithoutExtension();
+
+    // which instruments does it need that nothing has in memory?
+    std::vector<juce::File> need;
+    if (auto* slots = v.getProperty ("slots", juce::var()).getArray())
+        for (int i = 0; i < juce::jmin (4, slots->size()); ++i)
+        {
+            const auto stored = slots->getReference (i).getProperty ("bundleDir", "").toString();
+            if (stored.isEmpty()) continue;
+            const BundleInfo* bi = state.library.find (juce::File (stored));
+            if (bi == nullptr) bi = state.library.findByStoredPath (stored);
+            if (bi == nullptr) continue;                     // a substitution: the apply step resolves it
+            bool have = false;
+            for (auto& e : engines) if (auto b = e.bundle()) have = have || b->dir == bi->dir;
+            for (auto& b : recentBundles_) have = have || b->dir == bi->dir;
+            for (auto& n : need) have = have || n == bi->dir;
+            if (! have) need.push_back (bi->dir);
+        }
+
+    const int generation = ++perfGeneration_;
+    // the instruments playing now stay in memory, so stepping back is instant
+    for (auto& e : engines) rememberBundle (e.bundle());
+    if (need.empty())
+    {
+        loadingName_.clear();
+        return applyPerformanceVar (v, name);                // nothing to prepare: it is instant
+    }
+    loadingName_ = name;
+    state.libraryNotice = "Loading " + name + "...";
+    stateChanged.sendChangeMessage();
+    if (perfLoader_ == nullptr) perfLoader_ = std::make_unique<PerformanceLoader> (*this);
+    perfLoader_->post ({ v, name, std::move (need), generation });
+    return true;
 }
 
 bool JMSignatureProcessor::applyPerformanceVar (const juce::var& v, const juce::String& name)
@@ -2662,8 +2809,17 @@ bool JMSignatureProcessor::applyPerformanceVar (const juce::var& v, const juce::
     if (v.hasProperty ("midiMap")) state.midiMap.fromVar (v.getProperty ("midiMap", juce::var()));
     if (auto* hp = v.getProperty ("hostParams", juce::var()).getDynamicObject())
         for (auto& prop : hp->getProperties())
-            if (auto* p = apvts.getParameter (prop.name.toString()))
+        {
+            // THE MASTER IS THE PLAYER'S (client, 2026-11-10: "the master volume
+            // should not be affected when changing performances"). A performance
+            // or a scene sets the instruments, never the room: master volume and
+            // the limiter switch stay where the player left them. A DAW session
+            // (setStateInformation) still restores both.
+            const auto id = prop.name.toString();
+            if (id == "masterVol" || id == "limiter") continue;
+            if (auto* p = apvts.getParameter (id))
                 p->setValueNotifyingHost ((float) (double) prop.value);
+        }
     state.performPresetName = v.getProperty ("name", name).toString();
     // RECALL MUST BRING THE INSTRUMENTS BACK (gap found 2026-10-26). A
     // performance snapshot stores each slot's .jmi path, and nothing ever
@@ -2786,7 +2942,7 @@ void JMSignatureProcessor::syncSlotToDsp (int i)
                 juce::Logger::writeToLog ("MIREKU: " + state.libraryNotice);
             }
             juce::String err;
-            if (auto b = dir.exists() ? state.library.loadBundle (dir, err) : nullptr)   // a folder, or a sealed file
+            if (auto b = dir.exists() ? obtainBundle (dir, err) : nullptr)   // a folder, or a sealed file
             {
                 eng.setBundle (b);
                 // keep engine params from state (setBundle resets env defaults)

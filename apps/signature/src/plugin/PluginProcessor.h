@@ -153,6 +153,7 @@ public:
 
     // meters / status (UI reads)
     std::atomic<float> masterPeakL { 0 }, masterPeakR { 0 };
+    std::atomic<float> masterPrePeak { 0 };       // OUT 1 before the limiter
     std::atomic<float> cpuLoad { 0 };
     std::atomic<int> totalVoices { 0 };
     std::array<std::atomic<float>, 4> slotPeak {};
@@ -172,6 +173,33 @@ public:
     juce::var slotPresetToVar (int slot, const juce::String& name) const;
 
     bool loadPerformancePreset (const juce::File& f);
+
+    //==========================================================================
+    // CHANGING PERFORMANCE WITHOUT STOPPING THE SCREEN (client, 2026-11-10:
+    // "the smoothness of the app and speed when changing performances").
+    //
+    // Loading a performance decrypts the head of every sample of up to four
+    // instruments (10 to 107 MB for James's 22), and that ran on the message
+    // thread: the window froze for 0.1 to 1.3 s on every change. The player's
+    // gestures now go through requestPerformance(): the instruments the
+    // performance needs and nobody has in memory are prepared on a worker
+    // thread while the CURRENT sound keeps playing, and the performance is
+    // applied the moment they are ready. An instrument already in a slot, or
+    // used recently, is not loaded again at all.
+    //
+    // loadPerformancePreset() stays the synchronous form (sessions, scenes,
+    // tests); it takes the same short cut for instruments already in memory.
+    /// Returns false only when the file cannot be read. With background loads
+    /// off (the self-checks) this is loadPerformancePreset().
+    bool requestPerformance (const juce::File& f);
+    /// The performance being prepared, empty when none is.
+    juce::String performanceLoading() const { return loadingName_; }
+    /// The self-checks assert state straight after a gesture, so they turn this off.
+    static bool& backgroundLoads() { static bool on = true; return on; }
+    /// An instrument by path: from a slot that has it, from the recent list,
+    /// else loaded here and now. Message thread.
+    BundlePtr obtainBundle (const juce::File& dir, juce::String& err);
+    int recentBundleCount() const { return (int) recentBundles_.size(); }      // test hook
     static juce::File performancePresetDir() { return Library::userPresetDir().getChildFile ("Performance"); }
     /// Already scanned as factory content by the browser; in AUTHORING mode it
     /// is also where a performance snapshot is SAVED.
@@ -536,6 +564,15 @@ private:
     float lastSuper_ = -1.0f;
     bool deferRacks_ = false;                        // performance load: racks swap 25 ms later, dry
     std::shared_ptr<int> aliveToken_ = std::make_shared<int> (0);
+
+    // background performance loads (see requestPerformance)
+    void rememberBundle (const BundlePtr& b);
+    std::vector<BundlePtr> recentBundles_;           // most recent last; message thread only
+    static constexpr int kRecentBundles = 8;
+    juce::String loadingName_;
+    int perfGeneration_ = 0;
+    struct PerformanceLoader;
+    std::unique_ptr<PerformanceLoader> perfLoader_;
 
 public:
     /// Sets a slot's OCTAVE (-2..+2). Notes the slot is holding are released

@@ -501,7 +501,7 @@ public:
                     proc_.makeSlotAudible (r.slot);
                 break;
             case Row::Performance:
-                proc_.loadPerformancePreset (r.file);
+                proc_.requestPerformance (r.file);            // prepared in the background, then applied
                 break;
         }
     }
@@ -1372,9 +1372,11 @@ public:
         auto m = meterR_.toFloat();
         g.setColour (Theme::muted.withAlpha (0.8f));
         g.setFont (Theme::value (8.0f));
-        const char* ticks[] = { "0", "-12", "-24", "-36", "-60" };
-        for (int i = 0; i < 5; ++i)
-            g.drawText (ticks[i], m.getRight() + 4.0f, m.getY() + m.getHeight() * (float) i / 4.6f - 5.0f,
+        // the ticks sit where the scale puts those levels (LevelMeter::fracForDb)
+        const int ticks[] = { 0, -6, -18, -36, -60 };
+        for (int t : ticks)
+            g.drawText (juce::String (t), m.getRight() + 4.0f,
+                        m.getBottom() - m.getHeight() * LevelMeter::fracForDb ((float) t) - 5.0f,
                         24.0f, 10.0f, juce::Justification::centredLeft, false);
     }
 
@@ -1497,7 +1499,10 @@ public:
 
         int want = 0;
         for (auto* p : panels_) want += p->naturalWidth();
-        const int avail = stripRight() - L::fxUnitX - (n + 1) * L::fxUnitGap;   // +1 leaves room for ADD
+        // ADD UNIT is 110 wide and used to be given 4 px: a full-width rack pushed
+        // it onto the OUTPUT column (client, 2026-11-10). Its room is reserved here.
+        const int addRoom = addBtn_.isVisible() ? kAddW + 2 * L::fxUnitGap : 0;
+        const int avail = stripRight() - L::fxUnitX - (n + 1) * L::fxUnitGap - addRoom;
         const double k = want > avail ? (double) avail / (double) want : 1.0;
 
         int total = 0;
@@ -1544,9 +1549,14 @@ public:
         for (int i = 0; i < panels_.size(); ++i)
             panels_[i]->setBounds (unitX_[i], L::fxUnitY, unitW_[i], L::fxUnitH);
         if (addBtn_.isVisible())
-            addBtn_.setBounds (juce::Rectangle<int> (110, 30)
-                                   .withCentre ({ addX_ + L::fxUnitW / 2,
+        {
+            // beside the last unit, centred in what is left, never under OUTPUT
+            const int room = stripRight() - addX_ - L::fxUnitGap;
+            const int cx = addX_ + juce::jmin (L::fxUnitW, juce::jmax (kAddW, room)) / 2;
+            addBtn_.setBounds (juce::Rectangle<int> (kAddW, 30)
+                                   .withCentre ({ juce::jmin (cx, stripRight() - L::fxUnitGap - kAddW / 2),
                                                   L::fxUnitY + L::fxUnitH / 2 }));
+        }
         master_->setBounds (stripRight(), L::fxMasterY, L::fxMasterW, L::fxMasterH);
     }
 
@@ -1670,6 +1680,7 @@ private:
     FxRackState* rackState_ = nullptr;
     FxRackDsp* rackDsp_ = nullptr;
     ux::PlateButton addBtn_;
+    static constexpr int kAddW = 110;
     juce::OwnedArray<FxUnitPanel> panels_;
     std::unique_ptr<MasterFxColumn> master_;
     /// Unit geometry, rebuilt by layOutUnits(). The single source for resized(),
@@ -1702,10 +1713,10 @@ public:
         kit::drawLedMeterV (g, bar, LevelMeter::norm (lvl_));
         g.setColour (Theme::muted.withAlpha (0.75f));
         g.setFont (Theme::value (8.0f));
-        const char* ticks[] = { "0", "-6", "-12", "-18", "-24", "-36", "-60" };
-        for (int i = 0; i < 7; ++i)
-            g.drawText (ticks[i], ladder.getX() - 2.0f,
-                        ladder.getY() + ladder.getHeight() * (float) i / 6.6f - 5.0f,
+        const int ticks[] = { 0, -6, -12, -18, -24, -36, -60 };
+        for (int t : ticks)
+            g.drawText (juce::String (t), ladder.getX() - 2.0f,
+                        bar.getBottom() - bar.getHeight() * LevelMeter::fracForDb ((float) t) - 5.0f,
                         ladder.getWidth() + 4.0f, 10.0f, juce::Justification::centredRight, false);
     }
 private:

@@ -650,6 +650,15 @@ public:
         const double bendStart = bendCur_;
         const double bendStep = (bendEnd - bendStart) / (double) juce::jmax (1, numSamples);
 
+        // AN ENGINE WITH NO VOICE RESTS (2026-11-10): once nothing has sounded
+        // for a second the voicing filters and the DC blockers have nothing
+        // left in them, and running them over silence is pure cost.
+        bool sounding = false;
+        for (auto& v : voices_) sounding = sounding || v.active;
+        if (sounding) idleSamples_ = 0;
+        else if (idleSamples_ >= (juce::int64) sr_) { bendCur_ = bendEnd; return; }
+        else idleSamples_ += numSamples;
+
         for (auto& v : voices_)
             if (v.active)
                 renderVoice (v, L, R, numSamples, bendStart, bendStep);
@@ -1059,6 +1068,7 @@ private:
     mutable juce::SpinLock lock_;
     BundlePtr bundle_;
     std::vector<BundlePtr> retired_;                 // previous bundles still played by a voice (SSS)
+    juce::int64 idleSamples_ = 0;                    // audio thread: samples since a voice last sounded
     std::vector<int> rrCounters_;
     std::array<Voice, kMaxVoices> voices_;
     std::array<std::atomic<float>, 8> engineParams_ {};

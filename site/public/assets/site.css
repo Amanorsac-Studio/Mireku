@@ -379,3 +379,10 @@ footer nav { display: flex; gap: 18px; flex-wrap: wrap; }
 .panel.team .team-dl { flex-basis: 100%; border-top: 1px solid var(--line); padding-top: 14px; }
 .panel.team .team-dl p { margin: 0 0 10px; }
 .panel.team .team-dl .msg { margin-top: 10px; }
+
+/* ---------- discount code beside the buy button ---------- */
+.code-field { max-width: 320px; margin: 0 auto 16px; text-align: left; }
+.acct .code-field { margin-left: 0; }
+.code-field input { text-transform: uppercase; letter-spacing: .08em; }
+.code-field input::placeholder { letter-spacing: .08em; opacity: .45; }
+.code-field .opt { letter-spacing: .04em; text-transform: none; font-family: Inter, sans-serif; font-weight: 400; }

@@ -160,6 +160,8 @@
       if (!o.onSale) return;
       buy.disabled = false;
       buy.textContent = 'Buy MIREKU · ' + o.price.display;
+      $('code-row').hidden = false;
+      if (!$('code').value) $('code').value = M.rememberedCode();
       $('notowned-text').textContent = 'One payment of ' + o.price.display + '. ' + (o.price.note || '') + ' Your licence key and downloads appear here straight after.';
       if (params.get('buy')) { history.replaceState(null, '', '/account'); params.delete('buy'); startBuy(); }
     });
@@ -169,7 +171,7 @@
     var buy = $('buy');
     buy.disabled = true;
     say($('buy-msg'), 'Opening the checkout…');
-    M.checkout().catch(function (e) { buy.disabled = false; say($('buy-msg'), e.message, 'err'); });
+    M.checkout($('code').value).catch(function (e) { buy.disabled = false; say($('buy-msg'), e.message, 'err'); });
   }
   $('buy').addEventListener('click', startBuy);
 

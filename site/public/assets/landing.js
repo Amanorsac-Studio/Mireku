@@ -47,6 +47,8 @@
     if (navBuy) navBuy.textContent = 'Get MIREKU';
     var form = document.getElementById('interest');
     if (form) form.hidden = true;               // on sale: the sign-up gives way to the button
+    var codeRow = document.querySelector('[data-code-row]');
+    if (codeRow) { codeRow.hidden = false; document.getElementById('code').value = window.Mireku.rememberedCode(); }
     btn.hidden = false;
     btn.disabled = false;
     btn.textContent = 'Buy MIREKU';
@@ -57,7 +59,7 @@
     btn.disabled = true;
     msg.className = 'msg';
     msg.textContent = 'Opening the checkout…';
-    window.Mireku.checkout().catch(function (e) {
+    window.Mireku.checkout(document.getElementById('code').value).catch(function (e) {
       btn.disabled = false;
       msg.className = 'msg err';
       msg.textContent = e.message;

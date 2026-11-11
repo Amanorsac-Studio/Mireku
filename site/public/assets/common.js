@@ -49,7 +49,17 @@
   /* Send a signed-in buyer to Paystack. Paystack returns them to
      <this site>/mireku?purchased=1, which forwards to the account page,
      where the key appears once Paystack's webhook has recorded the sale. */
-  function checkout() {
+  /* A discount code typed beside the buy button. Tidied the way the server
+     tidies it; kept for this tab so it survives the trip through sign-in.
+     The page only carries it: create-app-paystack looks the code up and
+     works out the price itself, and says so if the code is no good. */
+  function cleanCode(v) { return String(v || '').toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 40); }
+  function rememberCode(v) { try { v ? sessionStorage.setItem('mireku.code', v) : sessionStorage.removeItem('mireku.code'); } catch (e) {} }
+  function rememberedCode() { try { return cleanCode(sessionStorage.getItem('mireku.code')); } catch (e) { return ''; } }
+
+  function checkout(code) {
+    code = cleanCode(code);
+    rememberCode(code);
     var s = sb();
     if (!s) return Promise.reject(new Error('The page did not finish loading. Refresh and try again.'));
     return s.auth.getSession().then(function (r) {
@@ -62,7 +72,7 @@
           apikey: C.SUPABASE_KEY,
           Authorization: 'Bearer ' + session.access_token
         },
-        body: JSON.stringify({ app: C.APP })
+        body: JSON.stringify(code ? { app: C.APP, code: code } : { app: C.APP })
       }).then(function (res) {
         return res.json().catch(function () { return {}; }).then(function (out) {
           if (out.already_owned) { location.href = '/account'; return { redirected: true }; }
@@ -74,5 +84,5 @@
     });
   }
 
-  window.Mireku = { sb: sb, offer: offer, checkout: checkout };
+  window.Mireku = { sb: sb, offer: offer, checkout: checkout, cleanCode: cleanCode, rememberedCode: rememberedCode };
 })();

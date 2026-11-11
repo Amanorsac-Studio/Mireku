@@ -37,7 +37,7 @@ on:
     tags: ["mireku-v*"]
 
 concurrency:
-  group: mireku-release-${{ github.ref }}
+  group: mireku-release-2-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

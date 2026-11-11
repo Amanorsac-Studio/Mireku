@@ -165,7 +165,7 @@
       buy.textContent = 'Buy MIREKU · ' + o.price.display;
       $('code-row').hidden = false;
       if (!$('code').value) $('code').value = M.rememberedCode();
-      $('notowned-text').textContent = 'One payment of ' + o.price.display + ', shown in Ghana cedis at checkout. ' + (o.price.note || '') + ' Your licence key and downloads appear here straight after.';
+      $('notowned-text').textContent = 'One payment of ' + o.price.display + '. ' + (o.price.note || '') + ' Your licence key and downloads appear here straight after.';
       if (params.get('buy')) { history.replaceState(null, '', '/account'); params.delete('buy'); startBuy(); }
     });
   }

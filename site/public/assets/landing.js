@@ -109,4 +109,51 @@
       });
     });
   }
+
+  /* ---- Hear MIREKU ----
+     "Behold", played on MIREKU. The page tries to start it as soon as it
+     opens. Most browsers refuse a page that makes sound before the visitor
+     has touched it, so if that is refused the sound starts on their first
+     tap, click or key press anywhere on the page instead. It starts by
+     itself once per visit; after a visitor pauses it, only the button
+     starts it again. */
+  var hear = document.getElementById('hear');
+  if (hear) {
+    var song = new Audio('/audio/behold.mp3');
+    song.preload = 'auto';
+    var label = document.getElementById('hear-label');
+    var KEY = 'mireku.heard';
+    var asked = function () { try { return sessionStorage.getItem(KEY) === '1'; } catch (e) { return false; } };
+    var remember = function () { try { sessionStorage.setItem(KEY, '1'); } catch (e) {} };
+    var show = function () {
+      var on = !song.paused && !song.ended;
+      hear.setAttribute('aria-pressed', on ? 'true' : 'false');
+      hear.classList.toggle('on', on);
+      label.textContent = on ? 'Pause' : 'Hear MIREKU';
+    };
+    ['play', 'playing', 'pause', 'ended'].forEach(function (ev) { song.addEventListener(ev, show); });
+    var start = function () { var p = song.play(); return p && p.then ? p : Promise.resolve(); };
+
+    hear.addEventListener('click', function (e) {
+      e.stopPropagation();
+      remember();
+      if (song.paused) { start().then(function () { if (window.mirekuTrack) window.mirekuTrack('release_play', 'Behold (home page)'); }, function () {}); }
+      else song.pause();
+    });
+
+    if (!asked()) {
+      var first = function (e) {
+        if (e && hear.contains(e.target)) return;      // the button does its own work
+        off();
+        if (asked() || !song.paused) return;
+        remember();
+        start().catch(function () {});
+      };
+      var off = function () { ['pointerdown', 'keydown', 'touchend'].forEach(function (ev) { document.removeEventListener(ev, first, true); }); };
+      start().then(function () { remember(); }, function () {
+        // Refused before any touch: wait for the first one.
+        ['pointerdown', 'keydown', 'touchend'].forEach(function (ev) { document.addEventListener(ev, first, true); });
+      });
+    }
+  }
 })();

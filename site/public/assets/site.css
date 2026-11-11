@@ -418,3 +418,17 @@ footer nav { display: flex; gap: 18px; flex-wrap: wrap; }
 
 .announce { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 20px; }
 .announce h2 { margin-bottom: 6px; }
+
+/* ---------- Hear MIREKU ---------- */
+.hear { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; margin-top: 18px; }
+.hear-btn { display: inline-flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 18px 0 8px; border-radius: 999px; cursor: pointer;
+            border: 1px solid var(--gold-lo); background: rgba(217,164,65,.07); color: var(--gold-hi);
+            font: 700 15px/1 "Barlow SC", sans-serif; letter-spacing: .1em; text-transform: uppercase; }
+.hear-btn:hover { border-color: var(--gold); background: rgba(217,164,65,.14); color: #fff; }
+.hear-icon { width: 30px; height: 30px; border-radius: 50%; background: var(--gold); color: #1a1206; display: grid; place-items: center; }
+.hear-icon svg { width: 16px; height: 16px; }
+.hear-btn .i-pause, .hear-btn.on .i-play { display: none; }
+.hear-btn.on .i-pause { display: block; }
+.hear-btn.on .hear-icon { box-shadow: 0 0 0 0 rgba(217,164,65,.6); animation: pulse 1.6s ease-out infinite; }
+@keyframes pulse { to { box-shadow: 0 0 0 12px rgba(217,164,65,0); } }
+.hear-note { font-size: 13px; color: var(--muted); }

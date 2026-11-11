@@ -1,4 +1,4 @@
-MIREKU 1.2.0
+MIREKU 1.2.1
 Amanorsac Studio
 
 
@@ -8,7 +8,8 @@ Amanorsac Studio
      VST3 plug-in             C:\Program Files\Common Files\VST3\MIREKU.vst3
 
    ACTIVATION. MIREKU asks for its licence key the first time it opens.
-   The key is under My Apps at amanorsac.studio and in Amanorsac Hub. Type
+   The key is on your account page at jamesmireku.com, under My Apps at
+   amanorsac.studio, and in Amanorsac Hub. It starts with MIRE-. Type
    or paste it and select ACTIVATE. This needs an internet connection. The
    standalone and the plug-in share one activation: activate either and
    both are open on this computer.

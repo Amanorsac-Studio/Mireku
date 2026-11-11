@@ -1,8 +1,13 @@
-MIREKU 1.2.0 - test build
+MIREKU 1.2.1 - test build
 Amanorsac Studio
 
 
-0. WHAT CHANGED IN 1.2.0
+0. WHAT CHANGED IN 1.2.1
+
+   The release accepts MIREKU licence keys only (they start with MIRE-).
+   Nothing changes in a test build.
+
+   WHAT CHANGED IN 1.2.0
 
    Nothing in how a test build plays. The RELEASE of MIREKU now asks for a
    licence key and activates online. A test build does not: it is opened

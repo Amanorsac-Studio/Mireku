@@ -132,6 +132,33 @@ public:
      * R1: the live server. The environment override is for development only;
      * the DEFAULT in the shipped binary is the real address, never localhost.
      */
+    /**
+     * MIREKU's own keys, and no other product's. The server activates any
+     * Amanorsac key and the proof only repeats the key back, so this is the
+     * check that stops a key bought for another app from opening MIREKU.
+     * Keys are made by the server as PREFIX-XXXX-XXXX-XXXX, the prefix being
+     * the first four letters of the product id ("mireku" -> "MIRE"), the rest
+     * hexadecimal. MIREKU-specific: the reference client has no such check.
+     */
+    static juce::String normaliseKey (const juce::String& raw)
+    {
+        juce::String k;
+        for (auto ch : raw) if (! juce::CharacterFunctions::isWhitespace (ch)) k += ch;   // keys arrive wrapped by email
+        return k.toUpperCase();
+    }
+
+    static bool isProductKey (const juce::String& key)
+    {
+        if (key.length() != 19 || ! key.startsWith ("MIRE-")) return false;
+        for (int i = 5; i < 19; ++i)
+        {
+            const auto ch = key[i];
+            if (i % 5 == 4) { if (ch != '-') return false; continue; }
+            if (! ((ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'F'))) return false;
+        }
+        return true;
+    }
+
     static juce::String defaultBaseUrl()
     {
         auto fromEnv = juce::SystemStats::getEnvironmentVariable ("AMANORSAC_LICENSE_URL", {});
@@ -153,10 +180,18 @@ public:
      */
     void activate (const juce::String& licenseKeyIn, ResultCallback done)
     {
-        const auto key = licenseKeyIn.trim().toUpperCase();
+        const auto key = normaliseKey (licenseKeyIn);
         if (key.isEmpty())
         {
             if (done) done (LicenseResult::failure ("Enter the licence key.", "license_key_required"));
+            return;
+        }
+        // Refused here, before anything is sent: another product's key must
+        // never take a seat, nor unlock MIREKU.
+        if (! isProductKey (key))
+        {
+            if (done) done (LicenseResult::failure ("That is not a MIREKU key. MIREKU keys start with MIRE- and are on "
+                                                    "your account page at jamesmireku.com.", "wrong_product"));
             return;
         }
 
@@ -397,7 +432,7 @@ private:
      */
     void recomputeLicensedFlag()
     {
-        const bool licensed = licenseKey.isNotEmpty()
+        const bool licensed = isProductKey (licenseKey)
                               && proof.licensedAt (juce::Time::getCurrentTime().toMilliseconds());
         licensedFlag.store (licensed, std::memory_order_relaxed);
     }
@@ -473,6 +508,15 @@ private:
             return;
         }
         licenseKey = juce::String::fromUTF8 ((const char*) plain.getData(), (int) plain.getSize());
+
+        // A key from another product, stored by a build before this check
+        // (1.2.0): forget it and its proof, so the activation screen returns.
+        if (! isProductKey (normaliseKey (licenseKey)))
+        {
+            licenseKey.clear();
+            keyFile().deleteFile();
+            proofFile().deleteFile();
+        }
     }
 
     void clearLicense()

@@ -32,6 +32,40 @@
 
   if (!sb) { $('loading').textContent = 'The page did not finish loading. Refresh to try again.'; return; }
 
+  /* ---------------- the welcome sound ----------------
+     "Behold", played on MIREKU, greets someone who has just signed in. A
+     browser only lets a page make sound after the visitor has done
+     something, so the sound is made ready on the press of Sign in (arm) and
+     started once they are in (play). It plays once per sign-in, never on a
+     plain page load, and Stop is always beside it. */
+  var welcome = (function () {
+    var audio = null, armed = false;
+    function hide() { $('playing').hidden = true; }
+    return {
+      arm: function () {
+        try {
+          if (!audio) { audio = new Audio('/audio/behold.mp3'); audio.preload = 'auto'; audio.addEventListener('ended', hide); }
+          armed = true;
+          audio.muted = true;
+          var p = audio.play();                       // inside the press: this is what unlocks it
+          if (p && p.then) p.then(function () { if (armed && $('playing').hidden) { audio.pause(); audio.currentTime = 0; } }, function () {});
+        } catch (e) {}
+      },
+      play: function () {
+        if (!armed || !audio) return;
+        armed = false;
+        try {
+          audio.muted = false; audio.volume = 0.8; audio.currentTime = 0;
+          var p = audio.play();
+          $('playing').hidden = false;
+          if (p && p.catch) p.catch(hide);            // the browser said no: stay quiet, show nothing
+        } catch (e) { hide(); }
+      },
+      stop: function () { armed = false; if (audio) { try { audio.pause(); } catch (e) {} } hide(); }
+    };
+  })();
+  $('sound-stop').addEventListener('click', function () { welcome.stop(); });
+
   /* ---------------- signing in, up, and back in ---------------- */
   var mode = 'in';
   function setMode(m) {
@@ -61,6 +95,7 @@
     if (mode !== 'forgot' && pass.length < 8) return say(msg, 'Passwords are at least 8 characters.', 'err');
     $('go').disabled = true;
     say(msg, 'One moment…');
+    if (mode === 'in') welcome.arm();
 
     var done = function () { $('go').disabled = false; };
     if (mode === 'forgot') {
@@ -82,6 +117,7 @@
       sb.auth.signInWithPassword({ email: email, password: pass }).then(function (r) {
         done();
         if (!r.error) return;
+        welcome.stop();
         var t = /confirm/i.test(r.error.message)
           ? 'Your email is not confirmed yet. Open the link we sent you, then sign in.'
           : /invalid/i.test(r.error.message) ? 'That email and password do not match an account.' : r.error.message;
@@ -102,7 +138,7 @@
     });
   });
 
-  $('signout').addEventListener('click', function () { sb.auth.signOut(); });
+  $('signout').addEventListener('click', function () { welcome.stop(); sb.auth.signOut(); });
 
   /* ---------------- what the account holds ---------------- */
   var session = null;
@@ -111,6 +147,7 @@
   function load() {
     $('who').textContent = session.user.email || '';
     show('mine');
+    welcome.play();
     // The MIREKU team gets a door to the dashboard. The database decides who
     // that is (is_mireku_admin); for everyone else this button never appears.
     sb.rpc('is_mireku_admin').then(function (r) {

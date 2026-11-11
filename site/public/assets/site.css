@@ -406,3 +406,12 @@ footer nav { display: flex; gap: 18px; flex-wrap: wrap; }
 .acct .panel h2 { font-size: 20px; }
 #get .msg:empty { display: none; }
 .buybox .price .was { font-size: .5em; color: var(--muted); text-decoration-thickness: 2px; vertical-align: middle; }
+
+/* ---------- the welcome sound ---------- */
+.playing { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 14px 0 0; font-size: 14px; color: var(--muted); }
+.playing b { color: var(--gold-hi); font-weight: 600; }
+.eq { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; }
+.eq i { width: 3px; background: var(--gold); border-radius: 1px; animation: eq 1s ease-in-out infinite; }
+.eq i:nth-child(1) { height: 60%; } .eq i:nth-child(2) { height: 100%; animation-delay: .2s; } .eq i:nth-child(3) { height: 40%; animation-delay: .4s; }
+@keyframes eq { 50% { transform: scaleY(.35); } }
+.eq i { transform-origin: bottom; }

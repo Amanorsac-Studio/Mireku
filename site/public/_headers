@@ -16,6 +16,9 @@
 /images/*
   Cache-Control: public, max-age=604800
 
+/audio/*
+  Cache-Control: public, max-age=604800
+
 # Pages: always ask for a fresh copy, so an update shows on the next visit
 # instead of after the browser's cache expires. Cheap: an unchanged page
 # answers 304 Not Modified.

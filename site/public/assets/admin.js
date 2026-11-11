@@ -12,6 +12,8 @@
   var $ = function (id) { return document.getElementById(id); };
   var days = 30;
   var interest = [];
+  var accounts = [];
+  var accountsMissing = false;
 
   function show(id) { ['loading', 'denied', 'dash'].forEach(function (x) { $(x).hidden = x !== id; }); }
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
@@ -59,8 +61,8 @@
   });
 
   function load() {
-    Promise.all([sb.rpc('mireku_dashboard', { p_days: days }), sb.rpc('mireku_interest_list')]).then(function (rs) {
-      var d = rs[0], l = rs[1];
+    Promise.all([sb.rpc('mireku_dashboard', { p_days: days }), sb.rpc('mireku_interest_list'), sb.rpc('mireku_accounts_list')]).then(function (rs) {
+      var d = rs[0], l = rs[1], a = rs[2];
       var err = d.error || l.error;
       if (err) {
         if (/MIREKU team|permission|42501/i.test(err.message + ' ' + (err.code || ''))) {
@@ -73,6 +75,8 @@
         return show('loading');
       }
       interest = l.data || [];
+      accounts = a.data || [];
+      accountsMissing = !!a.error;
       draw(d.data);
       show('dash');
     });
@@ -125,6 +129,7 @@
       .forEach(function (x) { var c = el('div', 'tile'); c.appendChild(el('span', 'tile-label', x[0])); c.appendChild(el('b', 'tile-value', fmt.format(x[1] || 0))); e.appendChild(c); });
 
     drawInterest();
+    drawAccounts(d.accounts);
   }
 
   /* A column chart drawn in SVG: one gold series, a 0 baseline, a light
@@ -210,15 +215,53 @@
     t.appendChild(tb);
   }
 
-  $('csv').addEventListener('click', function () {
+  function when(iso) {
+    return new Date(iso).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' });
+  }
+
+  function drawAccounts(summary) {
+    var t = $('accounts');
+    var fromSite = accounts.filter(function (p) { return p.from_site; }).length;
+    $('a-count').textContent = accounts.length
+      ? fmt.format(fromSite) + ' made on jamesmireku.com' + (summary && summary.total ? ' (' + fmt.format(summary.confirmed) + ' confirmed their email)' : '') +
+        ' · ' + fmt.format(accounts.filter(function (p) { return p.owns_mireku; }).length) + ' own MIREKU'
+      : '';
+    $('csv-accounts').disabled = !accounts.length;
+    t.innerHTML = '';
+    if (accountsMissing) { $('a-count').textContent = ''; t.innerHTML = '<tbody><tr><td class="muted">Run the updated studio/supabase-mireku-dashboard.sql in Supabase to see accounts here.</td></tr></tbody>'; return; }
+    if (!accounts.length) { t.innerHTML = '<tbody><tr><td class="muted">No accounts yet. People who create an account on jamesmireku.com appear here.</td></tr></tbody>'; return; }
+    t.innerHTML = '<thead><tr><th scope="col">Signed up</th><th scope="col">Name</th><th scope="col">Email</th><th scope="col">Email confirmed</th><th scope="col">Owns MIREKU</th></tr></thead>';
+    var tb = el('tbody');
+    accounts.forEach(function (p) {
+      var tr = el('tr');
+      tr.appendChild(el('th', null, when(p.created_at)));
+      tr.appendChild(el('td', null, p.name || ''));
+      tr.appendChild(el('td', null, p.email));
+      tr.appendChild(el('td', p.confirmed ? null : 'muted', p.confirmed ? 'Yes' : 'Not yet'));
+      tr.appendChild(el('td', p.owns_mireku ? null : 'muted', p.owns_mireku ? 'Yes' : 'No'));
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb);
+  }
+
+  function downloadCsv(name, header, rows) {
     var q = function (v) { v = v == null ? '' : String(v); return /[",\n\r]/.test(v) || /^[=+\-@]/.test(v) ? '"' + v.replace(/^([=+\-@])/, "'$1").replace(/"/g, '""') + '"' : v; };
-    var lines = [['Signed up (UTC)', 'Name', 'Phone', 'Email'].join(',')].concat(interest.map(function (p) {
-      return [new Date(p.created_at).toISOString().replace('T', ' ').slice(0, 16), p.name, p.phone, p.email].map(q).join(',');
-    }));
-    var blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    var lines = [header.join(',')].concat(rows.map(function (r) { return r.map(q).join(','); }));
+    var blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
     var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-    a.download = 'mireku-waiting-list-' + new Date().toISOString().slice(0, 10) + '.csv';
+    a.download = name + '-' + new Date().toISOString().slice(0, 10) + '.csv';
     document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  }
+  var utc = function (iso) { return new Date(iso).toISOString().replace('T', ' ').slice(0, 16); };
+
+  $('csv-accounts').addEventListener('click', function () {
+    downloadCsv('mireku-accounts', ['Signed up (UTC)', 'Name', 'Email', 'Email confirmed', 'Owns MIREKU', 'Made on jamesmireku.com'],
+      accounts.map(function (p) { return [utc(p.created_at), p.name, p.email, p.confirmed ? 'yes' : 'no', p.owns_mireku ? 'yes' : 'no', p.from_site ? 'yes' : 'no']; }));
+  });
+
+  $('csv').addEventListener('click', function () {
+    downloadCsv('mireku-waiting-list', ['Signed up (UTC)', 'Name', 'Phone', 'Email'],
+      interest.map(function (p) { return [utc(p.created_at), p.name, p.phone, p.email]; }));
   });
 
   var resizeTimer;

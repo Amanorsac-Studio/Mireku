@@ -71,7 +71,7 @@
       });
     } else if (mode === 'up') {
       sb.auth.signUp({ email: email, password: pass,
-                       options: { data: { full_name: $('name').value.trim() }, emailRedirectTo: back } }).then(function (r) {
+                       options: { data: { full_name: $('name').value.trim(), signup_site: 'jamesmireku.com' }, emailRedirectTo: back } }).then(function (r) {
         done();
         if (r.error) return say(msg, r.error.message, 'err');
         if (window.mirekuTrack) window.mirekuTrack('account_created');

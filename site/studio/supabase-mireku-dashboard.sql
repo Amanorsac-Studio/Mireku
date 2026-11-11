@@ -182,6 +182,13 @@ begin
                                                 where app = 'mireku' and at >= since group by 1) x))
                     from public.app_downloads where app = 'mireku'),
 
+    -- Accounts made on jamesmireku.com (labelled at sign-up since 2026-11-11).
+    'accounts', (select jsonb_build_object(
+                          'total', count(*),
+                          'period', count(*) filter (where created_at >= since),
+                          'confirmed', count(*) filter (where email_confirmed_at is not null))
+                   from auth.users where raw_user_meta_data ->> 'signup_site' = 'jamesmireku.com'),
+
     'licences', jsonb_build_object(
         'keys', (select count(*) from public.purchases where app = 'mireku' and license_key is not null),
         'computers', (select count(*) from public.device_activations a
@@ -206,6 +213,30 @@ begin
 end $$;
 revoke all on function public.mireku_interest_list() from public, anon;
 grant execute on function public.mireku_interest_list() to authenticated;
+
+-- Accounts made on jamesmireku.com, and anyone who owns MIREKU wherever
+-- they signed up. Team only. Reads auth.users; changes nothing in it.
+create or replace function public.mireku_accounts_list()
+returns table (created_at timestamptz, email text, name text, confirmed boolean, owns_mireku boolean, from_site boolean)
+language plpgsql security definer stable set search_path = '' as $$
+begin
+  if not public.is_mireku_admin() then
+    raise exception 'This is for the MIREKU team.' using errcode = '42501';
+  end if;
+  return query
+    select u.created_at, u.email::text,
+           nullif(btrim(u.raw_user_meta_data ->> 'full_name'), ''),
+           u.email_confirmed_at is not null,
+           exists (select 1 from public.purchases p where p.user_id = u.id and p.app = 'mireku'),
+           coalesce(u.raw_user_meta_data ->> 'signup_site', '') = 'jamesmireku.com'
+      from auth.users u
+     where u.raw_user_meta_data ->> 'signup_site' = 'jamesmireku.com'
+        or exists (select 1 from public.purchases p where p.user_id = u.id and p.app = 'mireku')
+     order by u.created_at desc
+     limit 5000;
+end $$;
+revoke all on function public.mireku_accounts_list() from public, anon;
+grant execute on function public.mireku_accounts_list() to authenticated;
 
 -- ---------------------------------------------------------------------
 --  Who is on the team now. If someone is missing, they have no account

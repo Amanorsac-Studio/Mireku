@@ -235,10 +235,10 @@ async function hit(request, ctx) {
    under MIREKU/. A new release is a new file there and a new line here.
    --------------------------------------------------------------------- */
 export const FILES = {
-  windows: { key: 'MIREKU/Mireku-1.2.0-Windows.exe', name: 'Mireku-1.2.0-Windows.exe', type: 'application/vnd.microsoft.portable-executable', label: 'Windows installer', version: '1.2.0' },
-  mac:     { key: 'MIREKU/Mireku-1.2.0-macOS.pkg',   name: 'Mireku-1.2.0-macOS.pkg',   type: 'application/octet-stream', label: 'Mac installer', version: '1.2.0' },
+  windows: { key: 'MIREKU/Mireku-1.2.1-Windows.exe', name: 'Mireku-1.2.1-Windows.exe', type: 'application/vnd.microsoft.portable-executable', label: 'Windows installer', version: '1.2.1' },
+  mac:     { key: 'MIREKU/Mireku-1.2.1-macOS.pkg',   name: 'Mireku-1.2.1-macOS.pkg',   type: 'application/octet-stream', label: 'Mac installer', version: '1.2.1' },
   library: { key: 'MIREKU/MIREKU-Library.mirekupack', name: 'MIREKU-Library.mirekupack', type: 'application/octet-stream', label: 'Sound library', version: '1.0' },
-  guide:   { key: 'MIREKU/MIREKU-Installation-Guide.pdf', name: 'MIREKU-Installation-Guide.pdf', type: 'application/pdf', label: 'Installation guide', version: '1.2.0' }
+  guide:   { key: 'MIREKU/MIREKU-Installation-Guide.pdf', name: 'MIREKU-Installation-Guide.pdf', type: 'application/pdf', label: 'Installation guide', version: '1.2.1' }
 };
 const TICKET_HOURS = 24;   // long enough to finish, and to resume, a 5.8 GB download on a slow line
 

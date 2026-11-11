@@ -25,6 +25,10 @@ on:
         description: "Skip the macOS package (it bills ~10x; a Windows-only tester update does not need it)"
         type: boolean
         default: false
+      ios:
+        description: "Build ONLY the iPad app for the simulator and screenshot it (no Windows or macOS package)"
+        type: boolean
+        default: false
   push:
     tags: ["mireku-v*"]
 
@@ -33,7 +37,68 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # THE iPAD APP, first stage: prove it compiles for iOS and opens. Built for the
+  # simulator, unsigned, so it needs no Apple certificate; it is launched in an
+  # iPad simulator and the screen is saved as the artifact. A build for a real
+  # iPad or the App Store needs an iOS distribution certificate and a
+  # provisioning profile for com.mireku.app, which are not set up yet.
+  ipad-simulator:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.ios }}
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      AOFAS_STUDIO_KEY: ${{ secrets.AOFAS_STUDIO_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+
+      - name: Configure for iOS
+        run: |
+          cmake -S apps/signature -B build-ios -G Xcode \
+            -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+            -DMIREKU_PLAYER_BUILD=ON
+
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          cmake --build build-ios --config Release --target Mireku_Standalone -- \
+            -sdk iphonesimulator -arch arm64 ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO 2>&1 | tee build-ios.log | grep -E "error|warning: unused|BUILD|\*\*" || true
+          grep -q "BUILD SUCCEEDED" build-ios.log || { grep -E "error" build-ios.log | head -60; exit 1; }
+
+      - name: Run in an iPad simulator and take screenshots
+        run: |
+          APP="$(find build-ios -name 'MIREKU.app' -type d | head -1)"
+          [ -n "$APP" ] || { echo "no MIREKU.app was built"; exit 1; }
+          echo "app: $APP"; /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Info.plist"
+          mkdir -p ipad-shots
+          xcrun simctl list devices available | grep -i ipad || true
+          UDID="$(xcrun simctl list devices available | grep -i 'iPad Pro' | grep -oE '[0-9A-F-]{36}' | head -1)"
+          [ -n "$UDID" ] || UDID="$(xcrun simctl list devices available | grep -i 'iPad' | grep -oE '[0-9A-F-]{36}' | head -1)"
+          [ -n "$UDID" ] || { echo "no iPad simulator on this runner"; exit 1; }
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl install "$UDID" "$APP"
+          xcrun simctl launch "$UDID" com.mireku.app
+          sleep 25
+          xcrun simctl io "$UDID" screenshot ipad-shots/01-first-launch.png
+          sleep 10
+          xcrun simctl io "$UDID" screenshot ipad-shots/02-after-10s.png
+          xcrun simctl spawn "$UDID" launchctl list | grep -i mireku || echo "MIREKU is not running (it may have crashed)"
+          cp build-ios.log ipad-shots/ || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: MIREKU-iPad-simulator
+          path: |
+            ipad-shots/
+            build-ios.log
+          if-no-files-found: warn
+
   windows-installer:
+    if: ${{ !inputs.ios }}
     runs-on: windows-2025
     timeout-minutes: 90
     env:
@@ -79,7 +144,7 @@ jobs:
 
   macos-pkg:
     # A tag build always makes both. A hand-started build can leave macOS out.
-    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.windows_only }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.windows_only && !inputs.ios) }}
     runs-on: macos-15
     timeout-minutes: 120
     env:

@@ -410,8 +410,8 @@ private:
     {
        #if JUCE_WINDOWS
         auto base = juce::File::getSpecialLocation (juce::File::windowsLocalAppData);
-       #elif JUCE_MAC
-        // userApplicationDataDirectory is ~/Library on macOS; app state belongs
+       #elif JUCE_MAC || JUCE_IOS
+        // userApplicationDataDirectory is ~/Library on macOS and iOS; app state belongs
         // one level down, in Application Support.
         auto base = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
                         .getChildFile ("Application Support");

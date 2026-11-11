@@ -57,11 +57,13 @@
  #ifndef STATUS_SUCCESS
   #define STATUS_SUCCESS ((NTSTATUS) 0x00000000L)
  #endif
-#elif JUCE_MAC
+#elif JUCE_MAC || JUCE_IOS
  #include <CoreFoundation/CoreFoundation.h>
  #include <Security/Security.h>
  #include <CommonCrypto/CommonCryptor.h>
- #include <IOKit/IOKitLib.h>
+ #if JUCE_MAC
+  #include <IOKit/IOKitLib.h>
+ #endif
 #endif
 
 namespace amanorsacstudio
@@ -131,7 +133,7 @@ inline juce::MemoryBlock unprotectSecret (const juce::MemoryBlock& ciphertext)
 
 inline bool secretStorageIsEncrypted() { return true; }
 
-#elif JUCE_MAC
+#elif JUCE_MAC || JUCE_IOS
 
 // The Keychain would be the obvious DPAPI analogue, but a keychain item is
 // ACL'd to the *application* that created it - and a plugin runs inside
@@ -153,6 +155,73 @@ struct ScopedCF
 };
 
 inline constexpr uint8_t kSecretMagic[4] = { 'M', 'K', 'L', '1' };
+
+#if JUCE_IOS
+
+// iOS has no hardware UUID an app may read, and the app is the only program
+// that touches its own Keychain items, so the host problem described above
+// does not arise. The AES key is 32 random bytes kept in the Keychain as
+// "this device only": it is not in a backup and does not move to a new iPad,
+// so a copied licence file cannot be opened anywhere else (R7).
+inline bool deriveMachineKey (uint8_t (&key)[kCCKeySizeAES256])
+{
+    CFStringRef service = CFSTR ("com.mireku.app.license");
+    CFStringRef account = CFSTR ("storage-key-v1");
+
+    {
+        const void* k[] = { kSecClass, kSecAttrService, kSecAttrAccount, kSecReturnData, kSecMatchLimit };
+        const void* v[] = { kSecClassGenericPassword, service, account, kCFBooleanTrue, kSecMatchLimitOne };
+        ScopedCF<CFDictionaryRef> query { CFDictionaryCreate (kCFAllocatorDefault, k, v, 5,
+                                                              &kCFTypeDictionaryKeyCallBacks,
+                                                              &kCFTypeDictionaryValueCallBacks) };
+        CFTypeRef found = nullptr;
+        if (query.ref != nullptr && SecItemCopyMatching (query.ref, &found) == errSecSuccess && found != nullptr)
+        {
+            bool ok = false;
+            if (CFGetTypeID (found) == CFDataGetTypeID()
+                && CFDataGetLength ((CFDataRef) found) == (CFIndex) kCCKeySizeAES256)
+            {
+                std::memcpy (key, CFDataGetBytePtr ((CFDataRef) found), kCCKeySizeAES256);
+                ok = true;
+            }
+            CFRelease (found);
+            if (ok) return true;
+        }
+    }
+
+    uint8_t fresh[kCCKeySizeAES256];
+    if (SecRandomCopyBytes (kSecRandomDefault, sizeof (fresh), fresh) != errSecSuccess)
+        return false;
+    ScopedCF<CFDataRef> data { CFDataCreate (kCFAllocatorDefault, fresh, (CFIndex) sizeof (fresh)) };
+    if (data.ref == nullptr)
+        return false;
+
+    {
+        const void* k[] = { kSecClass, kSecAttrService, kSecAttrAccount };
+        const void* v[] = { kSecClassGenericPassword, service, account };
+        ScopedCF<CFDictionaryRef> old { CFDictionaryCreate (kCFAllocatorDefault, k, v, 3,
+                                                            &kCFTypeDictionaryKeyCallBacks,
+                                                            &kCFTypeDictionaryValueCallBacks) };
+        if (old.ref != nullptr) SecItemDelete (old.ref);
+    }
+
+    const void* k[] = { kSecClass, kSecAttrService, kSecAttrAccount, kSecValueData, kSecAttrAccessible };
+    const void* v[] = { kSecClassGenericPassword, service, account, data.ref,
+                        kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly };
+    ScopedCF<CFDictionaryRef> add { CFDictionaryCreate (kCFAllocatorDefault, k, v, 5,
+                                                        &kCFTypeDictionaryKeyCallBacks,
+                                                        &kCFTypeDictionaryValueCallBacks) };
+    if (add.ref == nullptr || SecItemAdd (add.ref, nullptr) != errSecSuccess)
+    {
+        juce::zeromem (fresh, sizeof (fresh));
+        return false;     // no Keychain: nothing is stored, the key is asked for again
+    }
+    std::memcpy (key, fresh, kCCKeySizeAES256);
+    juce::zeromem (fresh, sizeof (fresh));
+    return true;
+}
+
+#else
 
 inline juce::String platformUuid()
 {
@@ -194,6 +263,8 @@ inline bool deriveMachineKey (uint8_t (&key)[kCCKeySizeAES256])
     std::memcpy (key, raw.getData(), kCCKeySizeAES256);
     return true;
 }
+
+#endif
 
 // Blob layout: magic (4) || IV (16) || AES-256-CBC ciphertext, PKCS#7 padded.
 inline juce::MemoryBlock protectSecret (const juce::MemoryBlock& plaintext)
@@ -314,7 +385,7 @@ inline bool verifySignature (const void* message, size_t messageBytes,
     BCryptCloseAlgorithmProvider (algo, 0);
     return status == STATUS_SUCCESS;
 
-#elif JUCE_MAC
+#elif JUCE_MAC || JUCE_IOS
     // SecKey imports an EC public key as the X9.63 uncompressed point, which
     // is exactly the 0x04 || X || Y layout LicenseKeys.h already holds.
     ScopedCF<CFDataRef> keyData { CFDataCreate (kCFAllocatorDefault, publicKey65, (CFIndex) 65) };

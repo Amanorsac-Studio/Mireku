@@ -51,6 +51,13 @@ public:
                     b->setEnabled (false);
                 }
 
+       #if JUCE_IOS
+        // THE iPAD APP: JUCE's window is already full screen with no title bar,
+        // and there is no window to size, move or remember. Nothing below applies.
+        juce::ignoreUnused (firstLaunch);
+        return;
+       #endif
+
         // item E — all three window controls
         setTitleBarButtonsRequired (juce::DocumentWindow::minimiseButton
                                         | juce::DocumentWindow::maximiseButton

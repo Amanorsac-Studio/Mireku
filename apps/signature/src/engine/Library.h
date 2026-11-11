@@ -366,7 +366,13 @@ public:
         {
             const juce::int64 gb = 1024LL * 1024 * 1024;
             const juce::int64 ram = (juce::int64) juce::SystemStats::getMemorySizeInMegabytes() * 1024 * 1024;
+           #if JUCE_IOS
+            // An iPad ends an app that takes too large a share of its memory,
+            // and that share is smaller than a desktop's: a quarter, 512 MB to 2 GB.
+            return juce::jlimit (gb / 2, 2 * gb, ram / 4);
+           #else
             return juce::jlimit (gb, 6 * gb, ram * 35 / 100);
+           #endif
         }();
         return b;
     }

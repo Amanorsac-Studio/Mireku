@@ -33,7 +33,9 @@ set(JMI_FORMAT_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../../packages/jmi-format/cp
 # a developer machine without the key still builds and runs the tests.
 set(AOFAS_FORMAT_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../../packages/aofas-format/cpp")
 set(MIREKU_GENERATED_INCLUDE "${CMAKE_CURRENT_BINARY_DIR}/generated")
-find_program(MIREKU_NODE node REQUIRED DOC "node, for scripts/gen-studio-key.js")
+# NO_CMAKE_FIND_ROOT_PATH: node is a HOST tool; an iOS configure must not look
+# for it inside the iPhone SDK.
+find_program(MIREKU_NODE node REQUIRED NO_CMAKE_FIND_ROOT_PATH DOC "node, for scripts/gen-studio-key.js")
 execute_process(
     COMMAND "${MIREKU_NODE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/gen-studio-key.js"
             --out "${MIREKU_GENERATED_INCLUDE}/StudioKey.h" --allow-test
@@ -184,12 +186,27 @@ message(STATUS "MIREKU ASIO support    : ${JM_ASIO_ORIGIN}")
 #    has to be re-inserted. Nothing migrates this and nothing can. The client
 #    knows and accepts it pre-beta; it is free today and expensive the moment
 #    the beta is public, which is why both passes happened before the beta.
+# THE iPAD APP (2026-11-11): configure with -DCMAKE_SYSTEM_NAME=iOS. It is the
+# standalone instrument only, under its own bundle id (com.mireku.app, the id
+# registered for the App Store). No AUv3 yet: an AUv3 is a separate extension
+# that needs an app group to reach the library, and comes after the app itself.
+# The console test targets are desktop programs and are not configured for iOS.
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(MIREKU_IOS TRUE)
+    set(MIREKU_BUNDLE_ID com.mireku.app)
+    set(MIREKU_FORMATS Standalone)
+else()
+    set(MIREKU_IOS FALSE)
+    set(MIREKU_BUNDLE_ID com.mireku.mireku)
+    set(MIREKU_FORMATS VST3 AU Standalone)   # AU is ignored by JUCE on non-Apple platforms
+endif()
+
 juce_add_plugin(Mireku
     COMPANY_NAME              "Mireku"
     PLUGIN_MANUFACTURER_CODE  Mrek
     PLUGIN_CODE               Mrku
     PRODUCT_NAME              "MIREKU"
-    BUNDLE_ID                 com.mireku.mireku
+    BUNDLE_ID                 ${MIREKU_BUNDLE_ID}
     IS_SYNTH                  TRUE
     NEEDS_MIDI_INPUT          TRUE
     NEEDS_MIDI_OUTPUT         FALSE
@@ -205,7 +222,20 @@ juce_add_plugin(Mireku
     ICON_BIG                  resources/brand/rounded/MIREKU-1024.png
     ICON_SMALL                resources/brand/rounded/MIREKU-256.png
     COPY_PLUGIN_AFTER_BUILD   FALSE
-    FORMATS                   VST3 AU Standalone   # AU is ignored by JUCE on non-Apple platforms
+    FORMATS                   ${MIREKU_FORMATS}
+    # iOS only (JUCE ignores these elsewhere): an iPad app, landscape, full
+    # screen, that keeps sounding in the background, can receive the library
+    # file through the Files app, and may use Bluetooth MIDI keyboards.
+    TARGETED_DEVICE_FAMILY    2
+    IPAD_SCREEN_ORIENTATIONS  UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+    IPHONE_SCREEN_ORIENTATIONS UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+    REQUIRES_FULL_SCREEN      TRUE
+    STATUS_BAR_HIDDEN         TRUE
+    BACKGROUND_AUDIO_ENABLED  TRUE
+    FILE_SHARING_ENABLED      TRUE
+    DOCUMENT_BROWSER_ENABLED  TRUE
+    BLUETOOTH_PERMISSION_ENABLED TRUE
+    BLUETOOTH_PERMISSION_TEXT "MIREKU uses Bluetooth to connect wireless MIDI keyboards."
     VST3_CATEGORIES           Instrument)
 
 target_sources(Mireku PRIVATE
@@ -303,7 +333,10 @@ target_link_libraries(Mireku PRIVATE
 # The licence client verifies with Security.framework and derives its storage
 # key from the hardware UUID (IOKit). JUCE links both already; named here so the
 # dependency is stated where it is used.
-if(APPLE)
+if(MIREKU_IOS)
+    target_link_libraries(Mireku PRIVATE "-framework Security")
+    return()    # everything below is desktop test tooling
+elseif(APPLE)
     target_link_libraries(Mireku PRIVATE "-framework Security" "-framework IOKit")
 endif()
 

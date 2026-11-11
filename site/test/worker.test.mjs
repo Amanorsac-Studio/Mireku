@@ -136,18 +136,19 @@ globalThis.fetch = async (url, init) => {
   const u = String(url), b = init && init.body ? JSON.parse(init.body) : null;
   if (u.endsWith('/rpc/is_mireku_admin')) return new Response(JSON.stringify(teamOk), { status: 200 });
   if (u.endsWith('/rpc/mireku_interest_list')) return new Response(JSON.stringify(list), { status: 200 });
-  if (u.endsWith('/auth/v1/user')) return new Response(JSON.stringify({ email: 'amanorsac@gmail.com', user_metadata: { full_name: 'Nene Sackey' } }), { status: 200 });
+  if (u.endsWith('/auth/v1/user')) return new Response('{}', { status: 403 });   // not relied on
   if (u.includes('/rest/v1/mireku_mail_sent') && (!init.method || init.method === 'GET')) return tableThere ? new Response(JSON.stringify(sentLog), { status: 200 }) : new Response('{}', { status: 404 });
   if (u.endsWith('/rest/v1/mireku_mail_sent')) { logged.push(...b); return new Response('', { status: 201 }); }
   if (u.startsWith('https://api.resend.com')) { sent.push({ url: u, body: b }); return new Response('{}', { status: 200 }); }
   return new Response('{}', { status: 200 });
 };
-const say = (mode, jwt = 'team.jwt.x') => worker.fetch(new Request('https://jamesmireku.com/api/announce', { method: 'POST',
+const teamJwt = 'h.' + Buffer.from(JSON.stringify({ sub: 'a', email: 'Amanorsac@gmail.com', user_metadata: { full_name: 'Nene Sackey' } })).toString('base64url') + '.s';
+const say = (mode, jwt = teamJwt) => worker.fetch(new Request('https://jamesmireku.com/api/announce', { method: 'POST',
   headers: { 'content-type': 'application/json', ...(jwt ? { Authorization: 'Bearer ' + jwt } : {}) }, body: JSON.stringify({ mode }) }), env);
 sent = []; r = await say('count'); out = await r.json();
 check(r.status === 200 && out.waiting === 4 && out.with_email === 2 && out.already_sent === 1 && out.to_send === 1 && sent.length === 0, 'counting sends nothing and reports who is left');
 sent = []; r = await say('test'); out = await r.json();
-check(r.status === 200 && sent.length === 1 && sent[0].url.endsWith('/emails') && sent[0].body.to[0] === 'amanorsac@gmail.com' && logged.length === 0, 'a test goes to the person pressing the button, and nobody else');
+check(r.status === 200 && sent.length === 1 && sent[0].url.endsWith('/emails') && sent[0].body.to[0] === 'amanorsac@gmail.com' && sent[0].body.text.includes('Hello Nene,') && logged.length === 0, 'a test goes to the person pressing the button, and nobody else');
 sent = []; r = await say('send'); out = await r.json();
 check(r.status === 200 && out.sent === 1 && sent.length === 1 && sent[0].url.endsWith('/emails/batch') && sent[0].body.length === 1 && sent[0].body[0].to[0] === 'kofi@example.com', 'sending writes to everyone left, in one batch');
 check(logged.length === 1 && logged[0].email === 'kofi@example.com' && logged[0].campaign === CAMPAIGN.id, 'and records who was sent it');

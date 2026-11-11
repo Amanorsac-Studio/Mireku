@@ -274,6 +274,14 @@ async function mayDownload(jwt) {
   return owns.ok ? 'no' : 'error';
 }
 
+function claimsFrom(jwt) {
+  try {
+    const p = String(jwt).split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    const bytes = Uint8Array.from(atob(p + '='.repeat((4 - p.length % 4) % 4)), c => c.charCodeAt(0));
+    return JSON.parse(new TextDecoder().decode(bytes)) || {};
+  } catch (e) { return {}; }
+}
+
 function userIdFrom(jwt) {
   try {
     const p = String(jwt).split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
@@ -401,8 +409,9 @@ async function announce(request, env) {
     method: 'POST', headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + env.RESEND_API_KEY }, body: JSON.stringify(payload) });
 
   if (body.mode === 'test') {
-    const me = await sb('/auth/v1/user', { method: 'GET' });
-    const who = me.ok ? await me.json() : {};
+    // Read from the sign-in token itself. It is genuine: Supabase checked its
+    // signature a moment ago, when it answered is_mireku_admin for it.
+    const who = claimsFrom(jwt);
     if (!looksLikeEmail(String(who.email || ''))) return fail(400, 'Your account has no email address.');
     const r = await resend('/emails', launchLetter(String(who.email).toLowerCase(), (who.user_metadata && who.user_metadata.full_name) || ''));
     if (!r.ok) { console.error('test announce failed:', r.status, await r.text()); return fail(502, 'The test email could not be sent.'); }

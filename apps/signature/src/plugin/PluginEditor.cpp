@@ -151,6 +151,12 @@ JMSignatureEditor::JMSignatureEditor (JMSignatureProcessor& p)
         licenceGate_->setVisible (LicenceGatePanel::shouldShow (proc_));
     }
 
+   #if JUCE_IOS
+    // THE iPAD APP: a finger held still is a right-click (MIDI Learn, rename,
+    // the scene and macro menus). See ui/LongPress.h.
+    longPress_ = std::make_unique<LongPressRightClick> (*this);
+   #endif
+
     startTimerHz (15);
 
     // FIRST LAUNCH: no instruments anywhere means the library has not been

@@ -544,6 +544,50 @@ int main (int argc, char** argv)
     JMSignatureProcessor::persistMidiMap() = false;       // never write the player's own controller map
     if (argc >= 3 && juce::String (argv[1]) == "--check-performances")
         return checkPerformances (juce::File (juce::String::fromUTF8 (argv[2])));
+    // MirekuSnapshot --download-install <url> <folder>: what DOWNLOAD THE LIBRARY
+    // does, without the screen. Whatever is already in the ".part" file is kept,
+    // so a run after an interrupted one shows the download continuing.
+    if (argc >= 4 && juce::String (argv[1]) == "--download-install")
+    {
+        LibraryInstallPanel::libraryUrl() = juce::String::fromUTF8 (argv[2]);
+        const juce::File dest (juce::String::fromUTF8 (argv[3]));
+        std::printf ("\n== DOWNLOAD AND INSTALL ==\n    from %s\n    part file %s (%lld bytes already there)\n",
+                     argv[2], LibraryInstallPanel::partFile().getFullPathName().toRawUTF8(),
+                     (long long) LibraryInstallPanel::partFile().getSize());
+        // A finished install points MIREKU at what it installed and saves that.
+        // This is a test into a scratch folder, so the player's own settings
+        // file is put back exactly as it was when the run ends.
+        const auto settingsFile = Library::appDataDir().getChildFile ("settings.json");
+        const bool hadSettings = settingsFile.existsAsFile();
+        const auto settingsBefore = settingsFile.loadFileAsString();
+        struct PutBack
+        {
+            juce::File f; bool had; juce::String text;
+            ~PutBack() { if (had) f.replaceWithText (text); else f.deleteFile(); }
+        } putBack { settingsFile, hadSettings, settingsBefore };
+
+        JMSignatureProcessor proc;
+        LibraryInstallPanel panel (proc);
+        panel.setSize (LibraryInstallPanel::kWidth, LibraryInstallPanel::kHeight);
+        panel.setDestination (dest);
+        panel.downloadAndInstall();
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        juce::String last;
+        while (panel.running() || ! last.startsWith ("Installed"))
+        {
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+            if (panel.statusText() != last) { last = panel.statusText(); std::printf ("    %s\n", last.toRawUTF8()); }
+            if (! panel.running() && juce::Time::getMillisecondCounterHiRes() - t0 > 1500.0
+                && ! last.startsWith ("Installing") && ! last.startsWith ("Downloading") && ! last.startsWith ("Connecting"))
+                break;
+            if (juce::Time::getMillisecondCounterHiRes() - t0 > 600000.0) break;
+        }
+        std::printf ("    %s in %.1f s; part file left: %s\n", panel.finishedOk() ? "OK" : "NOT INSTALLED",
+                     (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0,
+                     LibraryInstallPanel::partFile().existsAsFile() ? "yes" : "no");
+        savePng (panel, "library-download.png");
+        return panel.finishedOk() ? 0 : 1;
+    }
     // MirekuSnapshot --licence [KEY | --deactivate]: the licence gate against the
     // LIVE server, offscreen. Only in a build configured with
     // -DMIREKU_LICENSED_BUILD=ON; it is a rehearsal of acceptance checks A1, A2,

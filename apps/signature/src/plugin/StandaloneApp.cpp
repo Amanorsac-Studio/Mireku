@@ -54,7 +54,10 @@ public:
        #if JUCE_IOS
         // THE iPAD APP: JUCE's window is already full screen with no title bar,
         // and there is no window to size, move or remember. Nothing below applies.
+        // Kiosk mode is what hides the iPad's status bar (clock, battery): the
+        // first simulator run drew it over the top edge of the header.
         juce::ignoreUnused (firstLaunch);
+        juce::Desktop::getInstance().setKioskModeComponent (this, false);
         return;
        #endif
 

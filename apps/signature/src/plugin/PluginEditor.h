@@ -9,6 +9,7 @@
 #include "../ui/EditPage.h"
 #include "../ui/TesterGatePanel.h"
 #include "../ui/LicenceGatePanel.h"
+#include "../ui/LongPress.h"
 
 namespace jm {
 
@@ -119,6 +120,7 @@ private:
     /// TEST BUILDS ONLY — the key screen. Null in a release build.
     std::unique_ptr<TesterGatePanel> gate_;
     std::unique_ptr<LicenceGatePanel> licenceGate_;   // release packages only
+    std::unique_ptr<LongPressRightClick> longPress_;  // the iPad app only
     bool showKeyboard_ = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (JMSignatureEditor)

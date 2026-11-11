@@ -307,6 +307,15 @@ if(JM_ASIO_INCLUDE_DIR)
     target_include_directories(Mireku PUBLIC "${JM_ASIO_INCLUDE_DIR}")
 endif()
 
+# THE LIBRARY DOWNLOAD (ui/LibraryInstall.h). With an https address here the
+# INSTALL LIBRARY panel offers DOWNLOAD THE LIBRARY and fetches the pack itself;
+# the iPad app is built with it. Empty (the default): no button, no request.
+set(MIREKU_LIBRARY_URL "" CACHE STRING "https address of 'MIREKU Library.mirekupack' for the in-app download")
+if(MIREKU_LIBRARY_URL)
+    target_compile_definitions(Mireku PUBLIC MIREKU_LIBRARY_URL="${MIREKU_LIBRARY_URL}")
+    message(STATUS "MIREKU library download: ${MIREKU_LIBRARY_URL}")
+endif()
+
 # The custom standalone app lives ONLY in the Standalone target.
 if(TARGET Mireku_Standalone)
     target_sources(Mireku_Standalone PRIVATE src/plugin/StandaloneApp.cpp)

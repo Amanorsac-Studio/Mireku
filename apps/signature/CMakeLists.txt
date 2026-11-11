@@ -195,10 +195,21 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     set(MIREKU_IOS TRUE)
     set(MIREKU_BUNDLE_ID com.mireku.app)
     set(MIREKU_FORMATS Standalone)
+    # The App Store refuses an icon with transparency, so the iPad app uses the
+    # client's square originals, not the rounded desktop set.
+    set(MIREKU_ICON_BIG   resources/brand/MIREKU-1024.png)
+    set(MIREKU_ICON_SMALL resources/brand/MIREKU-256.png)
+    # CFBundleVersion: every upload to App Store Connect needs a higher number
+    # than the last. The workflow passes its run number.
+    set(MIREKU_IOS_BUILD_NUMBER "1" CACHE STRING "iOS build number (CFBundleVersion)")
+    set(MIREKU_BUILD_VERSION "${MIREKU_IOS_BUILD_NUMBER}")
 else()
     set(MIREKU_IOS FALSE)
     set(MIREKU_BUNDLE_ID com.mireku.mireku)
     set(MIREKU_FORMATS VST3 AU Standalone)   # AU is ignored by JUCE on non-Apple platforms
+    set(MIREKU_ICON_BIG   resources/brand/rounded/MIREKU-1024.png)
+    set(MIREKU_ICON_SMALL resources/brand/rounded/MIREKU-256.png)
+    set(MIREKU_BUILD_VERSION "${PROJECT_VERSION}")
 endif()
 
 juce_add_plugin(Mireku
@@ -219,8 +230,9 @@ juce_add_plugin(Mireku
     # black box in the taskbar tile. JUCE builds the Windows .ico and the macOS
     # .icns from these two PNGs; the installer uses MIREKU-rounded.ico, packed
     # from the same set.
-    ICON_BIG                  resources/brand/rounded/MIREKU-1024.png
-    ICON_SMALL                resources/brand/rounded/MIREKU-256.png
+    ICON_BIG                  ${MIREKU_ICON_BIG}
+    ICON_SMALL                ${MIREKU_ICON_SMALL}
+    BUILD_VERSION             ${MIREKU_BUILD_VERSION}
     COPY_PLUGIN_AFTER_BUILD   FALSE
     FORMATS                   ${MIREKU_FORMATS}
     # iOS only (JUCE ignores these elsewhere): an iPad app, landscape, full
@@ -344,6 +356,12 @@ target_link_libraries(Mireku PRIVATE
 # dependency is stated where it is used.
 if(MIREKU_IOS)
     target_link_libraries(Mireku PRIVATE "-framework Security")
+    # `xcodebuild archive` collects only targets that install. The app does;
+    # the workflow sets SKIP_INSTALL=YES for everything else, or the archive
+    # comes out as a pile of libraries that cannot be uploaded.
+    set_target_properties(Mireku_Standalone PROPERTIES
+        XCODE_ATTRIBUTE_SKIP_INSTALL NO
+        XCODE_ATTRIBUTE_INSTALL_PATH "$(LOCAL_APPS_DIR)")
     return()    # everything below is desktop test tooling
 elseif(APPLE)
     target_link_libraries(Mireku PRIVATE "-framework Security" "-framework IOKit")

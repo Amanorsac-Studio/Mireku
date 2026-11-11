@@ -29,6 +29,10 @@ on:
         description: "Build ONLY the iPad app for the simulator and screenshot it (no Windows or macOS package)"
         type: boolean
         default: false
+      testflight:
+        description: "Build ONLY the iPad app for a real iPad, sign it and upload it to TestFlight"
+        type: boolean
+        default: false
   push:
     tags: ["mireku-v*"]
 
@@ -98,8 +102,110 @@ jobs:
             build-ios.log
           if-no-files-found: warn
 
+  # THE iPAD APP, for real iPads: archive, sign for the App Store and upload to
+  # App Store Connect, where it appears under TestFlight for com.mireku.app.
+  #
+  # SIGNING. No iOS certificate or provisioning profile is stored anywhere. The
+  # archive is built unsigned; `xcodebuild -exportArchive` then signs it with
+  # automatic signing through the App Store Connect API key the Mac job already
+  # uses (ASC_KEY_P8, ASC_KEY_ID, ASC_ISSUER_ID), which lets Apple issue a
+  # cloud-managed distribution certificate and the profile. The key needs the
+  # Admin or App Manager role for that.
+  #
+  # The iPad app is a paid App Store app: it has NO licence gate
+  # (MIREKU_LICENSED_BUILD stays OFF) and downloads its library on first launch.
+  ipad-testflight:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.testflight }}
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      AOFAS_STUDIO_KEY: ${{ secrets.AOFAS_STUDIO_KEY }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+
+      - name: Prepare the App Store Connect key
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          for v in ASC_KEY_P8 APPLE_TEAM_ID ASC_KEY_ID ASC_ISSUER_ID AOFAS_STUDIO_KEY; do
+            [ -n "${!v}" ] || { echo "::error::secret $v is empty - check the organisation secret's repository visibility"; exit 1; }
+          done
+          if printf '%s' "$ASC_KEY_P8" | grep -q "BEGIN PRIVATE KEY"; then printf '%s' "$ASC_KEY_P8" > "$RUNNER_TEMP/asc.p8"
+          else printf '%s' "$ASC_KEY_P8" | tr -d '[:space:]' | base64 --decode > "$RUNNER_TEMP/asc.p8"; fi
+          echo "ASC_KEY_PATH=$RUNNER_TEMP/asc.p8" >> "$GITHUB_ENV"
+
+      - name: Configure for iOS
+        run: |
+          cmake -S apps/signature -B build-ios -G Xcode \
+            -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+            -DCMAKE_XCODE_GENERATE_SCHEME=ON \
+            -DCMAKE_XCODE_ATTRIBUTE_SKIP_INSTALL=YES \
+            "-DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=$APPLE_TEAM_ID" \
+            -DMIREKU_PLAYER_BUILD=ON \
+            -DMIREKU_IOS_BUILD_NUMBER=${{ github.run_number }} \
+            -DMIREKU_LIBRARY_URL=https://library.amanorsac.studio/MIREKU-Library.mirekupack
+          if grep -q 'kIsTestKey = true' build-ios/generated/StudioKey.h; then
+            echo "::error::built with the TEST studio key; it could not open the sealed library"; exit 1
+          fi
+
+      - name: Archive (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild -project build-ios/Mireku.xcodeproj -scheme Mireku_Standalone \
+            -configuration Release -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/MIREKU.xcarchive" archive \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee archive.log | grep -E "error|ARCHIVE|\*\*" || true
+          grep -q "ARCHIVE SUCCEEDED" archive.log || { grep -E "error" archive.log | head -60; exit 1; }
+          APP="$RUNNER_TEMP/MIREKU.xcarchive/Products/Applications/MIREKU.app"
+          [ -d "$APP" ] || { echo "::error::the archive holds no MIREKU.app"; find "$RUNNER_TEMP/MIREKU.xcarchive" -maxdepth 4 | head -40; exit 1; }
+          for k in CFBundleIdentifier CFBundleShortVersionString CFBundleVersion MinimumOSVersion; do
+            printf '%s: ' "$k"; /usr/libexec/PlistBuddy -c "Print :$k" "$APP/Info.plist"
+          done
+
+      - name: Sign for the App Store and upload to TestFlight
+        run: |
+          set -o pipefail
+          cat > "$RUNNER_TEMP/export.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>$APPLE_TEAM_ID</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+            <key>uploadSymbols</key><true/>
+          </dict></plist>
+          EOF
+          sed -i '' 's/^          //' "$RUNNER_TEMP/export.plist"
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/MIREKU.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/export.plist" -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" 2>&1 | tee export.log | tail -40
+          grep -q "EXPORT SUCCEEDED" export.log || { echo "::error::the upload did not succeed"; exit 1; }
+
+      - name: Remove the key material
+        if: always()
+        run: rm -f "$RUNNER_TEMP/asc.p8"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: MIREKU-iPad-testflight-logs
+          path: |
+            archive.log
+            export.log
+          if-no-files-found: warn
+
   windows-installer:
-    if: ${{ !inputs.ios }}
+    if: ${{ !inputs.ios && !inputs.testflight }}
     runs-on: windows-2025
     timeout-minutes: 90
     env:
@@ -145,7 +251,7 @@ jobs:
 
   macos-pkg:
     # A tag build always makes both. A hand-started build can leave macOS out.
-    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.windows_only && !inputs.ios) }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.windows_only && !inputs.ios && !inputs.testflight) }}
     runs-on: macos-15
     timeout-minutes: 120
     env:

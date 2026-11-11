@@ -107,6 +107,22 @@ revoke all on public.mireku_downloads from anon, authenticated;
 grant insert (file, user_id, country) on public.mireku_downloads to authenticated;
 grant usage on sequence public.mireku_downloads_id_seq to authenticated;
 
+-- Who has been sent which email (the launch email to the waiting list), so
+-- nobody is written to twice. Team only, to read and to add.
+create table if not exists public.mireku_mail_sent (
+  campaign  text not null check (char_length(campaign) between 1 and 40),
+  email     text not null check (char_length(email) <= 200),
+  sent_at   timestamptz not null default now(),
+  primary key (campaign, email)
+);
+alter table public.mireku_mail_sent enable row level security;
+drop policy if exists mireku_mail_sent_team_read on public.mireku_mail_sent;
+create policy mireku_mail_sent_team_read on public.mireku_mail_sent for select to authenticated using ((select public.is_mireku_admin()));
+drop policy if exists mireku_mail_sent_team_add on public.mireku_mail_sent;
+create policy mireku_mail_sent_team_add on public.mireku_mail_sent for insert to authenticated with check ((select public.is_mireku_admin()));
+revoke all on public.mireku_mail_sent from anon, authenticated;
+grant select, insert on public.mireku_mail_sent to authenticated;
+
 -- ---------------------------------------------------------------------
 --  3 · What the dashboard reads. Team only; anyone else gets an error.
 -- ---------------------------------------------------------------------

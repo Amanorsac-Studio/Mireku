@@ -129,6 +129,7 @@
       .forEach(function (x) { var c = el('div', 'tile'); c.appendChild(el('span', 'tile-label', x[0])); c.appendChild(el('b', 'tile-value', fmt.format(x[1] || 0))); e.appendChild(c); });
 
     drawInterest();
+    announceCount();
     drawAccounts(d.accounts);
   }
 
@@ -195,6 +196,46 @@
       box.appendChild(row);
     });
   }
+
+  /* The launch email. Count first, test to yourself, then send; the server
+     writes to each address once and refuses anyone outside the team. */
+  function announce(mode) {
+    return sb.auth.getSession().then(function (r) {
+      return fetch('/api/announce', { method: 'POST',
+        headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + r.data.session.access_token },
+        body: JSON.stringify({ mode: mode }) });
+    }).then(function (res) { return res.json().catch(function () { return {}; }).then(function (out) { out.status = res.status; return out; }); });
+  }
+  var anMsg = function (t, k) { $('an-msg').className = 'msg' + (k ? ' ' + k : ''); $('an-msg').textContent = t; };
+  var problem = function (o) { return (o.error && o.error.message) || 'That did not work. Try again shortly.'; };
+  function announceCount() {
+    announce('count').then(function (o) {
+      if (!o.ok) { $('an-send').disabled = true; $('an-info').textContent = problem(o); return; }
+      $('an-info').textContent = fmt.format(o.with_email) + ' of ' + fmt.format(o.waiting) + ' people on the list gave an email. ' +
+        (o.already_sent ? fmt.format(o.already_sent) + ' have already been sent it. ' : '') +
+        'The rest left a phone number only: message them from the list above.';
+      $('an-send').disabled = !o.to_send;
+      $('an-send').textContent = o.to_send ? 'Send to ' + fmt.format(o.to_send) + (o.to_send === 1 ? ' person' : ' people') : 'Everyone has been sent it';
+      $('an-send').dataset.n = o.to_send;
+    }).catch(function () {});
+  }
+  $('an-test').addEventListener('click', function () {
+    $('an-test').disabled = true; anMsg('Sending a test…');
+    announce('test').then(function (o) {
+      $('an-test').disabled = false;
+      o.ok ? anMsg('A test is on its way to ' + o.to + '. Check it reads well before sending to the list.', 'ok') : anMsg(problem(o), 'err');
+    }).catch(function () { $('an-test').disabled = false; anMsg('The test could not be sent. Check your connection.', 'err'); });
+  });
+  $('an-send').addEventListener('click', function () {
+    var n = $('an-send').dataset.n;
+    if (!window.confirm('Send the launch email to ' + n + (n === '1' ? ' person' : ' people') + ' now? This cannot be undone.')) return;
+    $('an-send').disabled = true; anMsg('Sending…');
+    announce('send').then(function (o) {
+      if (o.sent != null) anMsg('Sent to ' + fmt.format(o.sent) + (o.sent === 1 ? ' person' : ' people') + (o.failed ? '. ' + fmt.format(o.failed) + ' could not be sent: press again to retry those.' : '.'), o.failed ? 'err' : 'ok');
+      else anMsg(problem(o), 'err');
+      announceCount();
+    }).catch(function () { anMsg('The email could not be sent. Check your connection, then press again: nobody is sent it twice.', 'err'); announceCount(); });
+  });
 
   function drawInterest() {
     var t = $('interest');

@@ -11,6 +11,8 @@
      POST /api/download     a signed link to an installer or the sound
                             library, for an account that owns MIREKU.
      GET  /download/<file>  the file itself, from the R2 bucket, resumable.
+     POST /api/announce     the launch email to the waiting list, sent by
+                            a member of the team from the dashboard.
 
    WHY IT ARRIVES HERE. MIREKU shares its Supabase project, and so its
    accounts, with amanorsac.studio, and a Supabase project hands its
@@ -126,7 +128,7 @@ export function letterHtml(o) {
       '<img src="' + SITE + '/images/email/mireku-badge.png" width="140" height="113" alt="MIREKU" ' +
       'style="display:block;width:140px;height:113px;border:0;border-radius:10px"></a></td></tr>' +
     '<tr><td style="background:#15120d;border:1px solid #3a2f1c;border-radius:16px;padding:34px 30px 22px">' +
-      '<p style="margin:0 0 12px;font-size:12px;letter-spacing:.18em;text-transform:uppercase;font-weight:700;color:#d9a441">MIREKU · Your account</p>' +
+      '<p style="margin:0 0 12px;font-size:12px;letter-spacing:.18em;text-transform:uppercase;font-weight:700;color:#d9a441">' + esc(o.eyebrow || 'MIREKU · Your account') + '</p>' +
       '<h1 style="margin:0 0 18px;font-size:27px;line-height:1.25;font-weight:700;color:#f3c96f">' + esc(o.heading) + '</h1>' +
       paras(o.intro, 'font-size:16.5px;line-height:1.65;color:#efe6d4') +
       (o.code ? '<p style="margin:4px 0 22px;font-size:30px;letter-spacing:.2em;font-weight:700;color:#f3c96f">' + esc(o.code) + '</p>' : '') +
@@ -336,9 +338,109 @@ async function serveFile(request, env, file, url) {
   return new Response(request.method === 'HEAD' ? null : obj.body, { status: 200, headers });
 }
 
+/* ---------------------------------------------------------------------
+   The launch email to the waiting list.
+
+   Sent only when a member of the MIREKU team presses the button on the
+   dashboard. The list is read AS that person (mireku_interest_list answers
+   the team only), so this endpoint can reach nobody's details by itself.
+   Only people who gave an email and ticked "message me about MIREKU" are
+   on the list at all. Each address gets the email once: what was sent is
+   written to mireku_mail_sent, and a second press skips those addresses.
+   "test" sends one copy to the person pressing the button and nobody else.
+   --------------------------------------------------------------------- */
+export const CAMPAIGN = { id: 'launch-1', code: 'MIREKU20', price: '$119', after: '$99' };
+
+export function launchLetter(to, name) {
+  const first = String(name || '').trim().split(/\s+/)[0];
+  const hello = first ? 'Hello ' + first + ',' : 'Hello,';
+  const link = SITE + '/?utm_source=waitlist#buy';
+  const intro = hello + '\n\nYou asked us to tell you when MIREKU is out. It is. James Mireku\'s keyboard sounds in one instrument: ' +
+    '78 instruments and 22 of his own performances, for Windows and Mac.\n\n' +
+    'Thank you for waiting. Here is $20 off: the launch price is ' + CAMPAIGN.price + ', and with your code it is ' + CAMPAIGN.after + '.';
+  const fine = 'Type the code in the Discount code box before you press Buy. ' +
+    'You are getting this because you asked jamesmireku.com to tell you when MIREKU is out. Reply to this email and we will take you off the list.';
+  const subject = 'MIREKU is out: your $20 off code';
+  return {
+    from: FROM, to: [to], reply_to: REPLY_TO, subject,
+    headers: { 'List-Unsubscribe': '<mailto:' + REPLY_TO + '?subject=Remove%20me%20from%20the%20MIREKU%20list>' },
+    text: intro + '\n\nYour code: ' + CAMPAIGN.code + '\n\n' + link + '\n\n' + fine + '\n\nMIREKU · made with Amanorsac Studio\n' + SITE + '\n',
+    html: letterHtml({ subject, preheader: '$20 off for everyone who waited: ' + CAMPAIGN.after + ' with code ' + CAMPAIGN.code + '.',
+                       eyebrow: 'MIREKU · It is out', heading: 'MIREKU is here.', intro, code: CAMPAIGN.code,
+                       cta: { href: link, label: 'Get MIREKU' }, fine })
+  };
+}
+
+/** The people to write to: an email, once each, not already sent this campaign. */
+export function recipients(rows, alreadySent) {
+  const seen = new Set((alreadySent || []).map(e => String(e).toLowerCase()));
+  const out = [];
+  for (const r of rows || []) {
+    const email = String(r.email || '').trim().toLowerCase();
+    if (!looksLikeEmail(email) || seen.has(email)) continue;
+    seen.add(email);
+    out.push({ email, name: r.name });
+  }
+  return out;
+}
+
+async function announce(request, env) {
+  if (!env.RESEND_API_KEY) return fail(503, 'MIREKU emails are not set up yet.');
+  const jwt = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
+  if (!jwt) return fail(401, 'Sign in first.');
+  let body = {};
+  try { body = await request.json(); } catch (e) {}
+  const sb = (path, init) => fetch(SUPABASE_URL + path, Object.assign({}, init, {
+    headers: Object.assign({ 'content-type': 'application/json', apikey: SUPABASE_KEY, Authorization: 'Bearer ' + jwt }, (init && init.headers) || {}) }));
+
+  const team = await sb('/rest/v1/rpc/is_mireku_admin', { method: 'POST', body: '{}' });
+  if (team.status === 401) return fail(401, 'Your session has ended. Sign in again.');
+  if (!team.ok || (await team.json()) !== true) return fail(403, 'This is for the MIREKU team.');
+
+  const resend = (path, payload) => fetch('https://api.resend.com' + path, {
+    method: 'POST', headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + env.RESEND_API_KEY }, body: JSON.stringify(payload) });
+
+  if (body.mode === 'test') {
+    const me = await sb('/auth/v1/user', { method: 'GET' });
+    const who = me.ok ? await me.json() : {};
+    if (!looksLikeEmail(String(who.email || ''))) return fail(400, 'Your account has no email address.');
+    const r = await resend('/emails', launchLetter(String(who.email).toLowerCase(), (who.user_metadata && who.user_metadata.full_name) || ''));
+    if (!r.ok) { console.error('test announce failed:', r.status, await r.text()); return fail(502, 'The test email could not be sent.'); }
+    return json({ ok: true, test: true, to: who.email });
+  }
+  if (body.mode !== 'send' && body.mode !== 'count') return fail(400, 'Say what to do: count, test or send.');
+
+  const list = await sb('/rest/v1/rpc/mireku_interest_list', { method: 'POST', body: '{}' });
+  if (!list.ok) return fail(502, 'The waiting list could not be read.');
+  const sentRes = await sb('/rest/v1/mireku_mail_sent?campaign=eq.' + CAMPAIGN.id + '&select=email', { method: 'GET' });
+  if (!sentRes.ok) return fail(503, 'Run the updated studio/supabase-mireku-dashboard.sql in Supabase first.');
+  const rows = await list.json(), sent = (await sentRes.json()).map(x => x.email);
+  const todo = recipients(rows, sent);
+  const withEmail = recipients(rows, []).length;
+  if (body.mode === 'count') return json({ ok: true, waiting: rows.length, with_email: withEmail, already_sent: withEmail - todo.length, to_send: todo.length });
+
+  let delivered = 0, failed = 0;
+  for (let i = 0; i < todo.length; i += 100) {            // Resend takes up to 100 emails in one request
+    const part = todo.slice(i, i + 100);
+    const r = await resend('/emails/batch', part.map(p => launchLetter(p.email, p.name)));
+    if (!r.ok) { failed += part.length; console.error('announce batch failed:', r.status, await r.text()); continue; }
+    delivered += part.length;
+    // Written straight after each batch is accepted, so a failure later never causes a second copy.
+    const log = await sb('/rest/v1/mireku_mail_sent', { method: 'POST', headers: { Prefer: 'return=minimal,resolution=ignore-duplicates' },
+      body: JSON.stringify(part.map(p => ({ campaign: CAMPAIGN.id, email: p.email }))) });
+    if (!log.ok) console.error('announce log refused:', log.status, await log.text());
+  }
+  return json({ ok: failed === 0, sent: delivered, failed, already_sent: withEmail - todo.length });
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    if (url.pathname === '/api/announce') {
+      if (request.method !== 'POST') return fail(405, 'Use POST.');
+      try { return await announce(request, env); }
+      catch (e) { console.error('announce:', e && e.message); return fail(500, 'Something went wrong.'); }
+    }
     if (url.pathname === '/api/download') {
       if (request.method !== 'POST') return fail(405, 'Use POST.');
       try { return await downloadTicket(request, env, ctx); }

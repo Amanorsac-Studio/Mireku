@@ -415,3 +415,6 @@ footer nav { display: flex; gap: 18px; flex-wrap: wrap; }
 .eq i:nth-child(1) { height: 60%; } .eq i:nth-child(2) { height: 100%; animation-delay: .2s; } .eq i:nth-child(3) { height: 40%; animation-delay: .4s; }
 @keyframes eq { 50% { transform: scaleY(.35); } }
 .eq i { transform-origin: bottom; }
+
+.announce { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 20px; }
+.announce h2 { margin-bottom: 6px; }

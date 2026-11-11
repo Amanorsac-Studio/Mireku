@@ -36,6 +36,9 @@ if [ "$TESTER" = "1" ]; then TAG="-Tester"; BUILD="$APP_DIR/build-mac-tester"; e
 # (High Sierra) and later, named Mireku-<v>-macOS-OlderMacs.pkg, own build folder.
 # The main installer stays universal and macOS 11 or later.
 OLDER="${MIREKU_MAC_OLDER:-0}"
+if [ "$OLDER" = "1" ] && [ "$TESTER" = "1" ]; then
+  echo "A test build has no older-Macs package. Nothing to do."; exit 0
+fi
 if [ "$OLDER" = "1" ]; then
   SUFFIX="-OlderMacs"; BUILD="$BUILD-older"; ARCHS="x86_64"; MINOS_WANT="10.13"; HOST_ARCHS="x86_64"
 else

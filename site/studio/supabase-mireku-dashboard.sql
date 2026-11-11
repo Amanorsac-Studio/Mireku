@@ -34,10 +34,12 @@ $$;
 revoke all on function public.is_mireku_admin() from public, anon;
 grant execute on function public.is_mireku_admin() to authenticated;
 
--- The two people. Add someone later the same way; remove with a delete.
+-- The team. Add someone later the same way; remove with a delete.
+-- James signs in as mrmireku23@gmail.com: his iCloud address did not
+-- receive the confirmation email (11 November 2026).
 insert into public.mireku_admins (user_id, email)
 select id, lower(email) from auth.users
- where lower(email) in ('amanorsac@gmail.com', 'j.mireku@icloud.com')
+ where lower(email) in ('amanorsac@gmail.com', 'j.mireku@icloud.com', 'mrmireku23@gmail.com')
 on conflict (user_id) do nothing;
 
 -- ---------------------------------------------------------------------

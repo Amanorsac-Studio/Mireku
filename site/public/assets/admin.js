@@ -90,14 +90,14 @@
     $('who').textContent = 'Signed in as ' + (user ? user.email : '') + ' · last ' + d.days + ' days, from ' + dayLabel(String(d.since).slice(0, 10), true);
 
     // headline tiles
-    var rev = (d.revenue || []).map(function (r) { return money(r.currency, r.cents); }).join(' + ') || '0';
+    var m = d.money, dl = d.downloads;
     var tiles = [
+      ['Takings', money('GHS', m.period), money('GHS', m.total) + ' all time'],
+      ['Sales', fmt.format(m.sales_period), fmt.format(d.sales.paid) + ' all time' + (m.discounts_period ? ' · ' + money('GHS', m.discounts_period) + ' off with coupons' : '')],
+      ['Downloads', fmt.format(dl.period), fmt.format(dl.people) + (dl.people === 1 ? ' person' : ' people') + ' · ' + fmt.format(dl.total) + ' all time'],
       ['Visitors', fmt.format(d.visits.visitors), fmt.format(d.visits.views) + ' page views'],
       ['Waiting for MIREKU', fmt.format(d.interest.total), '+' + fmt.format(d.interest.week) + ' this week'],
-      ['Sales', fmt.format(d.sales.paid), fmt.format(d.sales.paid_period) + ' in this period'],
-      ['Takings', rev, 'all time, before fees'],
-      ['Licence keys', fmt.format(d.licences.keys), (d.sales.free ? fmt.format(d.sales.free) + ' given free · ' : '') + (d.sales.trials ? fmt.format(d.sales.trials) + ' trials' : 'no trials')],
-      ['Computers using MIREKU', fmt.format(d.licences.computers), 'activated now']
+      ['Licence keys', fmt.format(d.licences.keys), fmt.format(d.licences.computers) + (d.licences.computers === 1 ? ' computer' : ' computers') + ' activated' + (d.sales.free ? ' · ' + fmt.format(d.sales.free) + ' given free' : '') + (d.sales.trials ? ' · ' + fmt.format(d.sales.trials) + ' trials' : '')]
     ];
     var t = $('tiles'); t.innerHTML = '';
     tiles.forEach(function (x) {
@@ -105,14 +105,16 @@
     });
 
     // charts: one measure each, one axis each
+    bars($('chart-takings'), d.daily, 'takings', function (r) { return money('GHS', r.takings); }, function (v) { return fmt.format(Math.round(v / 100)); });
+    bars($('chart-downloads'), d.daily, 'downloads', function (r) { return fmt.format(r.downloads) + (r.downloads === 1 ? ' download' : ' downloads'); });
     bars($('chart-visitors'), d.daily, 'visitors', function (r) { return fmt.format(r.visitors) + (r.visitors === 1 ? ' visitor' : ' visitors') + ' · ' + fmt.format(r.views) + ' page views'; });
     bars($('chart-signups'), d.daily, 'signups', function (r) { return fmt.format(r.signups) + (r.signups === 1 ? ' sign-up' : ' sign-ups'); });
 
     // the same numbers as a table
-    var dt = $('daily-table'); dt.innerHTML = '<thead><tr><th scope="col">Day</th><th scope="col">Visitors</th><th scope="col">Page views</th><th scope="col">Sign-ups</th></tr></thead>';
+    var dt = $('daily-table'); dt.innerHTML = '<thead><tr><th scope="col">Day</th><th scope="col">Visitors</th><th scope="col">Page views</th><th scope="col">Sign-ups</th><th scope="col">Downloads</th><th scope="col">Takings</th></tr></thead>';
     var tb = el('tbody');
     d.daily.slice().reverse().forEach(function (r) {
-      var tr = el('tr'); [dayLabel(r.day, true), fmt.format(r.visitors), fmt.format(r.views), fmt.format(r.signups)].forEach(function (v, i) { tr.appendChild(el(i ? 'td' : 'th', null, v)); }); tb.appendChild(tr);
+      var tr = el('tr'); [dayLabel(r.day, true), fmt.format(r.visitors), fmt.format(r.views), fmt.format(r.signups), fmt.format(r.downloads), money('GHS', r.takings)].forEach(function (v, i) { tr.appendChild(el(i ? 'td' : 'th', null, v)); }); tb.appendChild(tr);
     });
     dt.appendChild(tb);
 
@@ -120,6 +122,10 @@
     list($('l-sources'), d.sources, function (n) { return n; }, 'visitors');
     list($('l-countries'), d.countries, countryName, 'visitors');
     list($('l-devices'), d.devices, function (n) { return n.charAt(0).toUpperCase() + n.slice(1); }, 'visitors');
+    var PLAT = { windows: 'Windows', mac: 'Mac', 'mac-arm64': 'Mac (Apple silicon)', 'mac-x64': 'Mac (Intel)', unknown: 'Unknown' };
+    list($('l-platforms'), dl.platforms, function (n) { return PLAT[n] || n; }, 'downloads');
+    list($('l-dsources'), dl.sources, function (n) { return n === 'hub' ? 'Amanorsac Hub' : n === 'site' ? 'Website' : n; }, 'downloads');
+    list($('l-codes'), d.codes, function (n) { return n; }, 'sales');
 
     var ev = d.events || {};
     var e = $('events'); e.innerHTML = '';
@@ -131,11 +137,12 @@
 
   /* A column chart drawn in SVG: one gold series, a 0 baseline, a light
      grid, day labels kept sparse, and a tooltip on every day. */
-  function bars(box, rows, key, tipText) {
+  function bars(box, rows, key, tipText, axisFmt) {
     box.innerHTML = '';
     var W = box.clientWidth || 600, H = 200, padL = 34, padB = 26, padT = 10;
     var max = Math.max(1, Math.max.apply(null, rows.map(function (r) { return r[key]; })));
     var step = Math.pow(10, Math.floor(Math.log10(max))); var top = Math.ceil(max / step) * step; if (top < 4) top = 4;
+    var tickText = axisFmt || function (v) { return fmt.format(Math.round(v)); };
     var plotW = W - padL - 6, plotH = H - padB - padT, band = plotW / rows.length;
     var bw = Math.max(2, Math.min(24, band - 2));
     var ns = 'http://www.w3.org/2000/svg';
@@ -145,7 +152,7 @@
     [0, 0.5, 1].forEach(function (f) {
       var y = padT + plotH - f * plotH;
       svg.appendChild(mk('line', { x1: padL, x2: W - 6, y1: y, y2: y, class: f ? 'grid' : 'base' }));
-      var t = mk('text', { x: padL - 6, y: y + 4, class: 'axis', 'text-anchor': 'end' }); t.textContent = fmt.format(Math.round(top * f)); svg.appendChild(t);
+      var t = mk('text', { x: padL - 6, y: y + 4, class: 'axis', 'text-anchor': 'end' }); t.textContent = tickText(top * f); svg.appendChild(t);
     });
     var every = Math.ceil(rows.length / 6);
     rows.forEach(function (r, i) {

@@ -11,6 +11,9 @@
 --  existing is changed: not profiles, not is_admin(), not purchases, not
 --  the studio's own analytics. The MIREKU team is NOT made studio admin:
 --  being on mireku_admins opens MIREKU's numbers and nothing else.
+--  It READS three existing tables, for MIREKU's rows only: purchases
+--  (sales, takings, coupons), device_activations (computers) and
+--  app_downloads (downloads). It writes to none of them.
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -101,12 +104,19 @@ begin
     'daily', (select coalesce(jsonb_agg(jsonb_build_object(
                        'day', to_char(g, 'YYYY-MM-DD'),
                        'visitors', coalesce(v.visitors, 0), 'views', coalesce(v.views, 0),
-                       'signups', coalesce(i.n, 0)) order by g), '[]'::jsonb)
+                       'signups', coalesce(i.n, 0),
+                       'takings', coalesce(m.cents, 0), 'downloads', coalesce(w.n, 0)) order by g), '[]'::jsonb)
                 from generate_series(since, date_trunc('day', now()), interval '1 day') g
                 left join (select date_trunc('day', at) as day, count(*) views, count(distinct session_id) visitors
                              from public.mireku_page_views where at >= since group by 1) v on v.day = g
                 left join (select date_trunc('day', created_at) as day, count(*) n
-                             from public.mireku_interest where created_at >= since group by 1) i on i.day = g),
+                             from public.mireku_interest where created_at >= since group by 1) i on i.day = g
+                left join (select date_trunc('day', purchased_at) as day, sum(amount_cents) cents
+                             from public.purchases
+                            where app = 'mireku' and lower(currency) = 'ghs' and coalesce(kind, '') <> 'trial'
+                              and amount_cents > 0 and purchased_at >= since group by 1) m on m.day = g
+                left join (select date_trunc('day', at) as day, count(*) n
+                             from public.app_downloads where app = 'mireku' and at >= since group by 1) w on w.day = g),
 
     'pages', (select coalesce(jsonb_agg(jsonb_build_object('name', path, 'n', n) order by n desc), '[]'::jsonb)
                 from (select path, count(*) n from public.mireku_page_views where at >= since
@@ -144,6 +154,33 @@ begin
                   from (select currency, sum(amount_cents) total from public.purchases
                          where app = 'mireku' and coalesce(kind, '') <> 'trial' and amount_cents > 0
                          group by currency) x),
+
+    -- Paystack only: cedis, stored in pesewas. Before Paystack's fees and any refund.
+    'money', (select jsonb_build_object(
+                       'currency', 'GHS',
+                       'period', coalesce(sum(amount_cents) filter (where purchased_at >= since), 0),
+                       'total', coalesce(sum(amount_cents), 0),
+                       'sales_period', count(*) filter (where purchased_at >= since),
+                       'discounts_period', coalesce(sum(discount_cents) filter (where purchased_at >= since), 0))
+                from public.purchases
+               where app = 'mireku' and lower(currency) = 'ghs' and coalesce(kind, '') <> 'trial' and amount_cents > 0),
+
+    'codes', (select coalesce(jsonb_agg(jsonb_build_object('name', code, 'n', n) order by n desc), '[]'::jsonb)
+                from (select code, count(*) n from public.purchases
+                       where app = 'mireku' and code is not null and purchased_at >= since
+                       group by code order by n desc limit 8) x),
+
+    'downloads', (select jsonb_build_object(
+                           'total', count(*),
+                           'period', count(*) filter (where at >= since),
+                           'people', count(distinct user_id) filter (where at >= since),
+                           'platforms', (select coalesce(jsonb_agg(jsonb_build_object('name', pl, 'n', n) order by n desc), '[]'::jsonb)
+                                           from (select coalesce(platform, 'unknown') pl, count(*) n from public.app_downloads
+                                                  where app = 'mireku' and at >= since group by 1) x),
+                           'sources', (select coalesce(jsonb_agg(jsonb_build_object('name', so, 'n', n) order by n desc), '[]'::jsonb)
+                                         from (select coalesce(source, 'site') so, count(*) n from public.app_downloads
+                                                where app = 'mireku' and at >= since group by 1) x))
+                    from public.app_downloads where app = 'mireku'),
 
     'licences', jsonb_build_object(
         'keys', (select count(*) from public.purchases where app = 'mireku' and license_key is not null),

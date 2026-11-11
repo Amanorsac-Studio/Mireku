@@ -226,7 +226,7 @@
       });
   }
 
-  /* The three files, from jamesmireku.com's own Worker: it checks that this
+  /* The files, from jamesmireku.com's own Worker: it checks that this
      account owns MIREKU (or is on the team), then hands back a link that
      works for a day and can be resumed, which a 5.8 GB library needs. */
   var FILES = [
@@ -246,17 +246,52 @@
       b.addEventListener('click', function () { download(f.id, b, msgEl); });
       box.appendChild(b);
     });
+    // One button for everything this computer needs: its installer, the
+    // sound library, the guide and the read me. Not offered on a phone.
+    var plat = /Windows/i.test(navigator.userAgent) ? 'windows'
+             : /Macintosh|Mac OS X/i.test(navigator.userAgent) && !/iPhone|iPad|iPod/i.test(navigator.userAgent) && !(navigator.maxTouchPoints > 1) ? 'mac' : '';
+    if (plat) {
+      var all = document.createElement('button');
+      all.className = 'btn dl-all'; all.type = 'button';
+      all.textContent = 'Download all for ' + (plat === 'windows' ? 'Windows' : 'Mac') + ' · about 6 GB';
+      all.addEventListener('click', function () { downloadAll([plat, 'library', 'guide', 'readme'], all, msgEl); });
+      box.appendChild(all);
+    }
     say(msgEl, 'Install MIREKU first, then download the sound library and open it with Install Library in MIREKU\'s gear menu. The library is large: use Wi-Fi if you can.');
+  }
+
+  function ticket(file) {
+    return fetch('/api/download', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + session.access_token },
+      body: JSON.stringify({ file: file })
+    }).then(function (r) { return r.json().catch(function () { return {}; }); });
+  }
+
+  /* Asks for a link to each file first, then starts them one after another.
+     A browser may ask once whether this site may download several files. */
+  function downloadAll(files, b, msgEl) {
+    b.disabled = true;
+    say(msgEl, 'Preparing your downloads…');
+    Promise.all(files.map(ticket)).then(function (outs) {
+      b.disabled = false;
+      var bad = outs.filter(function (o) { return !o.url; })[0];
+      if (bad) return say(msgEl, (bad.error && bad.error.message) || 'The downloads could not be started. Try again shortly.', 'err');
+      outs.forEach(function (o, i) {
+        setTimeout(function () {
+          var a = document.createElement('a');
+          a.href = o.url; a.download = o.name; a.style.display = 'none';
+          document.body.appendChild(a); a.click(); a.remove();
+        }, i * 1200);
+      });
+      say(msgEl, outs.length + ' downloads are starting. If your browser asks whether this site may download several files, choose Allow. If one is missing, use its own button.', 'ok');
+    }).catch(function () { b.disabled = false; say(msgEl, 'The downloads could not be started. Check your connection.', 'err'); });
   }
 
   function download(file, b, msgEl) {
     b.disabled = true;
     say(msgEl, 'Preparing your download…');
-    fetch('/api/download', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + session.access_token },
-      body: JSON.stringify({ file: file })
-    }).then(function (r) { return r.json().catch(function () { return {}; }); })
+    ticket(file)
       .then(function (out) {
         b.disabled = false;
         if (!out.url) return say(msgEl, (out.error && out.error.message) || 'The download could not be started. Try again shortly.', 'err');

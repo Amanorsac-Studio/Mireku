@@ -386,3 +386,4 @@ footer nav { display: flex; gap: 18px; flex-wrap: wrap; }
 .code-field input { text-transform: uppercase; letter-spacing: .08em; }
 .code-field input::placeholder { letter-spacing: .08em; opacity: .45; }
 .code-field .opt { letter-spacing: .04em; text-transform: none; font-family: Inter, sans-serif; font-weight: 400; }
+.dl .dl-all { flex-basis: 100%; }

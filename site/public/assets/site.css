@@ -405,3 +405,4 @@ footer nav { display: flex; gap: 18px; flex-wrap: wrap; }
 .more .devices { margin-top: 6px; }
 .acct .panel h2 { font-size: 20px; }
 #get .msg:empty { display: none; }
+.buybox .price .was { font-size: .5em; color: var(--muted); text-decoration-thickness: 2px; vertical-align: middle; }

@@ -26,7 +26,9 @@
      with the planned price, so the team can check it before launch. Nothing
      can be bought through it: the buy button only says it is a preview. */
   var PREVIEW = /[?&]preview=sale\b/.test(location.search);
-  var PREVIEW_PRICE = { display: 'GHS 1,417', usd: '$119', note: 'Mobile money, bank transfer or a local card.' };
+  var PREVIEW_PRICE = { display: '$119', list: '$199', note: 'Mobile money, bank transfer or a local card.' };
+
+  function dollars(cents) { var d = cents / 100; return '$' + (d % 1 ? d.toFixed(2) : String(d)); }
 
   var offerPromise = null;
   function offer() {
@@ -48,13 +50,16 @@
       .catch(function () { return null; });
     offerPromise = Promise.all([cat, pay]).then(function (x) {
       var app = x[0], p = x[1] && x[1].paystack;
-      var onSale = !!(C.SELLING && app && app.status === 'available' && !app.free && p && p.amount > 0);
+      var onSale = !!(C.SELLING && app && app.status === 'available' && !app.free && app.price_cents > 0 && p && p.amount > 0);
       return {
         app: app,
         onSale: onSale,
         platforms: (app && app.platforms) || [],
         version: (app && app.version) || null,
-        price: onSale ? { display: p.display, usd: p.usd_display, note: p.note } : null
+        // The site speaks in dollars; Paystack shows the cedi amount at checkout.
+        price: onSale ? { display: dollars(app.price_cents),
+                          list: app.list_price_cents > app.price_cents ? dollars(app.list_price_cents) : '',
+                          note: p.note } : null
       };
     });
     return offerPromise;

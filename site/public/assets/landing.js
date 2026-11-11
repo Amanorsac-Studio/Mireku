@@ -39,8 +39,11 @@
 
   window.Mireku.offer().then(function (o) {
     if (!o.onSale) return;
-    price.textContent = o.price.display;
-    sub.textContent = (o.price.usd ? 'About ' + o.price.usd + '. ' : '') + 'One payment. ' + (o.price.note || '');
+    price.textContent = '';
+    if (o.price.list) { var was = document.createElement('s'); was.className = 'was'; was.textContent = o.price.list; price.appendChild(was); price.appendChild(document.createTextNode(' ')); }
+    price.appendChild(document.createTextNode(o.price.display));
+    if (o.price.list) price.setAttribute('aria-label', o.price.display + ', was ' + o.price.list);
+    sub.textContent = 'One payment. Paystack shows the amount in Ghana cedis at checkout.';
     note.textContent = o.price.display + ' · ' + (o.price.note || 'Mobile money, bank transfer or a local card.');
     heroLabel.textContent = 'Buy MIREKU · ' + o.price.display;
     var navBuy = document.querySelector('[data-nav-buy]');

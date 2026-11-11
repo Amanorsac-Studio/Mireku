@@ -57,7 +57,8 @@ jobs:
         run: |
           cmake -S apps/signature -B build-ios -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
-            -DMIREKU_PLAYER_BUILD=ON
+            -DMIREKU_PLAYER_BUILD=ON \
+            -DMIREKU_LIBRARY_URL=https://library.amanorsac.studio/MIREKU-Library.mirekupack
 
       - name: Build for the simulator
         run: |

@@ -30,10 +30,21 @@ VERSION="$(sed -n 's/^project(Mireku VERSION \([0-9.]*\).*/\1/p' "$APP_DIR/CMake
 # sold. Own build folder, so it can never be mistaken for the release.
 TESTER="${MIREKU_TESTER:-0}"
 if [ "$TESTER" = "1" ]; then TAG="-Tester"; BUILD="$APP_DIR/build-mac-tester"; else TAG=""; BUILD="$APP_DIR/build-mac"; fi
-PKG="$OUT/Mireku-$VERSION$TAG-macOS.pkg"
+# MIREKU_MAC_OLDER=1 builds the SECOND installer, for older Macs (client,
+# 2026-11-11: many of his players in Ghana are on older Macs, and he wants it as
+# its own file so the main installer is not touched). Intel only, macOS 10.13
+# (High Sierra) and later, named Mireku-<v>-macOS-OlderMacs.pkg, own build folder.
+# The main installer stays universal and macOS 11 or later.
+OLDER="${MIREKU_MAC_OLDER:-0}"
+if [ "$OLDER" = "1" ]; then
+  SUFFIX="-OlderMacs"; BUILD="$BUILD-older"; ARCHS="x86_64"; MINOS_WANT="10.13"; HOST_ARCHS="x86_64"
+else
+  SUFFIX=""; ARCHS="arm64;x86_64"; MINOS_WANT="11.0"; HOST_ARCHS="arm64,x86_64"
+fi
+PKG="$OUT/Mireku-$VERSION$TAG-macOS$SUFFIX.pkg"
 SIGN="${MIREKU_SKIP_SIGN:-0}"; [ "$SIGN" = "1" ] && SIGN=no || SIGN=yes
 
-echo "MIREKU $VERSION  (signing: $SIGN, tester: $TESTER)"
+echo "MIREKU $VERSION  (signing: $SIGN, tester: $TESTER, older Macs: $OLDER -> $ARCHS, macOS $MINOS_WANT+)"
 
 # ---------------------------------------------------------------- configure
 # Xcode signs at build time so JUCE's hardened-runtime entitlements are applied
@@ -57,7 +68,7 @@ else                         TESTER_ARG=(-DMIREKU_TESTER_BUILD=OFF -DMIREKU_LICE
 # tools, the library sealed. The studio key comes from AOFAS_STUDIO_KEY (the
 # organisation secret in CI) or ~/.amanorsac/studio-keys.json on a studio Mac.
 cmake -S "$APP_DIR" -B "$BUILD" -G Xcode \
-  "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13 \
+  "-DCMAKE_OSX_ARCHITECTURES=$ARCHS" "-DCMAKE_OSX_DEPLOYMENT_TARGET=$MINOS_WANT" \
   -DMIREKU_PLAYER_BUILD=ON "${TESTER_ARG[@]}" "${SIGN_ARGS[@]}"
 if grep -q 'kIsTestKey = true' "$BUILD/generated/StudioKey.h"; then
   echo "REFUSED: built with the TEST studio key (set AOFAS_STUDIO_KEY); it could not open the sealed library"; exit 1
@@ -76,14 +87,21 @@ for B in "$APP" "$VST3" "$AU"; do
   [ -d "$B" ] || { echo "missing build product: $B"; exit 1; }
 done
 
-# OLDER MACS (2026-11-11): the Intel half must really be built for macOS 10.13,
-# read from the binary, not assumed from the flag. (The Apple silicon half is
-# always 11.0 or later: no older macOS runs on that hardware.)
+# The minimum system and the architectures, read from each binary, not assumed
+# from the flags: the older-Macs package must really be Intel for macOS 10.13,
+# and the main package must really carry both architectures.
 for B in "$APP/Contents/MacOS/MIREKU" "$VST3/Contents/MacOS/MIREKU" "$AU/Contents/MacOS/MIREKU"; do
+  HAVE="$(lipo -archs "$B")"
   MINOS="$(vtool -arch x86_64 -show-build "$B" 2>/dev/null | awk '/minos/ {print $2; exit}')"
   [ -n "$MINOS" ] || MINOS="$(otool -arch x86_64 -l "$B" | awk '/LC_VERSION_MIN_MACOSX/ {f=1} f && /version/ {print $2; exit}')"
-  echo "  minimum macOS (Intel) of $(basename "$(dirname "$(dirname "$(dirname "$B")")")"): $MINOS"
-  case "$MINOS" in 10.13*) ;; *) echo "the Intel build does not target macOS 10.13"; exit 1;; esac
+  echo "  $(basename "$(dirname "$(dirname "$(dirname "$B")")")"): architectures [$HAVE], minimum macOS (Intel) $MINOS"
+  case "$MINOS" in "$MINOS_WANT"*) ;; *) echo "the Intel build targets macOS $MINOS, not $MINOS_WANT"; exit 1;; esac
+  if [ "$OLDER" = "1" ]; then
+    [ "$HAVE" = "x86_64" ] || { echo "the older-Macs build must be Intel only, found [$HAVE]"; exit 1; }
+  else
+    case "$HAVE" in *arm64*) ;; *) echo "the main build has no Apple silicon half"; exit 1;; esac
+    case "$HAVE" in *x86_64*) ;; *) echo "the main build has no Intel half"; exit 1;; esac
+  fi
 done
 
 # A release must not carry the test-key public key (Licence Standard R2), and a
@@ -143,7 +161,10 @@ AUVAL_OK=0
 for attempt in 1 2 3 4 5; do
   killall -9 AudioComponentRegistrar >/dev/null 2>&1 || true
   sleep 3
-  auval -v aumu Mrku Mrek > "$OUT/auval.txt" 2>&1 || true
+  # the older-Macs AU is Intel only, so on an Apple silicon build machine it is
+  # validated by the Intel auval (through Rosetta)
+  if [ "$OLDER" = "1" ] && [ "$(uname -m)" = "arm64" ]; then arch -x86_64 auval -v aumu Mrku Mrek > "$OUT/auval.txt" 2>&1 || true
+  else auval -v aumu Mrku Mrek > "$OUT/auval.txt" 2>&1 || true; fi
   if grep -q "AU VALIDATION SUCCEEDED" "$OUT/auval.txt"; then AUVAL_OK=1; break; fi
   echo "auval attempt $attempt: component not found yet, retrying..."
 done
@@ -198,7 +219,9 @@ cp "$APP_DIR/installer/mac/conclusion.html" "$RES/"
 cp "$LICENCE_SRC" "$RES/licence.txt"
 cp "$README_SRC" "$RES/readme.txt"
 if [ "$TESTER" = "1" ]; then TITLE_SUFFIX=" test build"; else TITLE_SUFFIX=""; fi
-sed -e "s/@VERSION@/$VERSION/g" -e "s|<title>MIREKU $VERSION</title>|<title>MIREKU $VERSION$TITLE_SUFFIX</title>|" \
+[ "$OLDER" = "1" ] && TITLE_SUFFIX="$TITLE_SUFFIX for older Macs"
+sed -e "s/@VERSION@/$VERSION/g" -e "s/@MINOS@/$MINOS_WANT/g" -e "s/@HOSTARCHS@/$HOST_ARCHS/g" \
+    -e "s|<title>MIREKU $VERSION</title>|<title>MIREKU $VERSION$TITLE_SUFFIX</title>|" \
     "$APP_DIR/installer/mac/distribution.xml" > "$STAGE/distribution.xml"
 
 productbuild --distribution "$STAGE/distribution.xml" --package-path "$PKGS" --resources "$RES" "$STAGE/unsigned.pkg"

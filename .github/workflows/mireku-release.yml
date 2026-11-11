@@ -265,7 +265,15 @@ jobs:
     if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.windows_only && !inputs.ios && !inputs.testflight) }}
     runs-on: macos-15
     timeout-minutes: 120
+    # TWO Mac installers for a release (2026-11-11): the main one (universal,
+    # macOS 11+) and a separate one for older Macs (Intel, macOS 10.13+). A test
+    # build makes only the main one.
+    strategy:
+      fail-fast: false
+      matrix:
+        older: ${{ fromJSON(inputs.tester && '["0"]' || '["0","1"]') }}
     env:
+      MIREKU_MAC_OLDER: ${{ matrix.older }}
       MIREKU_TESTER: ${{ inputs.tester && '1' || '0' }}
       AOFAS_STUDIO_KEY: ${{ secrets.AOFAS_STUDIO_KEY }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -328,7 +336,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: MIREKU-macOS
+          name: MIREKU-macOS${{ matrix.older == '1' && '-OlderMacs' || '' }}
           path: |
             apps/signature/release/*.pkg
             apps/signature/release/auval.txt

@@ -15,8 +15,8 @@
     <title>MIREKU @VERSION@</title>
     <organization>com.amanorsac</organization>
     <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
-    <options customize="always" require-scripts="false" hostArchitectures="arm64,x86_64"/>
-    <volume-check><allowed-os-versions><os-version min="10.13"/></allowed-os-versions></volume-check>
+    <options customize="always" require-scripts="false" hostArchitectures="@HOSTARCHS@"/>
+    <volume-check><allowed-os-versions><os-version min="@MINOS@"/></allowed-os-versions></volume-check>
 
     <welcome file="welcome.html" mime-type="text/html"/>
     <license file="licence.txt" mime-type="text/plain"/>

@@ -1363,7 +1363,7 @@ int main (int argc, char** argv)
         // windows, so they cannot be captured by a component snapshot)
         {
             auto* pm = dynamic_cast<juce::PopupMenu::LookAndFeelMethods*> (&lnf);
-            const int mx = L::gearX, my = L::iconY + L::iconD + 6, mw = 300, mh = 262;
+            const int mx = L::gearX, my = L::iconY + L::iconD + 6, mw = 300, mh = 132;
             juce::Image menuImg (juce::Image::ARGB, mw, mh, true, juce::SoftwareImageType());
             {
             juce::Graphics g (menuImg);
@@ -1377,10 +1377,6 @@ int main (int argc, char** argv)
                                    "Preferences...", {}, nullptr, nullptr);
             pm->drawPopupMenuItem (g, row (30), false, true, false, false, false,
                                    "Rescan Library", {}, nullptr, nullptr);
-            pm->drawPopupMenuItem (g, row (9), true, true, false, false, false, {}, {}, nullptr, nullptr);
-            pm->drawPopupMenuSectionHeader (g, row (26), "Licence");
-            pm->drawPopupMenuItem (g, row (30), false, true, false, false, false,
-                                   "Activate licence...", {}, nullptr, nullptr);
             }   // the Graphics must go out of scope before the image is read back
             auto img = ed->createComponentSnapshot (ed->getLocalBounds(), false, 1.0f);
             { juce::Graphics gw (img); gw.drawImageAt (menuImg, mx, my); }

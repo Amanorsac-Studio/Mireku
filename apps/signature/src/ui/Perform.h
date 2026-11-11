@@ -2192,8 +2192,10 @@ public:
             g.setColour (! i.licensed ? Theme::warnRed : i.connectSoon ? Theme::gold : Theme::okGreen);
             g.fillEllipse (86.0f, r.getCentreY() - 4.0f, 8.0f, 8.0f);
             g.setColour (i.licensed ? Theme::goldHi : Theme::muted);
-            g.drawText (! i.licensed ? "NOT ACTIVATED" : i.connectSoon ? "CONNECT TO THE INTERNET SOON" : "LICENCE ACTIVE",
-                        100, 0, 240, getHeight(), juce::Justification::centredLeft, false);
+            // short enough to end before the KEYBOARD plate; the licence panel
+            // (key icon) carries the full sentence and the days remaining
+            g.drawText (! i.licensed ? "NOT ACTIVATED" : i.connectSoon ? "GO ONLINE SOON" : "LICENCE ACTIVE",
+                        100, 0, 160, getHeight(), juce::Justification::centredLeft, false);
         }
         if (proc_.state.library.usedFallback())
         {

@@ -116,6 +116,7 @@ r = await ask('library', jwtFor('22222222-2222-3333-4444-555555555555')); check(
 team = true;
 r = await ask('windows', jwtFor('33333333-2222-3333-4444-555555555555')); check(r.status === 200, 'the team gets links for testing');
 r = await ask('library'); check(r.status === 401, 'nobody signed in gets no link');
+r = await ask('guide', jwtFor('33333333-2222-3333-4444-555555555555')); check(r.status === 200 && /^\/download\/guide\?/.test((await r.json()).url), 'the installation guide has a link too');
 r = await ask('secrets', jwtFor('33333333-2222-3333-4444-555555555555')); check(r.status === 404, 'an unknown file name is refused');
 r = await worker.fetch(new Request('https://jamesmireku.com/api/download', { method: 'POST', body: '{}' }), { ...denv, DOWNLOAD_SECRET: '' });
 check(r.status === 503, 'without its secret it says downloads are not set up');

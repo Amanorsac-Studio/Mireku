@@ -230,14 +230,15 @@
   var FILES = [
     { id: 'windows', label: 'Windows', size: '44 MB' },
     { id: 'mac',     label: 'Mac',     size: '136 MB' },
-    { id: 'library', label: 'Sound library', size: '5.8 GB' }
+    { id: 'library', label: 'Sound library', size: '5.8 GB' },
+    { id: 'guide',   label: 'Installation guide', size: '9 MB' }
   ];
   function downloads(box, msgEl) {
     box = box || $('downloads'); msgEl = msgEl || $('dl-msg');
     box.innerHTML = '';
     FILES.forEach(function (f) {
       var b = document.createElement('button');
-      b.className = f.id === 'library' ? 'btn ghost' : 'btn'; b.type = 'button';
+      b.className = f.id === 'library' || f.id === 'guide' ? 'btn ghost' : 'btn'; b.type = 'button';
       b.textContent = f.label + ' · ' + f.size;
       b.addEventListener('click', function () { download(f.id, b, msgEl); });
       box.appendChild(b);

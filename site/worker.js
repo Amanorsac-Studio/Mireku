@@ -152,7 +152,10 @@ export function buildLetter(body) {
   const to = String(type === 'email_change' && d.new_email ? d.new_email : user.email || '').toLowerCase();
   if (!letter || !looksLikeEmail(to) || !isOurs(d.redirect_to)) return null;
   const hash = type === 'email_change' && d.token_hash_new ? d.token_hash_new : d.token_hash;
-  const link = SUPABASE_URL + '/auth/v1/verify?token=' + encodeURIComponent(hash || '') +
+  // The button points at this site, which passes the visitor on to Supabase
+  // (confirmRedirect below). A link to another domain than the sender's is
+  // something spam filters mark an email down for.
+  const link = SITE + '/auth/confirm?token=' + encodeURIComponent(hash || '') +
                '&type=' + encodeURIComponent(type) + '&redirect_to=' + encodeURIComponent(d.redirect_to);
   const code = letter.label ? '' : String(d.token || '');
   const text = letter.intro + '\n\n' + (letter.label ? link : 'Your code: ' + code) + '\n\n' +
@@ -160,6 +163,17 @@ export function buildLetter(body) {
   const html = letterHtml({ subject: letter.subject, preheader: letter.intro.slice(0, 120), heading: letter.heading,
                             intro: letter.intro, code, cta: letter.label ? { href: link, label: letter.label } : null, fine: letter.fine });
   return { from: FROM, to: [to], reply_to: REPLY_TO, subject: letter.subject, text, html };
+}
+
+/* GET /auth/confirm: the link in a MIREKU account email. Passes the visitor
+   on to Supabase's own verify address with the same token. Nothing is
+   decided here; only a known kind of link, back to this site, is passed on,
+   so the address cannot be used to bounce people anywhere else. */
+export function confirmRedirect(url) {
+  const token = url.searchParams.get('token') || '', type = url.searchParams.get('type') || '', back = url.searchParams.get('redirect_to') || '';
+  if (!/^[A-Za-z0-9_-]{8,200}$/.test(token) || !LETTERS[type] || !isOurs(back)) return null;
+  return SUPABASE_URL + '/auth/v1/verify?token=' + encodeURIComponent(token) + '&type=' + encodeURIComponent(type) +
+         '&redirect_to=' + encodeURIComponent(back);
 }
 
 async function authEmail(request, env) {
@@ -473,6 +487,11 @@ async function resendReason(r) {
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    if (url.pathname === '/auth/confirm' && (request.method === 'GET' || request.method === 'HEAD')) {
+      const to = confirmRedirect(url);
+      if (!to) return new Response('This link is not valid. Ask for a new one at jamesmireku.com/account.', { status: 400, headers: { 'content-type': 'text/plain; charset=utf-8' } });
+      return new Response(null, { status: 302, headers: { location: to, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } });
+    }
     if (url.pathname === '/api/announce') {
       if (request.method !== 'POST') return fail(405, 'Use POST.');
       try { return await announce(request, env); }

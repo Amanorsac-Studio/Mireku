@@ -1,6 +1,6 @@
 // Tests for site/worker.js (MIREKU account emails). Run: node site/test/worker.test.mjs
 // No network: Resend is imitated, and the Supabase signature is made with a throwaway secret.
-import worker, { verifySignature, buildLetter, isOurs, hitRow, signTicket, checkTicket, FILES, launchLetter, recipients, CAMPAIGN } from '../worker.js';
+import worker, { verifySignature, buildLetter, isOurs, hitRow, signTicket, checkTicket, FILES, launchLetter, recipients, CAMPAIGN, confirmRedirect } from '../worker.js';
 import { writeFileSync } from 'node:fs';
 const secretBytes = crypto.getRandomValues(new Uint8Array(32));
 const secret = 'v1,whsec_' + btoa(String.fromCharCode(...secretBytes));
@@ -13,7 +13,7 @@ let sent = []; let resendStatus = 200;
 globalThis.fetch = async (url, init) => { sent.push({ url, body: JSON.parse(init.body), auth: init.headers.Authorization }); return new Response('{}', { status: resendStatus }); };
 const env = { RESEND_API_KEY: 're_test', AUTH_HOOK_SECRET: secret, ASSETS: { fetch: async () => new Response('404 page', { status: 404 }) } };
 const payload = (type, redirect, extra = {}) => JSON.stringify({ user: { email: 'Kofi@Example.com' },
-  email_data: { email_action_type: type, token_hash: 'abc123', token: '123456', redirect_to: redirect, ...extra } });
+  email_data: { email_action_type: type, token_hash: 'abc123xyz', token: '123456', redirect_to: redirect, ...extra } });
 async function call(raw, headers, e = env) {
   const r = await worker.fetch(new Request('https://jamesmireku.com/api/auth-email', { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: raw }), e);
   return [r.status, await r.text()];
@@ -25,7 +25,7 @@ sent = []; let [st] = await call(raw, await sign(raw));
 const m = sent[0] && sent[0].body;
 check(st === 200 && sent.length === 1, 'a signed sign-up from jamesmireku.com is sent');
 check(m.from === 'MIREKU <hello@jamesmireku.com>' && m.to[0] === 'kofi@example.com' && m.subject === 'Confirm your email for MIREKU', 'from MIREKU, to the person, MIREKU subject');
-check(m.text.includes('/auth/v1/verify?token=abc123&type=signup&redirect_to=https%3A%2F%2Fjamesmireku.com%2Faccount') && m.html.includes('/auth/v1/verify?token=abc123&amp;type=signup&amp;redirect_to=https%3A%2F%2Fjamesmireku.com%2Faccount'), 'the button returns them to jamesmireku.com/account');
+check(m.text.includes('https://jamesmireku.com/auth/confirm?token=abc123xyz&type=signup&redirect_to=https%3A%2F%2Fjamesmireku.com%2Faccount') && !m.html.includes('supabase.co'), 'the button returns them to jamesmireku.com/account');
 check(sent[0].auth === 'Bearer re_test' && sent[0].url === 'https://api.resend.com/emails', 'sent through Resend with the MIREKU key');
 check(!/!/.test(m.text), 'no exclamation marks in the email text');
 if (process.argv.includes('--html')) writeFileSync('signup.html', m.html);
@@ -178,5 +178,14 @@ check(logged.length === 8 && new Set(logged.map(x => x.email)).size === 8, 'only
 keyBroken = true; sent = []; logged = []; batchCalls = 0; r = await say('send'); out = await r.json();
 check(out.sent === 0 && batchCalls === 1 && /API key is invalid/.test(out.reason), 'a refusal that is not about an address stops at once and says why');
 globalThis.fetch = realFetch;
+
+// ---- the link in an account email goes through this site
+const cr = q => confirmRedirect(new URL('https://jamesmireku.com/auth/confirm?' + q));
+check(cr('token=abc123xyz&type=signup&redirect_to=https%3A%2F%2Fjamesmireku.com%2Faccount') === 'https://kdxckigyhpnwhwgjdgqq.supabase.co/auth/v1/verify?token=abc123xyz&type=signup&redirect_to=https%3A%2F%2Fjamesmireku.com%2Faccount', 'a confirm link is passed on to Supabase with its token');
+check(cr('token=abc123xyz&type=signup&redirect_to=https%3A%2F%2Fevil.example%2F') === null, 'a link that would send someone to another site is refused');
+check(cr('token=abc123xyz&type=whatever&redirect_to=https%3A%2F%2Fjamesmireku.com%2Faccount') === null && cr('token=%3Cscript%3E&type=signup&redirect_to=https%3A%2F%2Fjamesmireku.com%2Faccount') === null, 'an unknown kind of link, or a strange token, is refused');
+r = await worker.fetch(new Request('https://jamesmireku.com/auth/confirm?token=abc123xyz&type=recovery&redirect_to=https%3A%2F%2Fjamesmireku.com%2Faccount%3Freset%3D1', { redirect: 'manual' }), env);
+check(r.status === 302 && r.headers.get('location').startsWith('https://kdxckigyhpnwhwgjdgqq.supabase.co/auth/v1/verify?token=abc123xyz&type=recovery'), 'the page answers with a redirect');
+r = await worker.fetch(new Request('https://jamesmireku.com/auth/confirm?token=x'), env); check(r.status === 400, 'a broken link gets a plain explanation');
 
 console.log(fails ? fails + ' FAILED' : 'ALL PASSED'); process.exitCode = fails ? 1 : 0;

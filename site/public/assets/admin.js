@@ -231,7 +231,15 @@
     if (!window.confirm('Send the launch email to ' + n + (n === '1' ? ' person' : ' people') + ' now? This cannot be undone.')) return;
     $('an-send').disabled = true; anMsg('Sending…');
     announce('send').then(function (o) {
-      if (o.sent != null) anMsg('Sent to ' + fmt.format(o.sent) + (o.sent === 1 ? ' person' : ' people') + (o.failed ? '. ' + fmt.format(o.failed) + ' could not be sent: press again to retry those.' : '.'), o.failed ? 'err' : 'ok');
+      if (o.sent != null) {
+        var t = 'Sent to ' + fmt.format(o.sent) + (o.sent === 1 ? ' person' : ' people') + '.';
+        if (o.failed) {
+          t += ' ' + fmt.format(o.failed) + ' could not be sent.';
+          if (o.refused && o.refused.length) t += ' Refused: ' + o.refused.map(function (x) { return x.email; }).join(', ') + '.';
+          if (o.reason) t += ' ' + o.reason;
+        }
+        anMsg(t, o.failed ? 'err' : 'ok');
+      }
       else anMsg(problem(o), 'err');
       announceCount();
     }).catch(function () { anMsg('The email could not be sent. Check your connection, then press again: nobody is sent it twice.', 'err'); announceCount(); });

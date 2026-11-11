@@ -156,5 +156,27 @@ teamOk = false; sent = []; r = await say('send'); check(r.status === 403 && sent
 teamOk = true; r = await say('send', ''); check(r.status === 401, 'nobody signed in cannot send');
 tableThere = false; sent = []; r = await say('send'); check(r.status === 503 && sent.length === 0, 'without the sent-log table it refuses rather than risk sending twice');
 r = await say('everyone'); check(r.status === 400, 'an unknown instruction is refused');
+// one unacceptable address must not stop the rest
+tableThere = true; sentLog = []; logged = [];
+const many = []; for (let i = 0; i < 9; i++) many.push({ name: 'P' + i, email: i === 5 ? 'bad@invalid-domain.test' : 'p' + i + '@example.com' });
+list.length = 0; list.push(...many);
+const realFetch = globalThis.fetch; let batchCalls = 0; let keyBroken = false;
+globalThis.fetch = async (url, init) => {
+  if (String(url) === 'https://api.resend.com/emails/batch') {
+    batchCalls++; const b = JSON.parse(init.body);
+    if (keyBroken) return new Response(JSON.stringify({ message: 'API key is invalid' }), { status: 401 });
+    if (b.some(m => m.to[0].startsWith('bad@'))) return new Response(JSON.stringify({ message: 'Invalid `to` field.' }), { status: 422 });
+    sent.push({ url: String(url), body: b }); return new Response('{}', { status: 200 });
+  }
+  return realFetch(url, init);
+};
+sent = []; r = await say('send'); out = await r.json();
+const got = sent.flatMap(x => x.body.map(m => m.to[0])).sort();
+check(out.sent === 8 && out.failed === 1 && got.length === 8 && !got.includes('bad@invalid-domain.test'), 'one refused address is skipped and the other eight are still sent');
+check(out.refused.length === 1 && out.refused[0].email === 'bad@invalid-domain.test' && /Invalid `to`/.test(out.reason), 'the refused address and Resend\'s reason are reported');
+check(logged.length === 8 && new Set(logged.map(x => x.email)).size === 8, 'only the eight sent are recorded, each once');
+keyBroken = true; sent = []; logged = []; batchCalls = 0; r = await say('send'); out = await r.json();
+check(out.sent === 0 && batchCalls === 1 && /API key is invalid/.test(out.reason), 'a refusal that is not about an address stops at once and says why');
+globalThis.fetch = realFetch;
 
 console.log(fails ? fails + ' FAILED' : 'ALL PASSED'); process.exitCode = fails ? 1 : 0;

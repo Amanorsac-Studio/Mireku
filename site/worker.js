@@ -414,7 +414,7 @@ async function announce(request, env) {
     const who = claimsFrom(jwt);
     if (!looksLikeEmail(String(who.email || ''))) return fail(400, 'Your account has no email address.');
     const r = await resend('/emails', launchLetter(String(who.email).toLowerCase(), (who.user_metadata && who.user_metadata.full_name) || ''));
-    if (!r.ok) { console.error('test announce failed:', r.status, await r.text()); return fail(502, 'The test email could not be sent.'); }
+    if (!r.ok) { const why = await resendReason(r); console.error('test announce failed:', why); return fail(502, 'The test email could not be sent. ' + why); }
     return json({ ok: true, test: true, to: who.email });
   }
   if (body.mode !== 'send' && body.mode !== 'count') return fail(400, 'Say what to do: count, test or send.');
@@ -428,18 +428,46 @@ async function announce(request, env) {
   const withEmail = recipients(rows, []).length;
   if (body.mode === 'count') return json({ ok: true, waiting: rows.length, with_email: withEmail, already_sent: withEmail - todo.length, to_send: todo.length });
 
-  let delivered = 0, failed = 0;
-  for (let i = 0; i < todo.length; i += 100) {            // Resend takes up to 100 emails in one request
-    const part = todo.slice(i, i + 100);
-    const r = await resend('/emails/batch', part.map(p => launchLetter(p.email, p.name)));
-    if (!r.ok) { failed += part.length; console.error('announce batch failed:', r.status, await r.text()); continue; }
-    delivered += part.length;
-    // Written straight after each batch is accepted, so a failure later never causes a second copy.
-    const log = await sb('/rest/v1/mireku_mail_sent', { method: 'POST', headers: { Prefer: 'return=minimal,resolution=ignore-duplicates' },
-      body: JSON.stringify(part.map(p => ({ campaign: CAMPAIGN.id, email: p.email }))) });
-    if (!log.ok) console.error('announce log refused:', log.status, await log.text());
+  /* Resend refuses a whole batch if one address in it is unacceptable. So a
+     refused batch is split in half and each half tried again, down to the
+     single address at fault, which is reported and skipped. Each batch that
+     is accepted is recorded at once, so nothing is ever sent twice. Calls
+     are spaced out to stay inside Resend's two-requests-a-second limit. */
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  let delivered = 0, calls = 0, stop = '';
+  const bad = [];
+  async function sendPart(part) {
+    if (stop || !part.length) return;
+    if (calls++) await wait(600);
+    let r = await resend('/emails/batch', part.map(p => launchLetter(p.email, p.name)));
+    if (r.status === 429) { await wait(1500); r = await resend('/emails/batch', part.map(p => launchLetter(p.email, p.name))); }
+    if (r.ok) {
+      delivered += part.length;
+      const log = await sb('/rest/v1/mireku_mail_sent', { method: 'POST', headers: { Prefer: 'return=minimal,resolution=ignore-duplicates' },
+        body: JSON.stringify(part.map(p => ({ campaign: CAMPAIGN.id, email: p.email }))) });
+      if (!log.ok) console.error('announce log refused:', log.status, await log.text());
+      return;
+    }
+    const why = await resendReason(r);
+    console.error('announce batch refused:', r.status, why, part.length);
+    if (r.status !== 400 && r.status !== 422) { stop = why; return; }       // not about an address: stop, say why
+    if (part.length === 1) { bad.push({ email: part[0].email, reason: why }); return; }
+    const mid = Math.ceil(part.length / 2);
+    await sendPart(part.slice(0, mid));
+    await sendPart(part.slice(mid));
   }
-  return json({ ok: failed === 0, sent: delivered, failed, already_sent: withEmail - todo.length });
+  for (let i = 0; i < todo.length && !stop; i += 100) await sendPart(todo.slice(i, i + 100));
+  const failed = todo.length - delivered;
+  return json({ ok: failed === 0, sent: delivered, failed, refused: bad.slice(0, 20), reason: stop || (bad[0] && bad[0].reason) || '',
+                already_sent: withEmail - todo.length });
+}
+
+/** Resend's own words for a refusal, shortened; safe to show the team. */
+async function resendReason(r) {
+  let t = '';
+  try { t = await r.text(); } catch (e) {}
+  try { const j = JSON.parse(t); t = j.message || j.error || t; } catch (e) {}
+  return ('Resend said (' + r.status + '): ' + String(t).replace(/\s+/g, ' ')).slice(0, 300);
 }
 
 export default {

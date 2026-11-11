@@ -431,7 +431,7 @@ async function announce(request, env) {
     if (!r.ok) { const why = await resendReason(r); console.error('test announce failed:', why); return fail(502, 'The test email could not be sent. ' + why); }
     return json({ ok: true, test: true, to: who.email });
   }
-  if (body.mode !== 'send' && body.mode !== 'count') return fail(400, 'Say what to do: count, test or send.');
+  if (!['send', 'count', 'pending', 'mark'].includes(body.mode)) return fail(400, 'Say what to do: count, test, send, pending or mark.');
 
   const list = await sb('/rest/v1/rpc/mireku_interest_list', { method: 'POST', body: '{}' });
   if (!list.ok) return fail(502, 'The waiting list could not be read.');
@@ -441,6 +441,19 @@ async function announce(request, env) {
   const todo = recipients(rows, sent);
   const withEmail = recipients(rows, []).length;
   if (body.mode === 'count') return json({ ok: true, waiting: rows.length, with_email: withEmail, already_sent: withEmail - todo.length, to_send: todo.length });
+
+  // For sending the same email another way (a Resend broadcast): the people
+  // not yet written to, and afterwards a record that they now have been.
+  if (body.mode === 'pending') return json({ ok: true, people: todo.map(p => ({ email: p.email, first_name: String(p.name || '').trim().split(/\s+/)[0] || '' })) });
+  if (body.mode === 'mark') {
+    const want = new Set((Array.isArray(body.emails) ? body.emails : []).map(e => String(e).trim().toLowerCase()));
+    const marked = todo.filter(p => want.has(p.email));          // only people really on the list and not yet sent
+    if (!marked.length) return json({ ok: true, marked: 0 });
+    const log = await sb('/rest/v1/mireku_mail_sent', { method: 'POST', headers: { Prefer: 'return=minimal,resolution=ignore-duplicates' },
+      body: JSON.stringify(marked.map(p => ({ campaign: CAMPAIGN.id, email: p.email }))) });
+    if (!log.ok) return fail(502, 'They could not be recorded. Try again.');
+    return json({ ok: true, marked: marked.length });
+  }
 
   /* Resend refuses a whole batch if one address in it is unacceptable. So a
      refused batch is split in half and each half tried again, down to the

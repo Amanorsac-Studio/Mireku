@@ -156,6 +156,16 @@ teamOk = false; sent = []; r = await say('send'); check(r.status === 403 && sent
 teamOk = true; r = await say('send', ''); check(r.status === 401, 'nobody signed in cannot send');
 tableThere = false; sent = []; r = await say('send'); check(r.status === 503 && sent.length === 0, 'without the sent-log table it refuses rather than risk sending twice');
 r = await say('everyone'); check(r.status === 400, 'an unknown instruction is refused');
+// sending another way: who is left, and recording them afterwards
+const sayWith = (extra) => worker.fetch(new Request('https://jamesmireku.com/api/announce', { method: 'POST',
+  headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + teamJwt }, body: JSON.stringify(extra) }), env);
+tableThere = true; sentLog = [{ email: 'yaw@example.com' }]; logged = []; sent = [];
+r = await sayWith({ mode: 'pending' }); out = await r.json();
+check(out.people.length === 1 && out.people[0].email === 'kofi@example.com' && out.people[0].first_name === 'Kofi' && sent.length === 0, 'the people not yet emailed are listed, and nothing is sent');
+r = await sayWith({ mode: 'mark', emails: ['KOFI@example.com', 'stranger@elsewhere.com', 'yaw@example.com'] }); out = await r.json();
+check(out.marked === 1 && logged.length === 1 && logged[0].email === 'kofi@example.com', 'only people on the list and not yet emailed can be recorded');
+teamOk = false; r = await sayWith({ mode: 'pending' }); check(r.status === 403, 'someone outside the team cannot list or record anyone'); teamOk = true;
+
 // one unacceptable address must not stop the rest
 tableThere = true; sentLog = []; logged = [];
 const many = []; for (let i = 0; i < 9; i++) many.push({ name: 'P' + i, email: i === 5 ? 'bad@invalid-domain.test' : 'p' + i + '@example.com' });

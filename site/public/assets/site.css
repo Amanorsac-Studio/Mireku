@@ -432,3 +432,5 @@ footer nav { display: flex; gap: 18px; flex-wrap: wrap; }
 .hear-btn.on .hear-icon { box-shadow: 0 0 0 0 rgba(217,164,65,.6); animation: pulse 1.6s ease-out infinite; }
 @keyframes pulse { to { box-shadow: 0 0 0 12px rgba(217,164,65,0); } }
 .hear-note { font-size: 13px; color: var(--muted); }
+.announce .more ol { margin: 10px 0 14px; padding-left: 20px; display: grid; gap: 4px; }
+.announce .more p { margin: 10px 0 0; }

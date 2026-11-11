@@ -199,11 +199,11 @@
 
   /* The launch email. Count first, test to yourself, then send; the server
      writes to each address once and refuses anyone outside the team. */
-  function announce(mode) {
+  function announce(mode, extra) {
     return sb.auth.getSession().then(function (r) {
       return fetch('/api/announce', { method: 'POST',
         headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + r.data.session.access_token },
-        body: JSON.stringify({ mode: mode }) });
+        body: JSON.stringify(Object.assign({ mode: mode }, extra || {})) });
     }).then(function (res) { return res.json().catch(function () { return {}; }).then(function (out) { out.status = res.status; return out; }); });
   }
   var anMsg = function (t, k) { $('an-msg').className = 'msg' + (k ? ' ' + k : ''); $('an-msg').textContent = t; };
@@ -243,6 +243,27 @@
       else anMsg(problem(o), 'err');
       announceCount();
     }).catch(function () { anMsg('The email could not be sent. Check your connection, then press again: nobody is sent it twice.', 'err'); announceCount(); });
+  });
+
+  var pending = [];
+  $('an-pending').addEventListener('click', function () {
+    announce('pending').then(function (o) {
+      if (!o.ok) return anMsg(problem(o), 'err');
+      pending = o.people || [];
+      if (!pending.length) return anMsg('Everyone with an email has already had it.', 'ok');
+      downloadCsv('mireku-not-yet-emailed', ['email', 'first_name'], pending.map(function (p) { return [p.email, p.first_name]; }));
+      $('an-mark').disabled = false;
+      $('an-mark').textContent = 'Record these ' + fmt.format(pending.length) + ' as emailed';
+      anMsg(fmt.format(pending.length) + ' people downloaded. After the broadcast has gone out in Resend, press "Record these as emailed".', 'ok');
+    }).catch(function () { anMsg('The list could not be downloaded. Check your connection.', 'err'); });
+  });
+  $('an-mark').addEventListener('click', function () {
+    if (!window.confirm('Record these ' + pending.length + ' people as already emailed? Do this only after the broadcast has been sent in Resend.')) return;
+    $('an-mark').disabled = true;
+    announce('mark', { emails: pending.map(function (p) { return p.email; }) }).then(function (o) {
+      if (!o.ok) { $('an-mark').disabled = false; return anMsg(problem(o), 'err'); }
+      anMsg(fmt.format(o.marked) + ' people recorded as emailed.', 'ok'); pending = []; announceCount();
+    }).catch(function () { $('an-mark').disabled = false; anMsg('That could not be recorded. Check your connection.', 'err'); });
   });
 
   function drawInterest() {

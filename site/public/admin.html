@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard · MIREKU</title>
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#0a0907">
+<link rel="icon" href="/images/icon.png" type="image/png">
+<link rel="stylesheet" href="/assets/site.css">
+</head>
+<body class="dash-page">
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="/" aria-label="MIREKU home">
+      <img src="/images/mireku-face.webp" alt="" width="36" height="36">
+      <span><b>MIREKU</b><small>Team dashboard</small></span>
+    </a>
+    <nav class="nav" aria-label="Main">
+      <a href="/">Site</a>
+      <button class="btn ghost small" type="button" id="signout" hidden>Sign out</button>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap dash">
+  <p class="msg" id="loading" role="status">Loading…</p>
+
+  <!-- not signed in -->
+  <section class="panel narrow" id="signin" hidden>
+    <h1 class="dash-title">Team sign-in</h1>
+    <p class="muted">For the MIREKU team. Use the email and password of your MIREKU or Amanorsac account.</p>
+    <form id="f-signin" novalidate>
+      <div class="field"><label for="email">Email</label><input id="email" type="email" autocomplete="email" required></div>
+      <div class="field"><label for="pass">Password</label><input id="pass" type="password" autocomplete="current-password" required></div>
+      <button class="btn" type="submit">Sign in</button>
+      <p class="msg" id="signin-msg" role="status"></p>
+    </form>
+    <p class="switch">No account yet, or forgotten the password? <a href="/account">Go to the account page</a>, then come back here.</p>
+  </section>
+
+  <!-- signed in, not on the team -->
+  <section class="panel narrow" id="denied" hidden>
+    <h1 class="dash-title">This page is for the MIREKU team</h1>
+    <p class="muted">You are signed in as <b id="denied-who"></b>, which is not on the team list. If it should be, ask the studio to add it.</p>
+  </section>
+
+  <!-- the dashboard -->
+  <div id="dash" hidden>
+    <div class="dash-head">
+      <div>
+        <span class="eyebrow">MIREKU · Team dashboard</span>
+        <h1 class="dash-title">How MIREKU is doing</h1>
+        <p class="muted small-note" id="who"></p>
+      </div>
+      <div class="seg" role="group" aria-label="Period">
+        <button type="button" data-days="7">7 days</button>
+        <button type="button" data-days="30" aria-pressed="true">30 days</button>
+        <button type="button" data-days="90">90 days</button>
+      </div>
+    </div>
+
+    <div class="tiles" id="tiles"></div>
+
+    <div class="charts">
+      <section class="panel chart-panel">
+        <h2>Visitors per day</h2>
+        <div class="chart" id="chart-visitors"></div>
+      </section>
+      <section class="panel chart-panel">
+        <h2>Interested sign-ups per day</h2>
+        <div class="chart" id="chart-signups"></div>
+      </section>
+    </div>
+    <details class="table-view">
+      <summary>Show the daily numbers as a table</summary>
+      <div class="table-scroll"><table class="specs" id="daily-table"></table></div>
+    </details>
+
+    <div class="lists">
+      <section class="panel"><h2>Most visited pages</h2><div id="l-pages"></div></section>
+      <section class="panel"><h2>Where visitors came from</h2><div id="l-sources"></div></section>
+      <section class="panel"><h2>Countries</h2><div id="l-countries"></div></section>
+      <section class="panel"><h2>Phone or computer</h2><div id="l-devices"></div></section>
+    </div>
+
+    <section class="panel">
+      <h2>What visitors did</h2>
+      <div class="tiles small" id="events"></div>
+    </section>
+
+    <section class="panel">
+      <div class="dash-head">
+        <div><h2>People waiting for MIREKU</h2><p class="muted small-note" id="i-count"></p></div>
+        <button class="btn small" type="button" id="csv" disabled>Download spreadsheet</button>
+      </div>
+      <div class="table-scroll"><table class="specs" id="interest"></table></div>
+    </section>
+
+    <p class="muted small-note">Visits are counted without cookies and without storing who anyone is. Browsers that ask not to be tracked are not counted, so real visits are a little higher. Times are in UTC, which is Ghana time.</p>
+  </div>
+</main>
+
+<div class="tip" id="tip" role="tooltip" hidden></div>
+
+<script src="/assets/config.js"></script>
+<script src="/assets/vendor/supabase-2.116.0.js" defer></script>
+<script src="/assets/common.js" defer></script>
+<script src="/assets/admin.js" defer></script>
+</body>
+</html>

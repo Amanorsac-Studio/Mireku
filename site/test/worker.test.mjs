@@ -1,6 +1,6 @@
 // Tests for site/worker.js (MIREKU account emails). Run: node site/test/worker.test.mjs
 // No network: Resend is imitated, and the Supabase signature is made with a throwaway secret.
-import worker, { verifySignature, buildLetter, isOurs } from '../worker.js';
+import worker, { verifySignature, buildLetter, isOurs, hitRow } from '../worker.js';
 import { writeFileSync } from 'node:fs';
 const secretBytes = crypto.getRandomValues(new Uint8Array(32));
 const secret = 'v1,whsec_' + btoa(String.fromCharCode(...secretBytes));
@@ -53,4 +53,24 @@ resendStatus = 422; [st] = await call(raw, await sign(raw)); check(st === 502, '
 let r = await worker.fetch(new Request('https://jamesmireku.com/api/auth-email'), env); check(r.status === 405, 'GET is refused');
 r = await worker.fetch(new Request('https://jamesmireku.com/nothing-here'), env); check(r.status === 404 && (await r.text()) === '404 page', 'any other address falls through to the 404 page');
 check(isOurs('https://www.jamesmireku.com/x') && !isOurs('http://jamesmireku.com/') && !isOurs('javascript:alert(1)'), 'only https jamesmireku.com counts as ours');
+// ---- visits (/api/hit)
+let row = hitRow({ t: 'view', path: '/about', ref: 'www.Instagram.com', device: 'phone', sid: 'sess-1234-abcd' }, 'GH');
+check(row && row.table === 'mireku_page_views' && row.row.ref_host === 'instagram.com' && row.row.country === 'GH' && row.row.device === 'phone', 'a page view is recorded with source, device and country');
+check(hitRow({ t: 'view', path: '/', ref: 'jamesmireku.com', device: 'computer', sid: 'sess-1234-abcd' }, 'XX').row.ref_host === null, 'moving around the site is not counted as a source, and an unknown country is left blank');
+check(hitRow({ t: 'view', path: '/admin', sid: 'sess-1234-abcd' }, 'GH') === null, 'the dashboard itself is never counted');
+check(hitRow({ t: 'view', path: 'https://evil.example/', sid: 'sess-1234-abcd' }) === null, 'only paths on this site are accepted');
+check(hitRow({ t: 'view', path: '/', sid: 'x' }) === null, 'a missing visit id is refused');
+check(hitRow({ t: 'event', name: 'notify_signup', sid: 'sess-1234-abcd' }).table === 'mireku_events', 'a named event is recorded');
+check(hitRow({ t: 'event', name: 'drop_tables', sid: 'sess-1234-abcd' }) === null, 'an unknown event name is refused');
+sent = [];
+r = await worker.fetch(new Request('https://jamesmireku.com/api/hit', { method: 'POST', headers: { 'user-agent': 'Mozilla/5.0', 'content-type': 'application/json' },
+  body: JSON.stringify({ t: 'view', path: '/', device: 'phone', sid: 'sess-1234-abcd' }) }), env);
+check(r.status === 204 && sent.length === 1 && sent[0].url.endsWith('/rest/v1/mireku_page_views') && sent[0].body.path === '/', 'a visit is written to Supabase');
+sent = [];
+r = await worker.fetch(new Request('https://jamesmireku.com/api/hit', { method: 'POST', headers: { 'user-agent': 'Googlebot/2.1', 'content-type': 'application/json' },
+  body: JSON.stringify({ t: 'view', path: '/', sid: 'sess-1234-abcd' }) }), env);
+check(r.status === 204 && sent.length === 0, 'bots are not counted');
+sent = []; r = await worker.fetch(new Request('https://jamesmireku.com/api/hit', { method: 'POST', body: 'not json' }), env);
+check(r.status === 204 && sent.length === 0, 'rubbish is ignored quietly');
+
 console.log(fails ? fails + ' FAILED' : 'ALL PASSED'); process.exitCode = fails ? 1 : 0;

@@ -6,6 +6,8 @@
 
      POST /api/auth-email   MIREKU's own sign-up, password-reset and
                             sign-in emails, sent from jamesmireku.com.
+     POST /api/hit          one page view or one named event, for the
+                            team's dashboard (jamesmireku.com/admin).
 
    WHY IT ARRIVES HERE. MIREKU shares its Supabase project, and so its
    accounts, with amanorsac.studio, and a Supabase project hands its
@@ -173,9 +175,63 @@ async function authEmail(request, env) {
   return json({});
 }
 
+/* ---------------------------------------------------------------------
+   Visits, for the dashboard. The page sends what it knows (the path, the
+   site it came from, phone or computer, a random id for this browser tab);
+   this adds the country from the connection, which a page cannot know,
+   and writes one row to Supabase with the public key. The tables accept
+   new rows and nothing else (studio/supabase-mireku-dashboard.sql). No IP
+   address, cookie or name is stored. Bots are not counted.
+   --------------------------------------------------------------------- */
+const SUPABASE_KEY = 'sb_publishable_PlVBmRgFdhTkVMurXLiBFQ_NjiVssQp';   // public on purpose, like the pages'
+const EVENTS = new Set(['notify_signup', 'buy_click', 'release_play', 'account_created']);
+const BOT = /bot|crawl|spider|slurp|preview|facebookexternalhit|whatsapp|headless|lighthouse|monitor/i;
+const clean = (v, n) => typeof v === 'string' ? v.replace(/[\u0000-\u001f]/g, '').trim().slice(0, n) : '';
+
+export function hitRow(b, country) {
+  const sid = clean(b.sid, 64);
+  if (sid.length < 8) return null;
+  if (b.t === 'view') {
+    const path = clean(b.path, 200);
+    if (!path.startsWith('/') || path.startsWith('/admin')) return null;
+    const ref = clean(b.ref, 120).toLowerCase().replace(/^www\./, '');
+    return { table: 'mireku_page_views', row: {
+      path, session_id: sid,
+      ref_host: ref && ref !== 'jamesmireku.com' ? ref : null,
+      device: ['phone', 'tablet', 'computer'].includes(b.device) ? b.device : null,
+      country: /^[A-Z]{2}$/.test(country || '') && country !== 'XX' && country !== 'T1' ? country : null } };
+  }
+  if (b.t === 'event' && EVENTS.has(b.name)) {
+    return { table: 'mireku_events', row: { name: b.name, detail: clean(b.detail, 120) || null, session_id: sid } };
+  }
+  return null;
+}
+
+async function hit(request, ctx) {
+  const done = new Response(null, { status: 204 });
+  if (BOT.test(request.headers.get('user-agent') || '')) return done;
+  let b;
+  try { b = await request.json(); } catch (e) { return done; }
+  const h = hitRow(b || {}, request.cf && request.cf.country);
+  if (!h) return done;
+  const write = fetch(SUPABASE_URL + '/rest/v1/' + h.table, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY, Prefer: 'return=minimal' },
+    body: JSON.stringify(h.row)
+  }).then(r => { if (!r.ok) return r.text().then(t => console.error('hit refused:', r.status, t)); })
+    .catch(e => console.error('hit failed:', e && e.message));
+  // The visitor never waits for a statistic.
+  if (ctx && ctx.waitUntil) ctx.waitUntil(write); else await write;
+  return done;
+}
+
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    if (url.pathname === '/api/hit') {
+      if (request.method !== 'POST') return fail(405, 'Use POST.');
+      return hit(request, ctx);
+    }
     if (url.pathname === '/api/auth-email') {
       if (request.method !== 'POST') return fail(405, 'Use POST.');
       try { return await authEmail(request, env); }

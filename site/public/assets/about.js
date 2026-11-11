@@ -12,6 +12,7 @@
       frame.src = 'https://open.spotify.com/embed/album/' + b.dataset.album + '?theme=0';
       frame.title = b.querySelector('.rt').textContent + ' on Spotify';
       now.textContent = 'Playing: ' + b.querySelector('.rt').textContent;
+      if (window.mirekuTrack) window.mirekuTrack('release_play', b.querySelector('.rt').textContent);
       var r = frame.getBoundingClientRect();
       if (r.top < 0 || r.bottom > window.innerHeight) {
         frame.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'center' });

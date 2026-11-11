@@ -126,3 +126,14 @@ sending access, jamesmireku.com only) and `AUTH_HOOK_SECRET` (the same value
 as Supabase → Authentication → Hooks → Send Email hook secret).
 
 Tests: `node site/test/worker.test.mjs`.
+
+## Team dashboard (jamesmireku.com/admin)
+
+Visits, the waiting list, sales and licences for MIREKU, for the accounts on
+the `mireku_admins` list only (set up by `studio/supabase-mireku-dashboard.sql`,
+which adds amanorsac@gmail.com and j.mireku@icloud.com). Being on that list
+does not make anyone a studio admin on amanorsac.studio. Visits are counted by
+`assets/track.js` through the Worker's `/api/hit`: no cookies, no IP
+addresses, nothing about who anyone is; Do Not Track is respected.
+To add someone: they make an account, then in the SQL Editor:
+`insert into public.mireku_admins (user_id, email) select id, lower(email) from auth.users where lower(email) = 'their@email';`

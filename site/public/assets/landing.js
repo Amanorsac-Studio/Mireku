@@ -53,6 +53,7 @@
   });
 
   btn.addEventListener('click', function () {
+    if (window.mirekuTrack) window.mirekuTrack('buy_click');
     btn.disabled = true;
     msg.className = 'msg';
     msg.textContent = 'Opening the checkout…';
@@ -94,7 +95,7 @@
         body: JSON.stringify({ name: name, phone: phone, email: email || null, consent: true, source: 'jamesmireku.com' })
       }).then(function (r) {
         submit.disabled = false;
-        if (r.ok) { form.reset(); return say('Thank you, ' + name.split(' ')[0] + '. We will message you when MIREKU is out.', 'ok'); }
+        if (r.ok) { form.reset(); if (window.mirekuTrack) window.mirekuTrack('notify_signup'); return say('Thank you, ' + name.split(' ')[0] + '. We will message you when MIREKU is out.', 'ok'); }
         if (r.status === 409) return say('That number is already on the list. We will be in touch.', 'ok');
         say('Your details could not be saved just now. Try again in a few minutes.', 'err');
       }).catch(function () {

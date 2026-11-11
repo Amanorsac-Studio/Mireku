@@ -33,3 +33,6 @@
 # Scripts and styles change with the pages, so they are checked too.
 /assets/*
   Cache-Control: no-cache
+/admin
+  Cache-Control: no-store
+  X-Frame-Options: DENY

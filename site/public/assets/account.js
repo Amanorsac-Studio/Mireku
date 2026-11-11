@@ -74,6 +74,7 @@
                        options: { data: { full_name: $('name').value.trim() }, emailRedirectTo: back } }).then(function (r) {
         done();
         if (r.error) return say(msg, r.error.message, 'err');
+        if (window.mirekuTrack) window.mirekuTrack('account_created');
         if (r.data && r.data.session) return; // signed straight in; the listener below takes over
         say(msg, 'Check your inbox: we have sent a link to confirm your email. Open it on this device to finish.', 'ok');
       });

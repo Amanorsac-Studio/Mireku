@@ -11,9 +11,10 @@
 --  existing is changed: not profiles, not is_admin(), not purchases, not
 --  the studio's own analytics. The MIREKU team is NOT made studio admin:
 --  being on mireku_admins opens MIREKU's numbers and nothing else.
---  It READS three existing tables, for MIREKU's rows only: purchases
---  (sales, takings, coupons), device_activations (computers) and
---  app_downloads (downloads). It writes to none of them.
+--  It READS existing tables, for MIREKU's rows only: purchases (sales,
+--  takings, coupons), device_activations (computers), app_downloads
+--  (downloads through amanorsac.studio and Hub) and auth.users (accounts).
+--  It writes to none of them.
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -82,6 +83,25 @@ grant insert (path, ref_host, device, country, session_id) on public.mireku_page
 grant insert (name, detail, session_id) on public.mireku_events to anon, authenticated;
 grant usage on sequence public.mireku_page_views_id_seq, public.mireku_events_id_seq to anon, authenticated;
 
+-- Downloads from jamesmireku.com (installers and the sound library). The
+-- site's Worker writes one row when it hands an owner a download link,
+-- as that person: a signed-in account may add a row for itself only.
+create table if not exists public.mireku_downloads (
+  id       bigserial primary key,
+  at       timestamptz not null default now(),
+  file     text not null check (file in ('windows', 'mac', 'library')),
+  user_id  uuid references auth.users(id) on delete set null,
+  country  text check (country is null or country ~ '^[A-Z]{2}$')
+);
+create index if not exists mireku_downloads_at on public.mireku_downloads (at desc);
+alter table public.mireku_downloads enable row level security;
+drop policy if exists mireku_downloads_add on public.mireku_downloads;
+create policy mireku_downloads_add on public.mireku_downloads for insert to authenticated
+  with check (user_id is null or user_id = auth.uid());
+revoke all on public.mireku_downloads from anon, authenticated;
+grant insert (file, user_id, country) on public.mireku_downloads to authenticated;
+grant usage on sequence public.mireku_downloads_id_seq to authenticated;
+
 -- ---------------------------------------------------------------------
 --  3 · What the dashboard reads. Team only; anyone else gets an error.
 -- ---------------------------------------------------------------------
@@ -118,7 +138,10 @@ begin
                             where app = 'mireku' and lower(currency) = 'ghs' and coalesce(kind, '') <> 'trial'
                               and amount_cents > 0 and purchased_at >= since group by 1) m on m.day = g
                 left join (select date_trunc('day', at) as day, count(*) n
-                             from public.app_downloads where app = 'mireku' and at >= since group by 1) w on w.day = g),
+                             from (select at from public.app_downloads where app = 'mireku' and at >= since
+                                   union all
+                                   select at from public.mireku_downloads where at >= since) all_dl
+                            group by 1) w on w.day = g),
 
     'pages', (select coalesce(jsonb_agg(jsonb_build_object('name', path, 'n', n) order by n desc), '[]'::jsonb)
                 from (select path, count(*) n from public.mireku_page_views where at >= since
@@ -172,24 +195,21 @@ begin
                        where app = 'mireku' and code is not null and purchased_at >= since
                        group by code order by n desc limit 8) x),
 
-    'downloads', (select jsonb_build_object(
+    -- Downloads: amanorsac.studio and Hub (app_downloads), and jamesmireku.com (mireku_downloads).
+    'downloads', (with dl as (
+                      select at, coalesce(platform, 'unknown') as what, coalesce(source, 'site') as src, user_id
+                        from public.app_downloads where app = 'mireku'
+                      union all
+                      select at, file, 'jamesmireku.com', user_id from public.mireku_downloads)
+                  select jsonb_build_object(
                            'total', count(*),
                            'period', count(*) filter (where at >= since),
                            'people', count(distinct user_id) filter (where at >= since),
-                           'platforms', (select coalesce(jsonb_agg(jsonb_build_object('name', pl, 'n', n) order by n desc), '[]'::jsonb)
-                                           from (select coalesce(platform, 'unknown') pl, count(*) n from public.app_downloads
-                                                  where app = 'mireku' and at >= since group by 1) x),
-                           'sources', (select coalesce(jsonb_agg(jsonb_build_object('name', so, 'n', n) order by n desc), '[]'::jsonb)
-                                         from (select coalesce(source, 'site') so, count(*) n from public.app_downloads
-                                                where app = 'mireku' and at >= since group by 1) x))
-                    from public.app_downloads where app = 'mireku'),
-
-    -- Accounts made on jamesmireku.com (labelled at sign-up since 2026-11-11).
-    'accounts', (select jsonb_build_object(
-                          'total', count(*),
-                          'period', count(*) filter (where created_at >= since),
-                          'confirmed', count(*) filter (where email_confirmed_at is not null))
-                   from auth.users where raw_user_meta_data ->> 'signup_site' = 'jamesmireku.com'),
+                           'platforms', (select coalesce(jsonb_agg(jsonb_build_object('name', what, 'n', n) order by n desc), '[]'::jsonb)
+                                           from (select what, count(*) n from dl where at >= since group by 1) x),
+                           'sources', (select coalesce(jsonb_agg(jsonb_build_object('name', src, 'n', n) order by n desc), '[]'::jsonb)
+                                         from (select src, count(*) n from dl where at >= since group by 1) x))
+                    from dl),
 
     'licences', jsonb_build_object(
         'keys', (select count(*) from public.purchases where app = 'mireku' and license_key is not null),

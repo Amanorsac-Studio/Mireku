@@ -115,6 +115,7 @@
     sb.rpc('is_mireku_admin').then(function (r) {
       var team = !r.error && r.data === true;
       $('team').hidden = !team;
+      if (team) downloads($('team-downloads'), $('team-dl-msg'));
       if (team && params.get('next') === '/admin') location.replace('/admin');
     });
     return sb.from('purchases')
@@ -223,39 +224,42 @@
       });
   }
 
-  function downloads() {
-    var box = $('downloads');
-    M.offer().then(function (o) {
-      box.innerHTML = '';
-      var plats = o.platforms.filter(function (p) { return PLATFORM[p]; });
-      if (!plats.length) { say($('dl-msg'), 'The installers are being prepared. They appear here as soon as they are ready.'); return; }
-      say($('dl-msg'), o.version ? 'Version ' + o.version : '');
-      plats.forEach(function (p) {
-        var b = document.createElement('button');
-        b.className = 'btn'; b.type = 'button'; b.textContent = PLATFORM[p];
-        b.addEventListener('click', function () { download(p, b); });
-        box.appendChild(b);
-      });
+  /* The three files, from jamesmireku.com's own Worker: it checks that this
+     account owns MIREKU (or is on the team), then hands back a link that
+     works for a day and can be resumed, which a 5.8 GB library needs. */
+  var FILES = [
+    { id: 'windows', label: 'Windows', size: '44 MB' },
+    { id: 'mac',     label: 'Mac',     size: '136 MB' },
+    { id: 'library', label: 'Sound library', size: '5.8 GB' }
+  ];
+  function downloads(box, msgEl) {
+    box = box || $('downloads'); msgEl = msgEl || $('dl-msg');
+    box.innerHTML = '';
+    FILES.forEach(function (f) {
+      var b = document.createElement('button');
+      b.className = f.id === 'library' ? 'btn ghost' : 'btn'; b.type = 'button';
+      b.textContent = f.label + ' · ' + f.size;
+      b.addEventListener('click', function () { download(f.id, b, msgEl); });
+      box.appendChild(b);
     });
+    say(msgEl, 'Install MIREKU first, then download the sound library and open it with Install Library in MIREKU\'s gear menu. The library is large: use Wi-Fi if you can.');
   }
 
-  /* amanorsac.studio checks ownership and signs a ticket that lasts
-     fifteen minutes; the browser then fetches the installer from there. */
-  function download(platform, b) {
+  function download(file, b, msgEl) {
     b.disabled = true;
-    say($('dl-msg'), 'Preparing your download…');
-    fetch(C.STUDIO + '/api/app-download', {
+    say(msgEl, 'Preparing your download…');
+    fetch('/api/download', {
       method: 'POST',
       headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + session.access_token },
-      body: JSON.stringify({ app: C.APP, platform: platform })
+      body: JSON.stringify({ file: file })
     }).then(function (r) { return r.json().catch(function () { return {}; }); })
       .then(function (out) {
         b.disabled = false;
-        if (!out.url) return say($('dl-msg'), out.message || 'The download could not be started. Try again shortly.', 'err');
-        say($('dl-msg'), 'Your download is starting.', 'ok');
-        location.href = /^https:/.test(out.url) ? out.url : C.STUDIO + out.url;
+        if (!out.url) return say(msgEl, (out.error && out.error.message) || 'The download could not be started. Try again shortly.', 'err');
+        say(msgEl, 'Your download of ' + out.name + ' is starting. If it stops, press the button again to carry on.', 'ok');
+        location.href = out.url;
       })
-      .catch(function () { b.disabled = false; say($('dl-msg'), 'The download could not be started. Check your connection.', 'err'); });
+      .catch(function () { b.disabled = false; say(msgEl, 'The download could not be started. Check your connection.', 'err'); });
   }
 
   $('copy').addEventListener('click', function () {

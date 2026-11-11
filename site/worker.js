@@ -8,6 +8,9 @@
                             sign-in emails, sent from jamesmireku.com.
      POST /api/hit          one page view or one named event, for the
                             team's dashboard (jamesmireku.com/admin).
+     POST /api/download     a signed link to an installer or the sound
+                            library, for an account that owns MIREKU.
+     GET  /download/<file>  the file itself, from the R2 bucket, resumable.
 
    WHY IT ARRIVES HERE. MIREKU shares its Supabase project, and so its
    accounts, with amanorsac.studio, and a Supabase project hands its
@@ -27,6 +30,8 @@
    Secrets (Cloudflare -> mireku -> Settings -> Variables and Secrets):
      RESEND_API_KEY    the jamesmireku.com Resend account, sending only
      AUTH_HOOK_SECRET  the same value as Supabase's Send Email hook secret
+     DOWNLOAD_SECRET   any long random value; signs download links
+   Binding (wrangler.jsonc): DOWNLOADS, the amanorsac-downloads R2 bucket.
    Never in this file, never in the repository.
    ===================================================================== */
 
@@ -225,9 +230,123 @@ async function hit(request, ctx) {
   return done;
 }
 
+/* ---------------------------------------------------------------------
+   Downloads. The files sit in the studio's R2 bucket, amanorsac-downloads,
+   under MIREKU/. A new release is a new file there and a new line here.
+   --------------------------------------------------------------------- */
+export const FILES = {
+  windows: { key: 'MIREKU/Mireku-1.2.0-Windows.exe', name: 'Mireku-1.2.0-Windows.exe', type: 'application/vnd.microsoft.portable-executable', label: 'Windows installer', version: '1.2.0' },
+  mac:     { key: 'MIREKU/Mireku-1.2.0-macOS.pkg',   name: 'Mireku-1.2.0-macOS.pkg',   type: 'application/octet-stream', label: 'Mac installer', version: '1.2.0' },
+  library: { key: 'MIREKU/MIREKU-Library.mirekupack', name: 'MIREKU-Library.mirekupack', type: 'application/octet-stream', label: 'Sound library', version: '1.0' }
+};
+const TICKET_HOURS = 24;   // long enough to finish, and to resume, a 5.8 GB download on a slow line
+
+async function hmac(secret, text) {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(text)));
+  return btoa(String.fromCharCode.apply(null, mac)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+export async function signTicket(secret, file, expires) {
+  return '/download/' + file + '?e=' + expires + '&s=' + (await hmac(secret, 'download:' + file + ':' + expires));
+}
+export async function checkTicket(secret, file, e, s, nowMs) {
+  if (!secret || !FILES[file] || !/^\d{10,14}$/.test(e || '') || Number(e) < nowMs) return false;
+  return same(s || '', await hmac(secret, 'download:' + file + ':' + e));
+}
+
+/* Asks Supabase, as the signed-in person, whether they may have MIREKU:
+   they own it (has_app_access), or they are on the team. */
+async function mayDownload(jwt) {
+  const ask = (fn, body) => fetch(SUPABASE_URL + '/rest/v1/rpc/' + fn, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', apikey: SUPABASE_KEY, Authorization: 'Bearer ' + jwt },
+    body: JSON.stringify(body)
+  }).then(async r => ({ status: r.status, ok: r.ok, value: r.ok ? await r.json() : null }));
+  const owns = await ask('has_app_access', { p_app: 'mireku' });
+  if (owns.status === 401) return 'sign_in';
+  if (owns.ok && owns.value === true) return 'owner';
+  const team = await ask('is_mireku_admin', {});
+  if (team.ok && team.value === true) return 'team';
+  return owns.ok ? 'no' : 'error';
+}
+
+function userIdFrom(jwt) {
+  try {
+    const p = String(jwt).split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    const sub = JSON.parse(atob(p + '='.repeat((4 - p.length % 4) % 4))).sub;
+    return /^[0-9a-f-]{36}$/i.test(sub || '') ? sub : null;
+  } catch (e) { return null; }
+}
+
+async function downloadTicket(request, env, ctx) {
+  if (!env.DOWNLOADS || !env.DOWNLOAD_SECRET) return fail(503, 'Downloads are not set up yet.');
+  const jwt = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
+  if (!jwt) return fail(401, 'Sign in to download MIREKU.');
+  let body = {};
+  try { body = await request.json(); } catch (e) {}
+  const file = String(body.file || '');
+  if (!FILES[file]) return fail(404, 'No such download.');
+  const who = await mayDownload(jwt);
+  if (who === 'sign_in') return fail(401, 'Your session has ended. Sign in again.');
+  if (who === 'error') return fail(502, 'Your account could not be checked just now. Try again shortly.');
+  if (who === 'no') return fail(403, 'This account does not own MIREKU yet.');
+  const url = await signTicket(env.DOWNLOAD_SECRET, file, Date.now() + TICKET_HOURS * 3600 * 1000);
+  // Counted when the link is issued: one deliberate press, not every resumed piece.
+  const row = { file, user_id: userIdFrom(jwt), country: /^[A-Z]{2}$/.test((request.cf && request.cf.country) || '') ? request.cf.country : null };
+  const count = fetch(SUPABASE_URL + '/rest/v1/mireku_downloads', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', apikey: SUPABASE_KEY, Authorization: 'Bearer ' + jwt, Prefer: 'return=minimal' },
+    body: JSON.stringify(row)
+  }).then(r => { if (!r.ok) return r.text().then(t => console.error('download count refused:', r.status, t)); })
+    .catch(e => console.error('download count failed:', e && e.message));
+  if (ctx && ctx.waitUntil) ctx.waitUntil(count);
+  const f = FILES[file];
+  return json({ url, name: f.name, label: f.label, version: f.version });
+}
+
+/* The file, straight from R2. Ranges are honoured, so a browser or a
+   download manager can resume a dropped 5.8 GB download where it stopped. */
+async function serveFile(request, env, file, url) {
+  if (!env.DOWNLOADS || !env.DOWNLOAD_SECRET) return fail(503, 'Downloads are not set up yet.');
+  if (!(await checkTicket(env.DOWNLOAD_SECRET, file, url.searchParams.get('e'), url.searchParams.get('s'), Date.now()))) {
+    return new Response('This download link has expired. Go back to jamesmireku.com/account and press the button again.',
+                        { status: 403, headers: { 'content-type': 'text/plain; charset=utf-8' } });
+  }
+  const f = FILES[file];
+  const obj = await env.DOWNLOADS.get(f.key, { range: request.headers, onlyIf: request.headers });
+  if (obj === null) return new Response('That file is not available just now.', { status: 404 });
+  const headers = new Headers();
+  obj.writeHttpMetadata(headers);
+  headers.set('content-type', f.type);
+  headers.set('content-disposition', 'attachment; filename="' + f.name + '"');
+  headers.set('etag', obj.httpEtag);
+  headers.set('accept-ranges', 'bytes');
+  headers.set('cache-control', 'private, no-store');
+  if (!('body' in obj) || !obj.body) return new Response(null, { status: 304, headers });   // a precondition said "unchanged"
+  if (obj.range && request.headers.has('range')) {
+    const start = obj.range.offset || 0;
+    const len = obj.range.length != null ? obj.range.length : obj.size - start;
+    headers.set('content-range', 'bytes ' + start + '-' + (start + len - 1) + '/' + obj.size);
+    headers.set('content-length', String(len));
+    return new Response(request.method === 'HEAD' ? null : obj.body, { status: 206, headers });
+  }
+  headers.set('content-length', String(obj.size));
+  return new Response(request.method === 'HEAD' ? null : obj.body, { status: 200, headers });
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    if (url.pathname === '/api/download') {
+      if (request.method !== 'POST') return fail(405, 'Use POST.');
+      try { return await downloadTicket(request, env, ctx); }
+      catch (e) { console.error('download:', e && e.message); return fail(500, 'Something went wrong.'); }
+    }
+    const dl = url.pathname.match(/^\/download\/(windows|mac|library)$/);
+    if (dl && (request.method === 'GET' || request.method === 'HEAD')) {
+      try { return await serveFile(request, env, dl[1], url); }
+      catch (e) { console.error('serve:', e && e.message); return new Response('Something went wrong. Try again.', { status: 500 }); }
+    }
     if (url.pathname === '/api/hit') {
       if (request.method !== 'POST') return fail(405, 'Use POST.');
       return hit(request, ctx);

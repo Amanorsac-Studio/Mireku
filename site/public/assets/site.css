@@ -376,3 +376,6 @@ footer nav { display: flex; gap: 18px; flex-wrap: wrap; }
               background: radial-gradient(ellipse at 0% 0%, rgba(217,164,65,.12), transparent 60%), #12100c; }
 .panel.team h2 { margin-bottom: 4px; }
 .panel.team p { margin: 0; }
+.panel.team .team-dl { flex-basis: 100%; border-top: 1px solid var(--line); padding-top: 14px; }
+.panel.team .team-dl p { margin: 0 0 10px; }
+.panel.team .team-dl .msg { margin-top: 10px; }

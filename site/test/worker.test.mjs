@@ -1,6 +1,6 @@
 // Tests for site/worker.js (MIREKU account emails). Run: node site/test/worker.test.mjs
 // No network: Resend is imitated, and the Supabase signature is made with a throwaway secret.
-import worker, { verifySignature, buildLetter, isOurs, hitRow } from '../worker.js';
+import worker, { verifySignature, buildLetter, isOurs, hitRow, signTicket, checkTicket, FILES } from '../worker.js';
 import { writeFileSync } from 'node:fs';
 const secretBytes = crypto.getRandomValues(new Uint8Array(32));
 const secret = 'v1,whsec_' + btoa(String.fromCharCode(...secretBytes));
@@ -72,5 +72,52 @@ r = await worker.fetch(new Request('https://jamesmireku.com/api/hit', { method: 
 check(r.status === 204 && sent.length === 0, 'bots are not counted');
 sent = []; r = await worker.fetch(new Request('https://jamesmireku.com/api/hit', { method: 'POST', body: 'not json' }), env);
 check(r.status === 204 && sent.length === 0, 'rubbish is ignored quietly');
+
+// ---- downloads
+const bytes = new Uint8Array(1000).map((_, i) => i % 251);
+const r2 = { get: async (key, opts) => {
+  if (key !== FILES.library.key) return null;
+  const h = opts && opts.range; const range = h && h.get && h.get('range');
+  let offset = 0, length = bytes.length;
+  if (range) { const m = /bytes=(\d+)-(\d*)/.exec(range); offset = +m[1]; length = (m[2] ? +m[2] + 1 : bytes.length) - offset; }
+  return { size: bytes.length, httpEtag: '"abc"', range: range ? { offset, length } : undefined,
+           body: new Blob([bytes.slice(offset, offset + length)]).stream(), writeHttpMetadata() {} };
+} };
+const denv = { ...env, DOWNLOADS: r2, DOWNLOAD_SECRET: 'test-secret-for-downloads' };
+let owns = true, team = false;
+globalThis.fetch = async (url, init) => {
+  sent.push({ url, body: init && init.body ? JSON.parse(init.body) : null, auth: init && init.headers && init.headers.Authorization });
+  if (String(url).endsWith('/rpc/has_app_access')) return new Response(JSON.stringify(owns), { status: 200 });
+  if (String(url).endsWith('/rpc/is_mireku_admin')) return new Response(JSON.stringify(team), { status: 200 });
+  return new Response('', { status: 201 });
+};
+const jwtFor = sub => 'x.' + btoa(JSON.stringify({ sub })).replace(/=+$/, '') + '.y';
+const ask = (file, jwt) => worker.fetch(new Request('https://jamesmireku.com/api/download', { method: 'POST',
+  headers: { 'content-type': 'application/json', ...(jwt ? { Authorization: 'Bearer ' + jwt } : {}) }, body: JSON.stringify({ file }) }), denv, { waitUntil: p => p });
+sent = [];
+r = await ask('library', jwtFor('11111111-2222-3333-4444-555555555555')); let out = await r.json();
+check(r.status === 200 && /^\/download\/library\?e=\d+&s=/.test(out.url), 'an owner gets a signed link to the library');
+check(sent.some(x => String(x.url).endsWith('/rest/v1/mireku_downloads') && x.body.file === 'library' && x.body.user_id === '11111111-2222-3333-4444-555555555555'), 'the download is counted, as that person');
+r = await worker.fetch(new Request('https://jamesmireku.com' + out.url), denv);
+check(r.status === 200 && r.headers.get('content-length') === '1000' && /attachment; filename="MIREKU-Library.mirekupack"/.test(r.headers.get('content-disposition')), 'the link downloads the whole file with its name');
+check(r.headers.get('accept-ranges') === 'bytes', 'it says downloads can be resumed');
+r = await worker.fetch(new Request('https://jamesmireku.com' + out.url, { headers: { range: 'bytes=600-' } }), denv);
+const part = new Uint8Array(await r.arrayBuffer());
+check(r.status === 206 && r.headers.get('content-range') === 'bytes 600-999/1000' && part.length === 400 && part[0] === bytes[600], 'a dropped download resumes from where it stopped');
+r = await worker.fetch(new Request('https://jamesmireku.com' + out.url.replace('/library', '/windows')), denv);
+check(r.status === 403, 'a link for one file does not open another');
+r = await worker.fetch(new Request('https://jamesmireku.com' + out.url.replace(/s=[^&]+/, 's=forged')), denv);
+check(r.status === 403, 'a forged link is refused');
+check(!(await checkTicket('test-secret-for-downloads', 'library', String(Date.now() - 1000), 'x', Date.now())), 'an expired link is refused');
+const old = await signTicket('test-secret-for-downloads', 'library', Date.now() - 1000);
+r = await worker.fetch(new Request('https://jamesmireku.com' + old), denv); check(r.status === 403, 'an expired link is refused by the server too');
+owns = false; team = false;
+r = await ask('library', jwtFor('22222222-2222-3333-4444-555555555555')); check(r.status === 403, 'someone who does not own MIREKU gets no link');
+team = true;
+r = await ask('windows', jwtFor('33333333-2222-3333-4444-555555555555')); check(r.status === 200, 'the team gets links for testing');
+r = await ask('library'); check(r.status === 401, 'nobody signed in gets no link');
+r = await ask('secrets', jwtFor('33333333-2222-3333-4444-555555555555')); check(r.status === 404, 'an unknown file name is refused');
+r = await worker.fetch(new Request('https://jamesmireku.com/api/download', { method: 'POST', body: '{}' }), { ...denv, DOWNLOAD_SECRET: '' });
+check(r.status === 503, 'without its secret it says downloads are not set up');
 
 console.log(fails ? fails + ' FAILED' : 'ALL PASSED'); process.exitCode = fails ? 1 : 0;

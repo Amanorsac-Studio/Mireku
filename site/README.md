@@ -137,3 +137,14 @@ does not make anyone a studio admin on amanorsac.studio. Visits are counted by
 addresses, nothing about who anyone is; Do Not Track is respected.
 To add someone: they make an account, then in the SQL Editor:
 `insert into public.mireku_admins (user_id, email) select id, lower(email) from auth.users where lower(email) = 'their@email';`
+
+## Downloads (installers and the sound library)
+
+Files live in the studio's R2 bucket `amanorsac-downloads` under `MIREKU/`
+(uploaded with rclone; the library is too big for the dashboard's 300 MB
+limit). `worker.js` lists them in `FILES`: a new release is a new file in
+the bucket and a new line there. An owner (has_app_access) or a team member
+presses a button on /account; the Worker returns a link signed with
+`DOWNLOAD_SECRET` that works for 24 hours and streams the file from R2 with
+byte ranges, so a dropped download resumes. Each link issued is counted in
+`mireku_downloads` for the dashboard.

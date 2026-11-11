@@ -118,9 +118,9 @@
     list($('l-sources'), d.sources, function (n) { return n; }, 'visitors');
     list($('l-countries'), d.countries, countryName, 'visitors');
     list($('l-devices'), d.devices, function (n) { return n.charAt(0).toUpperCase() + n.slice(1); }, 'visitors');
-    var PLAT = { windows: 'Windows', mac: 'Mac', 'mac-arm64': 'Mac (Apple silicon)', 'mac-x64': 'Mac (Intel)', unknown: 'Unknown' };
+    var PLAT = { library: 'Sound library', windows: 'Windows', mac: 'Mac', 'mac-arm64': 'Mac (Apple silicon)', 'mac-x64': 'Mac (Intel)', unknown: 'Unknown' };
     list($('l-platforms'), dl.platforms, function (n) { return PLAT[n] || n; }, 'downloads');
-    list($('l-dsources'), dl.sources, function (n) { return n === 'hub' ? 'Amanorsac Hub' : n === 'site' ? 'Website' : n; }, 'downloads');
+    list($('l-dsources'), dl.sources, function (n) { return n === 'hub' ? 'Amanorsac Hub' : n === 'site' ? 'amanorsac.studio' : n; }, 'downloads');
     list($('l-codes'), d.codes, function (n) { return n; }, 'sales');
 
     var ev = d.events || {};

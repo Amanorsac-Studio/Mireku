@@ -14,7 +14,7 @@
    an unknown address still gets public/404.html with a 404 status.
 
    Secrets, set in Cloudflare and never written here: RESEND_API_KEY and
-   AUTH_HOOK_SECRET (see worker.js). */
+   AUTH_HOOK_SECRET and DOWNLOAD_SECRET (see worker.js). */
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "mireku",
@@ -26,6 +26,10 @@
     "html_handling": "auto-trailing-slash",
     "not_found_handling": "404-page"
   },
+  /* The studio's download bucket, read for MIREKU's files (MIREKU/...). */
+  "r2_buckets": [
+    { "binding": "DOWNLOADS", "bucket_name": "amanorsac-downloads" }
+  ],
   "preview_urls": true,
   "observability": { "enabled": true }
 }

@@ -24,7 +24,11 @@
     "directory": "./public",
     "binding": "ASSETS",
     "html_handling": "auto-trailing-slash",
-    "not_found_handling": "404-page"
+    "not_found_handling": "404-page",
+    /* These addresses are answered by worker.js, never by a file. Without
+       this, a browser opening /download/... as a page is given the 404 page
+       by the file layer before the Worker is asked. */
+    "run_worker_first": ["/api/*", "/download/*"]
   },
   /* The studio's download bucket, read for MIREKU's files (MIREKU/...). */
   "r2_buckets": [

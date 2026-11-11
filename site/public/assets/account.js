@@ -106,6 +106,7 @@
 
   /* ---------------- what the account holds ---------------- */
   var session = null;
+  var isTeam = false;
 
   function load() {
     $('who').textContent = session.user.email || '';
@@ -114,8 +115,10 @@
     // that is (is_mireku_admin); for everyone else this button never appears.
     sb.rpc('is_mireku_admin').then(function (r) {
       var team = !r.error && r.data === true;
+      isTeam = team;
       $('team').hidden = !team;
-      if (team) downloads($('team-downloads'), $('team-dl-msg'));
+      if (team) $('notowned').hidden = true;   // the team tests without buying
+      if (team) downloads();   // the team may download to test, without owning it
       if (team && params.get('next') === '/admin') location.replace('/admin');
     });
     return sb.from('purchases')
@@ -140,7 +143,7 @@
   var waited = 0;
   function notOwned() {
     $('owned').hidden = true;
-    $('notowned').hidden = false;
+    $('notowned').hidden = isTeam;
     var buy = $('buy');
     if (params.get('purchased') && waited < 20) {
       waited++;
@@ -202,8 +205,7 @@
       .eq('license_id', row.id).is('revoked_at', null).order('last_seen', { ascending: false })
       .then(function (r) {
         var list = (r.data || []);
-        $('seats').textContent = list.length + ' of ' + row.max_devices + ' in use. ' +
-          (list.length ? 'Remove a computer you no longer use to free its place.' : 'No computer has activated this key yet.');
+        $('seats').textContent = 'Computers using this key: ' + list.length + ' of ' + row.max_devices;
         $('devices').innerHTML = '';
         list.forEach(function (d) {
           var li = document.createElement('li');
@@ -230,34 +232,57 @@
      account owns MIREKU (or is on the team), then hands back a link that
      works for a day and can be resumed, which a 5.8 GB library needs. */
   var FILES = [
-    { id: 'windows', label: 'Windows', size: '44 MB' },
-    { id: 'mac',     label: 'Mac',     size: '136 MB' },
+    { id: 'windows', label: 'Windows installer', size: '44 MB' },
+    { id: 'mac',     label: 'Mac installer',     size: '136 MB' },
     { id: 'library', label: 'Sound library', size: '5.8 GB' },
     { id: 'guide',   label: 'Installation guide', size: '9 MB' },
     { id: 'readme',  label: 'Read me', size: '3 MB' }
   ];
-  function downloads(box, msgEl) {
-    box = box || $('downloads'); msgEl = msgEl || $('dl-msg');
+  /* One clear button for this computer, and the single files tucked away
+     underneath for anyone who needs just one. */
+  function downloads() {
+    var box = $('downloads'), msgEl = $('dl-msg');
+    $('get').hidden = false;
     box.innerHTML = '';
-    FILES.forEach(function (f) {
-      var b = document.createElement('button');
-      b.className = f.id === 'library' || f.id === 'guide' || f.id === 'readme' ? 'btn ghost' : 'btn'; b.type = 'button';
-      b.textContent = f.label + ' · ' + f.size;
-      b.addEventListener('click', function () { download(f.id, b, msgEl); });
-      box.appendChild(b);
-    });
-    // One button for everything this computer needs: its installer, the
-    // sound library, the guide and the read me. Not offered on a phone.
-    var plat = /Windows/i.test(navigator.userAgent) ? 'windows'
-             : /Macintosh|Mac OS X/i.test(navigator.userAgent) && !/iPhone|iPad|iPod/i.test(navigator.userAgent) && !(navigator.maxTouchPoints > 1) ? 'mac' : '';
+    var ua = navigator.userAgent;
+    var plat = /Windows/i.test(ua) ? 'windows'
+             : /Macintosh|Mac OS X/i.test(ua) && !/iPhone|iPad|iPod/i.test(ua) && !(navigator.maxTouchPoints > 1) ? 'mac' : '';
     if (plat) {
       var all = document.createElement('button');
       all.className = 'btn dl-all'; all.type = 'button';
-      all.textContent = 'Download all for ' + (plat === 'windows' ? 'Windows' : 'Mac') + ' · about 6 GB';
+      all.textContent = 'Download for ' + (plat === 'windows' ? 'Windows' : 'Mac');
       all.addEventListener('click', function () { downloadAll([plat, 'library', 'guide', 'readme'], all, msgEl); });
       box.appendChild(all);
+      var note = document.createElement('p');
+      note.className = 'muted small-note';
+      note.textContent = 'The installer, the sound library (5.8 GB), the installation guide and the read me. Use Wi-Fi if you can.';
+      box.appendChild(note);
+    } else {
+      var p = document.createElement('p');
+      p.className = 'muted';
+      p.textContent = 'MIREKU runs on Windows and Mac. Open this page on your computer to download it.';
+      box.appendChild(p);
     }
-    say(msgEl, 'Install MIREKU first, then download the sound library and open it with Install Library in MIREKU\'s gear menu. The library is large: use Wi-Fi if you can.');
+    var d = document.createElement('details'); d.className = 'more';
+    var sm = document.createElement('summary'); sm.textContent = 'Download files separately'; d.appendChild(sm);
+    var ul = document.createElement('ul'); ul.className = 'filelist';
+    FILES.forEach(function (f) {
+      var li = document.createElement('li');
+      var b = document.createElement('button'); b.type = 'button'; b.className = 'linkish';
+      b.textContent = f.label;
+      b.addEventListener('click', function () { download(f.id, b, msgEl); });
+      var sz = document.createElement('span'); sz.className = 'muted'; sz.textContent = f.size;
+      li.appendChild(b); li.appendChild(sz); ul.appendChild(li);
+    });
+    d.appendChild(ul); box.appendChild(d);
+    say(msgEl, '');
+  }
+
+  /* Starts one download without leaving the page. */
+  function start(o) {
+    var a = document.createElement('a');
+    a.href = o.url; a.download = o.name; a.style.display = 'none';
+    document.body.appendChild(a); a.click(); a.remove();
   }
 
   function ticket(file) {
@@ -279,9 +304,7 @@
       if (bad) return say(msgEl, (bad.error && bad.error.message) || 'The downloads could not be started. Try again shortly.', 'err');
       outs.forEach(function (o, i) {
         setTimeout(function () {
-          var a = document.createElement('a');
-          a.href = o.url; a.download = o.name; a.style.display = 'none';
-          document.body.appendChild(a); a.click(); a.remove();
+          start(o);
         }, i * 1200);
       });
       say(msgEl, outs.length + ' downloads are starting. If your browser asks whether this site may download several files, choose Allow. If one is missing, use its own button.', 'ok');
@@ -296,7 +319,7 @@
         b.disabled = false;
         if (!out.url) return say(msgEl, (out.error && out.error.message) || 'The download could not be started. Try again shortly.', 'err');
         say(msgEl, 'Your download of ' + out.name + ' is starting. If it stops, press the button again to carry on.', 'ok');
-        location.href = out.url;
+        start(out);
       })
       .catch(function () { b.disabled = false; say(msgEl, 'The download could not be started. Check your connection.', 'err'); });
   }

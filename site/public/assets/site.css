@@ -371,3 +371,8 @@ footer nav { display: flex; gap: 18px; flex-wrap: wrap; }
 .rank-n { font-variant-numeric: tabular-nums; color: var(--text); min-width: 2.5em; text-align: right; }
 .dash .specs { margin-top: 6px; }
 .dash .specs a { color: var(--gold-hi); }
+
+.panel.team { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; border-color: var(--gold-lo);
+              background: radial-gradient(ellipse at 0% 0%, rgba(217,164,65,.12), transparent 60%), #12100c; }
+.panel.team h2 { margin-bottom: 4px; }
+.panel.team p { margin: 0; }

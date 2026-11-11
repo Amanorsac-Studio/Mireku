@@ -110,6 +110,13 @@
   function load() {
     $('who').textContent = session.user.email || '';
     show('mine');
+    // The MIREKU team gets a door to the dashboard. The database decides who
+    // that is (is_mireku_admin); for everyone else this button never appears.
+    sb.rpc('is_mireku_admin').then(function (r) {
+      var team = !r.error && r.data === true;
+      $('team').hidden = !team;
+      if (team && params.get('next') === '/admin') location.replace('/admin');
+    });
     return sb.from('purchases')
       .select('id, license_key, max_devices, purchased_at, kind, expires_at')
       .eq('app', C.APP).order('purchased_at', { ascending: true }).limit(1)

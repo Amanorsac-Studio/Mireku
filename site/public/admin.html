@@ -27,19 +27,6 @@
 <main class="wrap dash">
   <p class="msg" id="loading" role="status">Loading…</p>
 
-  <!-- not signed in -->
-  <section class="panel narrow" id="signin" hidden>
-    <h1 class="dash-title">Team sign-in</h1>
-    <p class="muted">For the MIREKU team. Use the email and password of your MIREKU or Amanorsac account.</p>
-    <form id="f-signin" novalidate>
-      <div class="field"><label for="email">Email</label><input id="email" type="email" autocomplete="email" required></div>
-      <div class="field"><label for="pass">Password</label><input id="pass" type="password" autocomplete="current-password" required></div>
-      <button class="btn" type="submit">Sign in</button>
-      <p class="msg" id="signin-msg" role="status"></p>
-    </form>
-    <p class="switch">No account yet, or forgotten the password? <a href="/account">Go to the account page</a>, then come back here.</p>
-  </section>
-
   <!-- signed in, not on the team -->
   <section class="panel narrow" id="denied" hidden>
     <h1 class="dash-title">This page is for the MIREKU team</h1>

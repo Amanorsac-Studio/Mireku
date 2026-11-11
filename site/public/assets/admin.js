@@ -13,7 +13,7 @@
   var days = 30;
   var interest = [];
 
-  function show(id) { ['loading', 'signin', 'denied', 'dash'].forEach(function (x) { $(x).hidden = x !== id; }); }
+  function show(id) { ['loading', 'denied', 'dash'].forEach(function (x) { $(x).hidden = x !== id; }); }
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
   var fmt = new Intl.NumberFormat('en-GB');
   var countryName = (function () {
@@ -32,16 +32,8 @@
 
   if (!sb) { $('loading').textContent = 'The page did not finish loading. Refresh to try again.'; return; }
 
-  /* ---------------- signing in ---------------- */
-  $('f-signin').addEventListener('submit', function (e) {
-    e.preventDefault();
-    var m = $('signin-msg');
-    m.className = 'msg'; m.textContent = 'Signing in…';
-    sb.auth.signInWithPassword({ email: $('email').value.trim(), password: $('pass').value }).then(function (r) {
-      if (r.error) { m.className = 'msg err'; m.textContent = /invalid/i.test(r.error.message) ? 'That email and password do not match an account.' : r.error.message; }
-    });
-  });
-  $('signout').addEventListener('click', function () { sb.auth.signOut(); });
+  /* ---------------- signing in happens on /account, like everyone ---------------- */
+  $('signout').addEventListener('click', function () { sb.auth.signOut().then(function () { location.href = '/'; }); });
 
   sb.auth.onAuthStateChange(function (event, session) {
     if (event !== 'INITIAL_SESSION' && event !== 'SIGNED_IN' && event !== 'SIGNED_OUT') return;
@@ -51,7 +43,7 @@
   var user = null;
   function route(session) {
     $('signout').hidden = !session;
-    if (!session) { user = null; return show('signin'); }
+    if (!session) { user = null; location.replace('/account?next=/admin'); return; }
     user = session.user;
     show('loading');
     load();

@@ -14,7 +14,7 @@
    this repository; they live only in Supabase's function secrets.
    ===================================================================== */
 window.MIREKU = {
-  SELLING: false,
+  SELLING: true,
 
   APP: 'mireku',
   STUDIO: 'https://amanorsac.studio',

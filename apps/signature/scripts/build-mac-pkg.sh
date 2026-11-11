@@ -57,7 +57,7 @@ else                         TESTER_ARG=(-DMIREKU_TESTER_BUILD=OFF -DMIREKU_LICE
 # tools, the library sealed. The studio key comes from AOFAS_STUDIO_KEY (the
 # organisation secret in CI) or ~/.amanorsac/studio-keys.json on a studio Mac.
 cmake -S "$APP_DIR" -B "$BUILD" -G Xcode \
-  "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+  "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13 \
   -DMIREKU_PLAYER_BUILD=ON "${TESTER_ARG[@]}" "${SIGN_ARGS[@]}"
 if grep -q 'kIsTestKey = true' "$BUILD/generated/StudioKey.h"; then
   echo "REFUSED: built with the TEST studio key (set AOFAS_STUDIO_KEY); it could not open the sealed library"; exit 1
@@ -74,6 +74,16 @@ VST3="$ART/VST3/MIREKU.vst3"
 AU="$ART/AU/MIREKU.component"
 for B in "$APP" "$VST3" "$AU"; do
   [ -d "$B" ] || { echo "missing build product: $B"; exit 1; }
+done
+
+# OLDER MACS (2026-11-11): the Intel half must really be built for macOS 10.13,
+# read from the binary, not assumed from the flag. (The Apple silicon half is
+# always 11.0 or later: no older macOS runs on that hardware.)
+for B in "$APP/Contents/MacOS/MIREKU" "$VST3/Contents/MacOS/MIREKU" "$AU/Contents/MacOS/MIREKU"; do
+  MINOS="$(vtool -arch x86_64 -show-build "$B" 2>/dev/null | awk '/minos/ {print $2; exit}')"
+  [ -n "$MINOS" ] || MINOS="$(otool -arch x86_64 -l "$B" | awk '/LC_VERSION_MIN_MACOSX/ {f=1} f && /version/ {print $2; exit}')"
+  echo "  minimum macOS (Intel) of $(basename "$(dirname "$(dirname "$(dirname "$B")")")"): $MINOS"
+  case "$MINOS" in 10.13*) ;; *) echo "the Intel build does not target macOS 10.13"; exit 1;; esac
 done
 
 # A release must not carry the test-key public key (Licence Standard R2), and a

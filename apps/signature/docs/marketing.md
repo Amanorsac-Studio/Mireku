@@ -91,7 +91,7 @@ renew the licence. No audio, presets or usage data are ever sent.
 | | Windows | macOS |
 |---|---|---|
 | Formats | Standalone, VST3 | Standalone, VST3, Audio Unit |
-| System | 64-bit Windows | macOS 11 or later, Apple silicon and Intel |
+| System | 64-bit Windows | macOS 10.13 (High Sierra) or later, Apple silicon and Intel |
 | Installer | 42 MB | 135 MB, signed and notarised |
 | Library | 5.4 GB download, about 5.8 GB of audio | the same |
 

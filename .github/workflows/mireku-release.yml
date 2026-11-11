@@ -266,17 +266,11 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 120
     # TWO Mac installers for a release (2026-11-11): the main one (universal,
-    # macOS 11+) and a separate one for older Macs (Intel, macOS 10.13+). A test
-    # build makes only the main one: build-mac-pkg.sh ends at once, with
-    # nothing built, when asked for an older-Macs TEST package.
-    # (The list is fixed. A list computed from the inputs left the whole run
-    # queued for ever with no jobs, twice, on 2026-11-11.)
-    strategy:
-      fail-fast: false
-      matrix:
-        older: ["0", "1"]
+    # macOS 11+) and a separate one for older Macs (Intel, macOS 10.13+), built
+    # one after the other in this job. A test build makes only the main one.
+    # (A job matrix for the two was refused by GitHub as a startup failure three
+    # times that day, so there is none.)
     env:
-      MIREKU_MAC_OLDER: ${{ matrix.older }}
       MIREKU_TESTER: ${{ inputs.tester && '1' || '0' }}
       AOFAS_STUDIO_KEY: ${{ secrets.AOFAS_STUDIO_KEY }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -333,14 +327,19 @@ jobs:
       - name: Build, sign, notarise and staple
         run: bash apps/signature/scripts/build-mac-pkg.sh
 
+      - name: Build, sign, notarise and staple the older-Macs installer
+        run: |
+          cp apps/signature/release/auval.txt apps/signature/release/auval-main.txt || true
+          MIREKU_MAC_OLDER=1 bash apps/signature/scripts/build-mac-pkg.sh
+
       - name: Remove the key material
         if: always()
         run: rm -f "$RUNNER_TEMP/asc.p8"; security delete-keychain build.keychain || true
 
       - uses: actions/upload-artifact@v4
         with:
-          name: MIREKU-macOS${{ matrix.older == '1' && '-OlderMacs' || '' }}
+          name: MIREKU-macOS
           path: |
             apps/signature/release/*.pkg
-            apps/signature/release/auval.txt
-          if-no-files-found: ${{ (matrix.older == '1' && inputs.tester) && 'ignore' || 'error' }}
+            apps/signature/release/auval*.txt
+          if-no-files-found: error

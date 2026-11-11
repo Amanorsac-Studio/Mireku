@@ -46,9 +46,13 @@
         try {
           if (!audio) { audio = new Audio('/audio/behold.mp3'); audio.preload = 'auto'; audio.addEventListener('ended', hide); }
           armed = true;
-          audio.muted = true;
-          var p = audio.play();                       // inside the press: this is what unlocks it
-          if (p && p.then) p.then(function () { if (armed && $('playing').hidden) { audio.pause(); audio.currentTime = 0; } }, function () {});
+          // Start and stop at once, inside the press. Nothing is heard, but
+          // this is what lets the browser (iPhone and Safari above all) play
+          // this sound a moment later, once the sign-in has gone through.
+          audio.muted = false; audio.volume = 0;
+          var p = audio.play();
+          audio.pause();
+          if (p && p.catch) p.catch(function () {});
         } catch (e) {}
       },
       play: function () {

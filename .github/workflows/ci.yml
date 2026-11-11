@@ -3,7 +3,18 @@ name: CI
 on:
   push:
     branches: [main]
+    # The website (site/, jamesmireku.com) is built and deployed by
+    # Cloudflare, not here. A change that touches only the website does not
+    # need the apps rebuilt and tested on Windows and Mac.
+    paths-ignore: ['site/**']
   pull_request:
+    paths-ignore: ['site/**']
+
+# One run per branch or pull request at a time: a newer push cancels the
+# older run still waiting or running, so the queue cannot pile up.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   format-and-capture:

@@ -1991,6 +1991,27 @@ public:
 
     bool isAsleep() const { return asleep_; }        // test / instrumentation helper
 
+    /// THE OUTGOING SOUND KEEPS ITS OWN EFFECTS. Moves this rack's units, with
+    /// their tails and every setting, into `ghost`, and leaves this rack empty
+    /// for the new performance's units (setState). What an earlier change left
+    /// in the ghost is dropped. Message thread.
+    void handOverTo (FxRackDsp& ghost)
+    {
+        std::vector<Slot> dropped;                   // destroyed outside the locks
+        {
+            const juce::SpinLock::ScopedLockType a (lock_);
+            const juce::SpinLock::ScopedLockType b (ghost.lock_);
+            dropped = std::move (ghost.slots_);
+            ghost.slots_ = std::move (slots_);
+            slots_.clear();
+            // the units were ramping to dry for the swap (beginRestructure): in
+            // the ghost they stay as they were
+            for (auto& s : ghost.slots_) s.mix.setCurrentAndTargetValue (s.bypassed ? 0.0f : 1.0f);
+        }
+        ghost.wake_.store (true, std::memory_order_relaxed);
+        wake_.store (true, std::memory_order_relaxed);
+    }
+
 private:
     struct Slot
     {

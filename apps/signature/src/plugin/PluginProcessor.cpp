@@ -267,6 +267,8 @@ void JMSignatureProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     {
         engines[(size_t) i].prepare (sampleRate, samplesPerBlock);
         slotRacks[(size_t) i].prepare (sampleRate, samplesPerBlock);
+        ghostEngines[(size_t) i].prepare (sampleRate, samplesPerBlock);
+        ghostRacks[(size_t) i].prepare (sampleRate, samplesPerBlock);
         // R3(D)'s 20 ms is the house number for a gain ramp; pan is smoothed as a
         // POSITION and the equal-power law recomputed from it per sample.
         slotVolSm[(size_t) i].reset (sampleRate, 0.02);
@@ -379,6 +381,11 @@ void JMSignatureProcessor::handleRoutedMessage (const juce::MidiMessage& m, juce
             const int note = juce::jlimit (0, 127, m.getNoteNumber() + shift);
             for (int i = 0; i < 4; ++i)
                 if (direct (i)) engines[(size_t) i].noteOff (slotNote (i, m.getNoteNumber()));
+            // the outgoing sound hears every key lifted, under the shift it was played with
+            for (int i = 0; i < 4; ++i)
+                if ((mask & (1u << i)) != 0 && ghostActive[(size_t) i].load (std::memory_order_relaxed))
+                    ghostEngines[(size_t) i].noteOff (juce::jlimit (0, 127, m.getNoteNumber()
+                                                                        + ghostNoteShift[(size_t) i].load (std::memory_order_relaxed)));
             if (arpMask != 0) arp.noteOff (note, arpSink);
             if (mask != 0) mod.noteOff();
         }
@@ -387,6 +394,7 @@ void JMSignatureProcessor::handleRoutedMessage (const juce::MidiMessage& m, juce
             // panic is never filtered — a stuck note must always be clearable
             arp.panic (arpSink);
             for (auto& e : engines) e.allNotesOff (m.isAllNotesOff());
+            for (auto& e : ghostEngines) e.allNotesOff (m.isAllNotesOff());
             mod.allNotesOff();
         }
         else if (m.isProgramChange())
@@ -412,7 +420,7 @@ void JMSignatureProcessor::handleRoutedMessage (const juce::MidiMessage& m, juce
                                 * (float) pitchBendRange();
             if (mask != 0) wheelBend_.store ((float) m.getPitchWheelValue() / 16383.0f, std::memory_order_relaxed);
             for (int i = 0; i < 4; ++i)
-                if (routed (i)) engines[(size_t) i].setPitchBend (semis);
+                if (routed (i)) { engines[(size_t) i].setPitchBend (semis); ghostEngines[(size_t) i].setPitchBend (semis); }
         }
         else if (m.isController())
         {
@@ -426,6 +434,9 @@ void JMSignatureProcessor::handleRoutedMessage (const juce::MidiMessage& m, juce
                 // the arp off keep the §5.4 behaviour byte for byte.
                 for (int i = 0; i < 4; ++i)
                     if (direct (i)) engines[(size_t) i].sustainPedal (val >= 64);
+                // lifting the pedal lets the outgoing sound go too
+                for (int i = 0; i < 4; ++i)
+                    if ((mask & (1u << i)) != 0) ghostEngines[(size_t) i].sustainPedal (val >= 64);
                 if (arpMask != 0) arp.setPedal (val >= 64, arpSink);
             }
             else if (cc == 11)                                // expression → volume
@@ -470,6 +481,8 @@ void JMSignatureProcessor::handleRoutedMessage (const juce::MidiMessage& m, juce
             {
                 for (int i = 0; i < 4; ++i)
                     if (direct (i)) engines[(size_t) i].sostenutoPedal (val >= 64);
+                for (int i = 0; i < 4; ++i)
+                    if ((mask & (1u << i)) != 0 && val < 64) ghostEngines[(size_t) i].sostenutoPedal (false);
             }
             else if (cc == 67 && ! state.midiMap.isLearned (cc))   // soft pedal
             {
@@ -523,7 +536,11 @@ void JMSignatureProcessor::applyArpEvent (const ArpEvent& e)
                 engines[(size_t) i].noteOn (note, e.velocity);
         }
         else
+        {
             engines[(size_t) i].noteOff (note);
+            if (ghostActive[(size_t) i].load (std::memory_order_relaxed))
+                ghostEngines[(size_t) i].noteOff (juce::jlimit (0, 127, e.note + ghostSlotShift[(size_t) i].load (std::memory_order_relaxed)));
+        }
     }
 }
 
@@ -1062,6 +1079,25 @@ void JMSignatureProcessor::renderChunk (juce::AudioBuffer<float>& buffer, int st
     int voices = 0;
     for (int i = 0; i < 4; ++i)
     {
+        // THE OUTGOING SOUND of this slot, if a change left one: its own engine,
+        // its own effects, the volume, pan and output it had. It ends by itself
+        // when its last voice has finished and its effects have gone silent.
+        if (ghostActive[(size_t) i].load (std::memory_order_relaxed))
+        {
+            auto& ge = ghostEngines[(size_t) i];
+            voices += ge.activeVoices();
+            slotView.clear();
+            ge.render (slotView, len);
+            ghostRacks[(size_t) i].process (slotView, bpm_);
+            const float g = ghostGain[(size_t) i].load (std::memory_order_relaxed);
+            const float ga = (ghostPan[(size_t) i].load (std::memory_order_relaxed) + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
+            auto& gv = outViews[juce::jlimit (0, kNumOutputs - 1, ghostOut[(size_t) i].load (std::memory_order_relaxed))];
+            gv.addFrom (0, 0, slotView, 0, 0, len, g * std::cos (ga) * 1.414f * 0.7071f);
+            gv.addFrom (1, 0, slotView, 1, 0, len, g * std::sin (ga) * 1.414f * 0.7071f);
+            if (ge.activeVoices() == 0 && ghostRacks[(size_t) i].isAsleep())
+                ghostActive[(size_t) i].store (false, std::memory_order_relaxed);
+        }
+
         auto& eng = engines[(size_t) i];
         voices += eng.activeVoices();
         const bool enabled = slotEnable[(size_t) i]->load() >= 0.5f;
@@ -1140,6 +1176,10 @@ void JMSignatureProcessor::timerCallback()
     // is what stops winding the clock back from reviving an expired key).
     if constexpr (tester::kEnabled)
         if (++testerTick_ >= 30 * 30) { testerTick_ = 0; applyTesterVerdict (tester_.refresh()); }
+
+    // an outgoing sound that has finished gives its instruments back
+    for (int i = 0; i < 4; ++i)
+        if (! ghostActive[(size_t) i].load (std::memory_order_relaxed)) ghostEngines[(size_t) i].purgeRetired();
 
     // the player's controller map is saved the moment it changes
     if (state.midiMap.dirty.exchange (false) && persistMidiMap())
@@ -2890,6 +2930,43 @@ bool JMSignatureProcessor::applyPerformanceVar (const juce::var& v, const juce::
     std::array<juce::String, 4> rackBefore;
     for (int i = 0; i < 4; ++i) rackBefore[(size_t) i] = juce::JSON::toString (rackToVar (state.slots[(size_t) i].rack));
     const auto masterBefore = juce::JSON::toString (rackToVar (state.masterRack));
+
+    // What each slot sounds like NOW, for the outgoing sound (below), and what
+    // the screen is built from, to know afterwards whether anything it shows
+    // as STRUCTURE changed or only values did.
+    auto slotSound = [this] (int i)
+    {
+        return juce::JSON::toString (state.slotToVar (i))
+             + "|" + juce::String (apvts.getRawParameterValue ("slotVol" + juce::String (i))->load(), 4)
+             + "|" + juce::String (apvts.getRawParameterValue ("slotPan" + juce::String (i))->load(), 4);
+    };
+    auto structure = [this]
+    {
+        juce::String s = state.performPresetName + "|" + juce::String (state.mod.rowCount);
+        for (int i = 0; i < 4; ++i)
+        {
+            auto& sl = state.slots[(size_t) i];
+            s << "|" << sl.world << "," << sl.bundleDir << "," << sl.bundleName << "," << sl.presetName
+              << "," << sl.octave << "," << sl.keyLo << "," << sl.keyHi << ":";
+            for (auto& u : sl.rack) s << (int) u.type << ".";
+        }
+        for (auto& u : state.masterRack) s << (int) u.type << ".";
+        for (auto& m : state.macros) s << "|" << m.name << "," << (int) m.targets.size();
+        return s;
+    };
+    std::array<juce::String, 4> soundBefore;
+    std::array<float, 4> gainBefore {}, panBefore {};
+    std::array<int, 4> outBefore {}, slotShiftBefore {};
+    const int globalShiftBefore = (int) transposeParam->load() + 12 * (int) octaveParam->load();
+    for (int i = 0; i < 4; ++i)
+    {
+        soundBefore[(size_t) i] = slotSound (i);
+        gainBefore[(size_t) i] = juce::Decibels::decibelsToGain (slotVolSm[(size_t) i].getCurrentValue(), -60.0f);
+        panBefore[(size_t) i] = slotPanSm[(size_t) i].getCurrentValue();
+        outBefore[(size_t) i] = slotOutputIndex (i);
+        slotShiftBefore[(size_t) i] = slotShift[(size_t) i].load();
+    }
+    const auto structureBefore = structure();
     if (auto* slots = v.getProperty ("slots", juce::var()).getArray())
         for (int i = 0; i < juce::jmin (4, slots->size()); ++i)
             state.slotFromVar (i, slots->getReference (i));
@@ -2927,6 +3004,25 @@ bool JMSignatureProcessor::applyPerformanceVar (const juce::var& v, const juce::
     for (int i = 0; i < 4; ++i)
         rackChanged[(size_t) i] = juce::JSON::toString (rackToVar (state.slots[(size_t) i].rack)) != rackBefore[(size_t) i];
     const bool masterChanged = juce::JSON::toString (rackToVar (state.masterRack)) != masterBefore;
+    // THE OUTGOING SOUND. A slot whose sound is about to change, and which is
+    // still sounding (a held or pedalled note, or the tail of its effects),
+    // hands those voices and those effects to its ghost before anything new is
+    // applied; the ghost plays them out at the volume, pan and output they had.
+    for (int i = 0; i < 4; ++i)
+    {
+        if (slotSound (i) == soundBefore[(size_t) i]) continue;                  // a scene that leaves this slot alone
+        if (engines[(size_t) i].activeVoices() == 0 && slotRacks[(size_t) i].isAsleep()) continue;
+        ghostActive[(size_t) i].store (false);                                   // the audio thread lets go of the old ghost first
+        ghostGain[(size_t) i].store (gainBefore[(size_t) i]);
+        ghostPan[(size_t) i].store (panBefore[(size_t) i]);
+        ghostOut[(size_t) i].store (outBefore[(size_t) i]);
+        ghostSlotShift[(size_t) i].store (slotShiftBefore[(size_t) i]);
+        ghostNoteShift[(size_t) i].store (globalShiftBefore + slotShiftBefore[(size_t) i]);
+        engines[(size_t) i].handOverVoicesTo (ghostEngines[(size_t) i]);
+        slotRacks[(size_t) i].handOverTo (ghostRacks[(size_t) i]);
+        ghostActive[(size_t) i].store (true);
+        rackChanged[(size_t) i] = true;                                          // its rack is empty now: build the new one
+    }
     for (int i = 0; i < 4; ++i) if (rackChanged[(size_t) i]) slotRacks[(size_t) i].beginRestructure();
     if (masterChanged) masterRack.beginRestructure();
     deferRacks_ = true;
@@ -2943,7 +3039,13 @@ bool JMSignatureProcessor::applyPerformanceVar (const juce::var& v, const juce::
                                      if (masterChanged) masterRack.setState (state.masterRack, true);
                                  });
     publishModulation();
-    stateChanged.sendChangeMessage();
+    // THE SCREEN IS REBUILT ONLY WHEN WHAT IT IS BUILT FROM CHANGED (client,
+    // 2026-11-11: "the UI flashes when changing scenes"). stateChanged tells
+    // the editor to tear down and rebuild the page, the rack and the browser.
+    // A scene usually changes values only: the same instruments, the same
+    // units in the same order. Every knob, switch and meter already follows
+    // its value from the editor's timer, so in that case nothing is rebuilt.
+    if (structure() != structureBefore) stateChanged.sendChangeMessage();
     return true;
 }
 

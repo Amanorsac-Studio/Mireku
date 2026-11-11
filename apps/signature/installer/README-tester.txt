@@ -1,8 +1,20 @@
-MIREKU 1.1.2 - test build
+MIREKU 1.1.3 - test build
 Amanorsac Studio
 
 
-0. WHAT CHANGED IN 1.1.2
+0. WHAT CHANGED IN 1.1.3
+
+   Installs over any 1.1 build. Presets, performances, the setlist, the
+   library and the test key are kept.
+
+     - CHANGING PERFORMANCE WITH THE SUSTAIN PEDAL DOWN no longer makes the
+       held sound jump in volume. The notes you are holding keep the volume,
+       effects and tone they were played with until you let them go; new
+       notes play the new performance.
+     - CHANGING SCENE no longer flashes the screen. A scene that only moves
+       knobs updates them in place.
+
+   WHAT CHANGED IN 1.1.2
 
    Installs over 1.1.1 or 1.1.0. Presets, performances, the setlist and the
    test key are kept; the key keeps the days it has left.

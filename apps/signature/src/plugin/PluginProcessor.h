@@ -117,6 +117,21 @@ public:
     AppState state;
     std::array<SamplerEngine, 4> engines;
     std::array<FxRackDsp, 4> slotRacks;
+
+    //==========================================================================
+    // THE OUTGOING SOUND (2026-11-11). When a performance or a scene changes a
+    // slot, the notes still sounding in it (held by a key or by the sustain
+    // pedal) and the tail of its effects are moved here and played out exactly
+    // as they were: their own engine settings, their own effects, their own
+    // volume, pan and output. Measured before this, a held sound moved by up to
+    // +15.5 dB at a performance change, because it was pushed through the new
+    // performance's volume, effects and tone. The slot itself starts clean.
+    std::array<SamplerEngine, 4> ghostEngines;
+    std::array<FxRackDsp, 4> ghostRacks;
+    std::array<std::atomic<bool>, 4> ghostActive {};
+    std::array<std::atomic<float>, 4> ghostGain {}, ghostPan {};     // linear gain, pan -1..1
+    std::array<std::atomic<int>, 4> ghostOut {}, ghostNoteShift {}, ghostSlotShift {};
+    int outgoingSlots() const { int n = 0; for (auto& g : ghostActive) n += g.load() ? 1 : 0; return n; }
     FxRackDsp masterRack;
     MasterLimiter masterLimiter;      // client review round 3 (D): master-bus safety limiter
 

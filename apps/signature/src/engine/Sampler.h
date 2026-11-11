@@ -410,6 +410,60 @@ public:
         }), retired_.end());
     }
     int retiredBundles() const { return (int) retired_.size(); }      // test/introspection helper
+
+    /// THE OUTGOING SOUND KEEPS ITS OWN ENGINE (client, 2026-11-11: "switching
+    /// performances while holding the sustain pedal makes the volume of the
+    /// sound jump at you"). Seamless switching kept the held voices alive, but
+    /// left them in this engine, where the NEW performance's tone settings,
+    /// envelope and world were then applied to them. This moves every sounding
+    /// voice into `ghost` together with everything it is sounding under: the
+    /// world, the engine controls, the envelope, the bend, the pedals and the
+    /// state of the voicing filters. `ghost` then plays them out exactly as
+    /// they were; this engine is left empty for the new sound. Message thread.
+    /// Returns the number of voices moved.
+    int handOverVoicesTo (SamplerEngine& ghost)
+    {
+        const juce::SpinLock::ScopedLockType a (lock_);
+        const juce::SpinLock::ScopedLockType b (ghost.lock_);
+        // whatever an earlier change left in the ghost is let go, not cut
+        for (auto& g : ghost.voices_) if (g.active) g.release();
+        int moved = 0;
+        for (auto& v : voices_)
+        {
+            if (! v.active) continue;
+            Voice* dst = nullptr;
+            for (auto& g : ghost.voices_) if (! g.active) { dst = &g; break; }
+            if (dst == nullptr)
+                for (auto& g : ghost.voices_)
+                    if (g.releasing) { if (g.sample != nullptr) g.sample->voiceRefs--; dst = &g; break; }
+            if (dst == nullptr) continue;            // no room: it stays, under the new settings
+            *dst = v;                                // the SamplePtr and its voiceRef travel with it
+            v.active = false;
+            v.sample = nullptr;
+            ++moved;
+        }
+        ghost.world_ = world_;
+        for (size_t i = 0; i < engineParams_.size(); ++i) ghost.engineParams_[i].store (engineParams_[i].load());
+        ghost.ampEnv_.attackMs.store (ampEnv_.attackMs.load());
+        ghost.ampEnv_.decayMs.store (ampEnv_.decayMs.load());
+        ghost.ampEnv_.sustain.store (ampEnv_.sustain.load());
+        ghost.ampEnv_.releaseMs.store (ampEnv_.releaseMs.load());
+        ghost.bendSemis_.store (bendSemis_.load());
+        ghost.bendCur_ = bendCur_;
+        ghost.sustainDown_ = sustainDown_;
+        ghost.sostenutoDown_ = sostenutoDown_;
+        ghost.driveDc_ = driveDc_;
+        ghost.voicingChain_ = voicingChain_;
+        ghost.tiltLp_[0] = tiltLp_[0];
+        ghost.tiltLp_[1] = tiltLp_[1];
+        ghost.motionLfo_ = motionLfo_;
+        ghost.idleSamples_ = 0;
+        // the samples those voices read must outlive them: the ghost keeps the
+        // instruments alive until purgeRetired() finds no voice left on them
+        if (bundle_ != nullptr) ghost.retired_.push_back (bundle_);
+        for (auto& r : retired_) ghost.retired_.push_back (r);
+        return moved;
+    }
     BundlePtr bundle() const { const juce::SpinLock::ScopedLockType sl (lock_); return bundle_; }
 
     AmpEnvParams& ampEnv() { return ampEnv_; }

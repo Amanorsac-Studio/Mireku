@@ -557,6 +557,66 @@ int main (int argc, char** argv)
                      (double) pr.bytesDone.load() / 1.0e9, (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0);
         return r.ok ? 0 : 1;
     }
+    // MirekuSnapshot --switch-jump <library>: hold a chord with the SUSTAIN pedal
+    // in each performance, change to the next one, and report how far the level
+    // of the HELD sound moves (no new notes are played). Measured on OUT 1 with
+    // the limiter off, in 100 ms windows.
+    if (argc >= 3 && juce::String (argv[1]) == "--switch-jump")
+    {
+        const juce::File libDir (juce::String::fromUTF8 (argv[2]));
+        JMSignatureProcessor proc;
+        proc.state.library.setLibraryDirTransient (libDir);
+        proc.prepareToPlay (48000.0, 256);
+        if (auto* lim = proc.apvts.getParameter ("limiter")) lim->setValueNotifyingHost (0.0f);
+        juce::AudioBuffer<float> buf (proc.getTotalNumOutputChannels(), 256);
+        auto rmsDb = [&] (double seconds, const juce::MidiBuffer& first)
+        {
+            double sum = 0; juce::int64 count = 0;
+            const int blocks = (int) (seconds * 48000.0 / 256.0);
+            for (int b = 0; b < blocks; ++b)
+            {
+                juce::MidiBuffer midi;
+                if (b == 0) midi = first;
+                buf.clear();
+                proc.processBlock (buf, midi);
+                for (int i = 0; i < 256; ++i) { const float x = buf.getSample (0, i); sum += (double) x * x; }
+                count += 256;
+            }
+            return 10.0 * std::log10 (sum / (double) juce::jmax<juce::int64> (1, count) + 1.0e-12);
+        };
+        auto files = sealed::listDocuments (libDir.getChildFile ("Performance").getChildFile ("Factory"));
+        double worst = 0; juce::String worstPair;
+        std::printf ("%-24s -> %-24s %8s %8s %8s %8s\n", "from", "to", "before", "+100ms", "+500ms", "jump");
+        for (int k = 0; k + 1 < files.size(); ++k)
+        {
+            juce::MidiBuffer panic;
+            panic.addEvent (juce::MidiMessage::controllerEvent (1, 64, 0), 0);
+            panic.addEvent (juce::MidiMessage::allSoundOff (1), 0);
+            rmsDb (0.05, panic);
+            proc.loadPerformancePreset (files[k]);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (80);
+            rmsDb (0.3, {});
+            juce::MidiBuffer chord;
+            chord.addEvent (juce::MidiMessage::controllerEvent (1, 64, 127), 0);
+            for (int note : { 48, 55, 60, 64, 67 }) chord.addEvent (juce::MidiMessage::noteOn (1, note, (juce::uint8) 96), 1);
+            rmsDb (0.6, chord);
+            juce::MidiBuffer offs;
+            for (int note : { 48, 55, 60, 64, 67 }) offs.addEvent (juce::MidiMessage::noteOff (1, note), 0);
+            rmsDb (0.3, offs);                              // keys up, pedal holds
+            const double before = rmsDb (0.1, {});
+            proc.loadPerformancePreset (files[k + 1]);
+            const double a1 = rmsDb (0.1, {});
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (60);
+            rmsDb (0.3, {});
+            const double a5 = rmsDb (0.1, {});
+            const double jump = juce::jmax (a1, a5) - before;
+            std::printf ("%-24s -> %-24s %8.1f %8.1f %8.1f %+8.1f\n", files[k].getFileNameWithoutExtension().substring (0, 24).toRawUTF8(),
+                         files[k + 1].getFileNameWithoutExtension().substring (0, 24).toRawUTF8(), before, a1, a5, jump);
+            if (before > -70.0 && std::abs (jump) > std::abs (worst)) { worst = jump; worstPair = files[k].getFileNameWithoutExtension() + " -> " + files[k + 1].getFileNameWithoutExtension(); }
+        }
+        std::printf ("largest move of a held sound: %+.1f dB (%s)\n", worst, worstPair.toRawUTF8());
+        return 0;
+    }
     if (argc >= 3 && juce::String (argv[1]) == "--bench-sealed")
         return benchSealed (juce::File (juce::String::fromUTF8 (argv[2])));
     if (argc >= 3 && juce::String (argv[1]) == "--bench")
@@ -2610,6 +2670,130 @@ int main (int argc, char** argv)
                 mv->setValueNotifyingHost (mv0);
                 lim->setValueNotifyingHost (lim0);
                 sv->setValueNotifyingHost (sv0);
+            }
+
+            // ================================================= 1.1.3 (2026-11-11)
+            std::printf ("\n== 1.1.3: a held sound keeps its level across a change; a scene does not rebuild the screen ==\n");
+            {
+                auto pumpMs = [] (int ms) { juce::MessageManager::getInstance()->runDispatchLoopUntil (ms); };
+                auto* lim = proc.apvts.getParameter ("limiter");
+                auto* sv = proc.apvts.getParameter ("slotVol0");
+                const float lim0 = lim->getValue(), sv0 = sv->getValue();
+                std::array<float, 4> en0 {};
+                for (int i = 0; i < 4; ++i) en0[(size_t) i] = proc.apvts.getParameter ("slotEnable" + juce::String (i))->getValue();
+                const auto keepRack = proc.state.slots[0].rack;
+                // the key-range checks above leave slot A answering part of the keyboard
+                const int lo0 = proc.state.slots[0].keyLo, hi0 = proc.state.slots[0].keyHi, oct0 = proc.state.slots[0].octave;
+                proc.setSlotRange (0, 0, 127);
+                proc.setSlotShift (0, 0);
+                lim->setValueNotifyingHost (0.0f);
+                for (int i = 0; i < 4; ++i) proc.apvts.getParameter ("slotEnable" + juce::String (i))->setValueNotifyingHost (i == 0 ? 1.0f : 0.0f);
+
+                proc.prepareToPlay (48000.0, 256);
+                juce::AudioBuffer<float> buf (proc.getTotalNumOutputChannels(), 256);
+                auto runDb = [&] (double seconds, const juce::MidiBuffer& first)
+                {
+                    double sum = 0; juce::int64 count = 0;
+                    const int blocks = (int) (seconds * 48000.0 / 256.0);
+                    for (int b = 0; b < blocks; ++b)
+                    {
+                        juce::MidiBuffer midi;
+                        if (b == 0) midi = first;
+                        buf.clear();
+                        proc.processBlock (buf, midi);
+                        for (int i = 0; i < 256; ++i) { const float x = buf.getSample (0, i); sum += (double) x * x; }
+                        count += 256;
+                    }
+                    return 10.0 * std::log10 (sum / (double) juce::jmax<juce::int64> (1, count) + 1.0e-12);
+                };
+
+                // performance QUIET: slot A turned well down, no effects
+                proc.state.slots[0].rack.clear();
+                sv->setValueNotifyingHost (0.45f);
+                const auto quiet = proc.performanceVar ("Quiet");
+                // performance LOUD: the same instrument, slot A at full volume, with a reverb
+                proc.state.slots[0].rack.push_back (defaultUnitState (FxType::plateReverb, false));
+                sv->setValueNotifyingHost (1.0f);
+                const auto loud = proc.performanceVar ("Loud");
+
+                proc.applyPerformanceVar (quiet, "Quiet");
+                pumpMs (80);
+                runDb (0.3, {});
+                juce::MidiBuffer hold;
+                hold.addEvent (juce::MidiMessage::controllerEvent (1, 64, 127), 0);
+                hold.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 1);
+                runDb (0.4, hold);
+                juce::MidiBuffer up;
+                up.addEvent (juce::MidiMessage::noteOff (1, 60), 0);
+                runDb (0.2, up);                                         // the key is up; the pedal holds it
+                const double before = runDb (0.1, {});
+                CHECK (before > -60.0 && proc.engines[0].activeVoices() >= 1, "a note held by the sustain pedal is sounding in slot A");
+
+                proc.applyPerformanceVar (loud, "Loud");                 // the change, pedal still down
+                const double after = runDb (0.1, {});
+                pumpMs (60);
+                const double later = runDb (0.1, {});
+                std::printf ("    held note: %.1f dB before, %.1f dB just after, %.1f dB 0.2 s after the change\n", before, after, later);
+                CHECK (std::abs (after - before) < 2.0 && later - before < 2.0,
+                       "changing performance does NOT move the level of the held sound");
+                CHECK (proc.outgoingSlots() == 1 && proc.engines[0].activeVoices() == 0 && proc.ghostEngines[0].activeVoices() >= 1,
+                       "the held voice plays on in the outgoing path; the slot itself is free");
+
+                juce::MidiBuffer fresh;
+                fresh.addEvent (juce::MidiMessage::noteOn (1, 67, (juce::uint8) 100), 0);
+                runDb (0.1, fresh);
+                CHECK (proc.engines[0].activeVoices() >= 1, "a new note plays in the new performance");
+                juce::MidiBuffer release;
+                release.addEvent (juce::MidiMessage::noteOff (1, 67), 0);
+                release.addEvent (juce::MidiMessage::controllerEvent (1, 64, 0), 1);
+                runDb (0.2, release);
+                CHECK (proc.ghostEngines[0].activeVoices() == 0 || proc.ghostEngines[0].releasingVoices() == proc.ghostEngines[0].activeVoices(),
+                       "lifting the pedal lets the outgoing sound go");
+                runDb (12.0, {});                                        // releases and tails die, racks rest
+                CHECK (proc.outgoingSlots() == 0, "and when it has finished the outgoing path closes by itself");
+
+                // ---- a scene that changes values only does not rebuild the screen
+                struct Counter : juce::ChangeListener
+                {
+                    int n = 0;
+                    void changeListenerCallback (juce::ChangeBroadcaster*) override { ++n; }
+                } counter;
+                pumpMs (120);
+                proc.stateChanged.addChangeListener (&counter);
+                const auto sceneA = proc.performanceVar ("Loud");
+                sv->setValueNotifyingHost (0.7f);
+                proc.state.slots[0].rack[0].params["mix"] = 61.0f;
+                const auto sceneB = proc.performanceVar ("Loud");        // same instruments, same units; other values
+                proc.applyPerformanceVar (sceneA, "Loud");
+                pumpMs (120);
+                counter.n = 0;
+                proc.applyPerformanceVar (sceneB, "Loud");
+                pumpMs (150);
+                CHECK (counter.n == 0, "a scene that only moves knobs sends no rebuild to the screen");
+                CHECK (std::abs (sv->getValue() - 0.7f) < 1.0e-4f
+                       && std::abs (proc.state.slots[0].rack[0].params["mix"] - 61.0f) < 1.0e-3f,
+                       "...and its values are in place all the same");
+                proc.state.slots[0].rack.push_back (defaultUnitState (FxType::jmChorus, false));
+                const auto sceneC = proc.performanceVar ("Loud");        // one more unit: the rack's structure changed
+                proc.applyPerformanceVar (sceneB, "Loud");
+                pumpMs (150);
+                counter.n = 0;
+                proc.applyPerformanceVar (sceneC, "Loud");
+                pumpMs (150);
+                CHECK (counter.n >= 1, "a scene that adds an effect unit does rebuild it");
+                proc.stateChanged.removeChangeListener (&counter);
+
+                juce::MidiBuffer off;
+                off.addEvent (juce::MidiMessage::allSoundOff (1), 0);
+                runDb (0.05, off);
+                proc.state.slots[0].rack = keepRack;
+                proc.syncSlotToDsp (0);
+                proc.setSlotRange (0, lo0, hi0);
+                proc.setSlotShift (0, oct0);
+                for (int i = 0; i < 4; ++i) proc.apvts.getParameter ("slotEnable" + juce::String (i))->setValueNotifyingHost (en0[(size_t) i]);
+                lim->setValueNotifyingHost (lim0);
+                sv->setValueNotifyingHost (sv0);
+                proc.stateChanged.sendSynchronousChangeMessage();
             }
         }
         delete ed;

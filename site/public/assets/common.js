@@ -22,9 +22,23 @@
      its platforms, and the local price for Paystack. Both endpoints are
      public and answer any origin. A failure of either reads as "not on
      sale", never as an error a visitor has to understand. */
+  /* jamesmireku.com/?preview=sale shows the page as it will look on sale,
+     with the planned price, so the team can check it before launch. Nothing
+     can be bought through it: the buy button only says it is a preview. */
+  var PREVIEW = /[?&]preview=sale\b/.test(location.search);
+  var PREVIEW_PRICE = { display: 'GHS 1,417', usd: '$119', note: 'Mobile money, bank transfer or a local card.' };
+
   var offerPromise = null;
   function offer() {
     if (offerPromise) return offerPromise;
+    if (PREVIEW) {
+      offerPromise = Promise.resolve({ app: null, onSale: true, platforms: [], version: null, price: PREVIEW_PRICE, preview: true });
+      var flag = document.createElement('p');
+      flag.textContent = 'Preview of the on-sale page. Nothing can be bought here.';
+      flag.style.cssText = 'margin:0;padding:8px 16px;text-align:center;font:600 13px Inter,sans-serif;background:#d9a441;color:#1a1206';
+      document.body.insertBefore(flag, document.body.firstChild);
+      return offerPromise;
+    }
     var cat = fetch(C.STUDIO + '/api/catalog', { cache: 'no-store' })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (c) { return (c && c.apps && c.apps[C.APP]) || null; })
@@ -59,6 +73,7 @@
 
   function checkout(code) {
     code = cleanCode(code);
+    if (PREVIEW) return Promise.reject(new Error('This is a preview, so nothing was charged.' + (code ? ' The code ' + code + ' would be checked at this point.' : '')));
     rememberCode(code);
     var s = sb();
     if (!s) return Promise.reject(new Error('The page did not finish loading. Refresh and try again.'));

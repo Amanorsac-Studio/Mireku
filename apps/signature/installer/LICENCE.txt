@@ -11,10 +11,12 @@ choose "I do not accept" and the installer will close without changing
 anything on this computer.
 
 
-NO ACTIVATION
+ACTIVATION
 
-MIREKU needs no licence key and no account. Nothing is asked of you after
-it is installed.
+MIREKU asks for its licence key the first time it opens, and needs an
+internet connection to activate. The key is under My Apps at
+amanorsac.studio. Once activated, MIREKU works with no connection for up
+to 30 days at a time.
 
 
 PRIVACY
@@ -23,9 +25,10 @@ The Amanorsac Studio privacy policy is published at:
 
     https://amanorsac.studio/privacy
 
-MIREKU does not collect anything. Your audio, your songs and your presets
-stay on this computer. There is no analytics and no usage reporting of any
-kind. MIREKU makes no network request of any kind.
+Your audio, your songs and your presets stay on this computer. There is no
+analytics and no usage reporting of any kind. MIREKU contacts
+amanorsac.studio only for the licence: it sends the licence key, a random
+number that identifies this installation, and this computer's name.
 
 
 THIRD-PARTY SOFTWARE

@@ -324,12 +324,13 @@ private:
 };
 
 //==============================================================================
-/// Item C — licence activation, UI SHELL ONLY.
-/// JM-BUILD-SPEC.md §8 puts copy protection/licensing out of scope and the
-/// client said "we'll work more on the license later", so this panel stores the
-/// typed key in the existing settings file and reflects it in the status bar.
-/// There is deliberately NO validation, checksum, cryptography, server call,
-/// obfuscation or enforcement anywhere in this code path.
+/// The licence panel (key icon in the header; gear menu in a release).
+///
+/// It REPORTS the licence and offers "Deactivate this device" (Licence Standard
+/// R10). It never activates: a computer with no verified proof is behind the
+/// activation screen (ui/LicenceGatePanel.h) and cannot reach this panel, and a
+/// build that is not gated says so here and stores nothing. Until 1.1.3 this
+/// was a shell that accepted any text and printed LICENCE ACTIVE; that is gone.
 class LicensePanel : public ChromePanel
 {
 public:
@@ -337,70 +338,101 @@ public:
 
     explicit LicensePanel (JMSignatureProcessor& p) : ChromePanel ("Licence"), proc_ (p)
     {
-        key_.setFont (Theme::value (15.0f));
-        key_.setTextToShowWhenEmpty ("JMSG-XXXX-XXXX-XXXX-XXXX", Theme::muted);
-        key_.setText (proc_.state.library.licenseKey(), juce::dontSendNotification);
-        key_.setJustification (juce::Justification::centredLeft);
-        key_.onReturnKey = [this] { activate(); };
-        addAndMakeVisible (key_);
-
-        activate_.setButtonText ("ACTIVATE");
-        activate_.setFontHeight (12.0f);
-        activate_.onClick = [this] { activate(); };
-        addAndMakeVisible (activate_);
-
-        cancel_.setButtonText ("CANCEL");
-        cancel_.setFontHeight (12.0f);
-        cancel_.onClick = [this] { dismiss(); };
-        addAndMakeVisible (cancel_);
-
-        status_ = proc_.state.library.hasLicenseKey() ? "LICENCE ACTIVE" : "UNLICENSED";
+        deactivate_.setButtonText ("DEACTIVATE THIS DEVICE");
+        deactivate_.setFontHeight (12.0f);
+        deactivate_.onClick = [this] { deactivate(); };
+        addChildComponent (deactivate_);
+        deactivate_.setVisible (proc_.licenceService() != nullptr);
     }
 
     void contentResized (juce::Rectangle<int> area) override
     {
-        area.removeFromTop (54);
-        key_.setBounds (area.removeFromTop (36).reduced (12, 0));
-        area.removeFromTop (44);
-        auto row = area.removeFromTop (34).reduced (12, 0);
-        activate_.setBounds (row.removeFromLeft (140));
-        row.removeFromLeft (12);
-        cancel_.setBounds (row.removeFromLeft (120));
+        deactivate_.setBounds (area.getX() + 12, getHeight() - 58, 220, 34);
     }
 
     void paint (juce::Graphics& g) override
     {
         ChromePanel::paint (g);
-        g.setColour (Theme::muted);
-        g.setFont (Theme::ui (12.0f));
-        g.drawText ("ENTER YOUR MIREKU LICENCE KEY", 28, 62, getWidth() - 56, 16,
-                    juce::Justification::centredLeft, false);
-        g.setColour (status_.startsWith ("LICENCE ACTIVE") ? Theme::okGreen : Theme::muted);
-        g.fillEllipse (30.0f, (float) key_.getBottom() + 18.0f, 8.0f, 8.0f);
-        g.setColour (status_.startsWith ("LICENCE ACTIVE") ? Theme::goldHi : Theme::muted);
+        const int x = 28, w = getWidth() - 56;
+
+        auto* s = proc_.licenceService();
+        if (s == nullptr)
+        {
+            g.setColour (Theme::muted);
+            g.setFont (Theme::display (13.0f));
+            g.drawText ("THIS BUILD IS NOT OPENED BY A LICENCE KEY", x, 66, w, 20,
+                        juce::Justification::centredLeft, false);
+            g.setFont (Theme::ui (12.0f));
+            g.drawFittedText (proc_.testerGated()
+                                  ? "A test build is opened by its test key. The licence key belongs to the release."
+                                  : "The studio's working build needs no key. The release package asks for one.",
+                              x, 92, w, 36, juce::Justification::topLeft, 2);
+            return;
+        }
+
+        const auto i = s->info();
+        g.setColour (i.licensed ? Theme::okGreen : Theme::warnRed);
+        g.fillEllipse ((float) x + 2.0f, 72.0f, 8.0f, 8.0f);
+        g.setColour (i.licensed ? Theme::goldHi : Theme::muted);
         g.setFont (Theme::display (13.0f));
-        g.drawText (status_, 46, key_.getBottom() + 12, getWidth() - 76, 20,
+        g.drawText (i.licensed ? "LICENCE ACTIVE ON THIS COMPUTER" : "NOT ACTIVATED", x + 18, 66, w - 18, 20,
                     juce::Justification::centredLeft, false);
-        g.setColour (Theme::muted.withAlpha (0.6f));
-        g.setFont (Theme::ui (10.0f));
-        g.drawText ("Activation is a UI preview - key handling is not implemented in this build.",
-                    28, getHeight() - 30, getWidth() - 56, 14, juce::Justification::centredLeft, false);
+
+        g.setColour (Theme::cream);
+        g.setFont (Theme::value (15.0f));
+        g.drawText (i.hasKey ? i.key : juce::String ("-"), x, 96, w, 22, juce::Justification::centredLeft, false);
+
+        g.setColour (note_.isNotEmpty() ? Theme::warnRed : Theme::muted);
+        g.setFont (Theme::ui (12.0f));
+        juce::String line = note_;
+        if (line.isEmpty())
+            line = i.connectSoon
+                 ? "Connect to the internet soon. MIREKU works offline for " + days (i.offlineDays) + " more."
+                 : "Works with no internet for " + days (i.offlineDays)
+                   + ". The licence renews itself while MIREKU is open and online.";
+        g.drawFittedText (line, x, 126, w, 50, juce::Justification::topLeft, 3);
     }
 
 private:
-    void activate()
+    static juce::String days (int n) { return juce::String (n) + (n == 1 ? " day" : " days"); }
+
+    /// Two selections, because it ends the session: the first states what
+    /// happens, the second does it.
+    void deactivate()
     {
-        // Shell only: store what was typed, reflect it, stop. No validation.
-        proc_.state.library.setLicenseKey (key_.getText());
-        status_ = proc_.state.library.hasLicenseKey() ? "LICENCE ACTIVE" : "UNLICENSED";
-        proc_.stateChanged.sendChangeMessage();
-        repaint();
+        auto* s = proc_.licenceService();
+        if (s == nullptr || busy_) return;
+
+        if (! armed_)
+        {
+            armed_ = true;
+            deactivate_.setButtonText ("CONFIRM DEACTIVATE");
+            note_ = "This frees the seat so the key can be used on another computer. "
+                    "MIREKU returns to the activation screen and makes no sound until a key is entered.";
+            repaint();
+            return;
+        }
+
+        busy_ = true;
+        deactivate_.setEnabled (false);
+        s->deactivate ([safe = juce::Component::SafePointer<LicensePanel> (this)] (licence::Result r)
+        {
+            auto* self = safe.getComponent();
+            if (self == nullptr) return;
+            self->busy_ = false;
+            self->deactivate_.setEnabled (true);
+            if (r.ok) { self->dismiss(); return; }   // the activation screen shows itself
+            self->armed_ = false;
+            self->deactivate_.setButtonText ("DEACTIVATE THIS DEVICE");
+            self->note_ = r.message;
+            self->repaint();
+        });
     }
 
     JMSignatureProcessor& proc_;
-    juce::TextEditor key_;
-    ux::PlateButton activate_, cancel_;
-    juce::String status_;
+    ux::PlateButton deactivate_;
+    juce::String note_;
+    bool armed_ = false, busy_ = false;
 };
 
 //======================================================= CLIENT REVIEW ROUND 4

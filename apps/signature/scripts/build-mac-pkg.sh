@@ -49,7 +49,10 @@ if [ "$SIGN" = yes ]; then
     "-DCMAKE_XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS=--timestamp"
     -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO )
 fi
-if [ "$TESTER" = "1" ]; then TESTER_ARG=(-DMIREKU_TESTER_BUILD=ON); else TESTER_ARG=(-DMIREKU_TESTER_BUILD=OFF); fi
+# A RELEASE is the licensed product (License Integration Standard 1.1); a tester
+# package is opened by its test key instead. Never both (R2).
+if [ "$TESTER" = "1" ]; then TESTER_ARG=(-DMIREKU_TESTER_BUILD=ON -DMIREKU_LICENSED_BUILD=OFF)
+else                         TESTER_ARG=(-DMIREKU_TESTER_BUILD=OFF -DMIREKU_LICENSED_BUILD=ON); fi
 # Every package is a PLAYER build (2026-11-04): release mode pinned, no authoring
 # tools, the library sealed. The studio key comes from AOFAS_STUDIO_KEY (the
 # organisation secret in CI) or ~/.amanorsac/studio-keys.json on a studio Mac.
@@ -82,6 +85,27 @@ HAS=0; grep -aq "$MOD" "$APP/Contents/MacOS/MIREKU" && HAS=1
 if [ "$TESTER" != "1" ] && [ "$HAS" = "1" ]; then echo "the release binary contains the test-build key"; exit 1; fi
 if [ "$TESTER" = "1" ]   && [ "$HAS" = "0" ]; then echo "the test build has no test-build key check"; exit 1; fi
 echo "  key check: ok"
+
+# The licence check (Licence Standard acceptance A11 and A12), in the bytes of
+# every shipped binary. A universal binary holds the key once PER ARCHITECTURE,
+# so each slice is counted on its own.
+if [ "$TESTER" != "1" ]; then
+  grep -q 'MIREKU_LICENSED_BUILD:BOOL=ON' "$BUILD/CMakeCache.txt" || { echo "the release was not configured with MIREKU_LICENSED_BUILD=ON"; exit 1; }
+  for BIN in "$APP/Contents/MacOS/MIREKU" "$VST3/Contents/MacOS/MIREKU" "$AU/Contents/MacOS/MIREKU"; do
+    [ -f "$BIN" ] || { echo "missing binary: $BIN"; exit 1; }
+    for ARCH in $(lipo -archs "$BIN"); do
+      THIN="$(mktemp)"
+      lipo "$BIN" -thin "$ARCH" -output "$THIN" 2>/dev/null || cp "$BIN" "$THIN"
+      # counted in hex, so no shell has to carry raw key bytes
+      HITS="$(xxd -p "$THIN" | tr -d '\n' | grep -o 'cda57d1cc8a6e271' | wc -l | tr -d ' ')"
+      [ "$HITS" = "1" ] || { echo "A11: $BIN ($ARCH) contains the studio licence key $HITS time(s); exactly 1 is required"; exit 1; }
+      LC_ALL=C grep -aq "https://amanorsac.studio" "$THIN" || { echo "A12: $BIN ($ARCH) does not name https://amanorsac.studio"; exit 1; }
+      if LC_ALL=C grep -aq "127.0.0.1" "$THIN"; then echo "A12: $BIN ($ARCH) contains 127.0.0.1"; exit 1; fi
+      rm -f "$THIN"
+    done
+  done
+  echo "  licence check: gated; studio key present once per slice; server https://amanorsac.studio (A11, A12)"
+fi
 
 # ---------------------------------------------------------------- sign
 if [ "$SIGN" = yes ]; then

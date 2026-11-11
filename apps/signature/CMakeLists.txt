@@ -2,7 +2,7 @@
 # Configure:  cmake -B build -G "Visual Studio 18 2026" -A x64
 # Build:      cmake --build build --config Release
 cmake_minimum_required(VERSION 3.24)
-project(Mireku VERSION 1.1.3 LANGUAGES C CXX)
+project(Mireku VERSION 1.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -106,6 +106,17 @@ option(MIREKU_TESTER_BUILD "Build a key-gated test build" OFF)
 # sealed and cannot be written. Saves go to the user folders as sealed .jmi
 # documents. OFF for the studio's own working build.
 option(MIREKU_PLAYER_BUILD "Build the player (no authoring tools, release mode pinned)" OFF)
+# A LICENSED build is what is SOLD (2026-11-11): it follows the studio's License
+# Integration Standard 1.1 (src/license). Until a proof from amanorsac.studio
+# verifies it is silent and shows the activation screen. The installer scripts
+# pass this for every release package and never for a -Tester- one. OFF for the
+# studio's working build, which makes no network request at all.
+option(MIREKU_LICENSED_BUILD "Build the licensed release (activation against amanorsac.studio)" OFF)
+if(MIREKU_LICENSED_BUILD AND MIREKU_TESTER_BUILD)
+    # R2: a release contains the studio public key and no other signing key.
+    message(FATAL_ERROR "MIREKU_LICENSED_BUILD and MIREKU_TESTER_BUILD cannot both be ON: "
+                        "a licensed release must not contain the test-build key.")
+endif()
 set(JM_ASIO_SDK_DIR "" CACHE PATH
     "Optional: directory containing iasiodrv.h from a locally installed Steinberg ASIO SDK. \
 Leave empty to use the ASIO headers bundled with JUCE. The SDK is NOT redistributable and is \
@@ -199,7 +210,8 @@ juce_add_plugin(Mireku
 
 target_sources(Mireku PRIVATE
     src/plugin/PluginProcessor.cpp
-    src/plugin/PluginEditor.cpp)
+    src/plugin/PluginEditor.cpp
+    src/license/Licence.cpp)
 
 # Client UX pack assets (docs/svg-pack): kente panel rasters extracted from the
 # *-panel.svg data URIs (per the pack's JUCE note) + vector marks/icons/branding.
@@ -259,7 +271,8 @@ target_compile_definitions(Mireku PUBLIC
     # that is where JUCE compiles juce_audio_devices.
     ${JM_AUDIO_BACKEND_DEFS}
     $<$<BOOL:${MIREKU_TESTER_BUILD}>:MIREKU_TESTER_BUILD=1>
-    $<$<BOOL:${MIREKU_PLAYER_BUILD}>:MIREKU_PLAYER_BUILD=1>)
+    $<$<BOOL:${MIREKU_PLAYER_BUILD}>:MIREKU_PLAYER_BUILD=1>
+    $<$<BOOL:${MIREKU_LICENSED_BUILD}>:MIREKU_LICENSED_BUILD=1>)
 if(JM_ASIO_INCLUDE_DIR)
     target_include_directories(Mireku PUBLIC "${JM_ASIO_INCLUDE_DIR}")
 endif()
@@ -287,10 +300,17 @@ target_link_libraries(Mireku PRIVATE
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags)
 
+# The licence client verifies with Security.framework and derives its storage
+# key from the hardware UUID (IOKit). JUCE links both already; named here so the
+# dependency is stated where it is used.
+if(APPLE)
+    target_link_libraries(Mireku PRIVATE "-framework Security" "-framework IOKit")
+endif()
+
 # ------------------------------------------------------------------ Tests
 juce_add_console_app(MirekuTests PRODUCT_NAME "MirekuTests")
 
-target_sources(MirekuTests PRIVATE tests/EngineTests.cpp)
+target_sources(MirekuTests PRIVATE tests/EngineTests.cpp src/license/Licence.cpp)
 target_include_directories(MirekuTests PRIVATE src "${JMI_FORMAT_INCLUDE}" "${SIGNALSMITH_INCLUDE}")
 target_compile_definitions(MirekuTests PRIVATE
     JM_APP_VERSION="${PROJECT_VERSION}"
@@ -311,7 +331,8 @@ juce_add_console_app(MirekuSnapshot PRODUCT_NAME "MirekuSnapshot")
 target_sources(MirekuSnapshot PRIVATE
     tests/SnapshotCheck.cpp
     src/plugin/PluginProcessor.cpp
-    src/plugin/PluginEditor.cpp)
+    src/plugin/PluginEditor.cpp
+    src/license/Licence.cpp)
 target_include_directories(MirekuSnapshot PRIVATE src "${JMI_FORMAT_INCLUDE}" "${SIGNALSMITH_INCLUDE}"
     "${CMAKE_CURRENT_BINARY_DIR}/juce_binarydata_JMAssets/JuceLibraryCode")
 target_compile_definitions(MirekuSnapshot PRIVATE
@@ -325,6 +346,13 @@ target_compile_definitions(MirekuSnapshot PRIVATE
     # the mirror against this file, so the two cannot drift apart unnoticed.
     JM_JMI_SCHEMA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../packages/jmi-format/schema"
     JM_LIBRARY_TESTDATA="${CMAKE_CURRENT_SOURCE_DIR}/../../testdata")
+# `MirekuSnapshot --licence` rehearses the activation screen against the live
+# server, offscreen. That needs a GATED MirekuSnapshot, which would fail every
+# ordinary self-check (a gated instrument is silent), so it has its own switch
+# and is never set for a build whose tests are run.
+option(MIREKU_LICENCE_REHEARSAL "Gate MirekuSnapshot for --licence (not for ctest)" OFF)
+target_compile_definitions(MirekuSnapshot PRIVATE
+    $<$<BOOL:${MIREKU_LICENCE_REHEARSAL}>:MIREKU_LICENSED_BUILD=1>)
 target_link_libraries(MirekuSnapshot PRIVATE
     juce::juce_cryptography          # test-build key gate, via PluginProcessor.h
     JMAssets
@@ -341,7 +369,8 @@ juce_add_console_app(MirekuValidation PRODUCT_NAME "MirekuValidation")
 target_sources(MirekuValidation PRIVATE
     tests/ValidationTests.cpp
     src/plugin/PluginProcessor.cpp
-    src/plugin/PluginEditor.cpp)
+    src/plugin/PluginEditor.cpp
+    src/license/Licence.cpp)
 target_include_directories(MirekuValidation PRIVATE src "${JMI_FORMAT_INCLUDE}" "${SIGNALSMITH_INCLUDE}"
     "${CMAKE_CURRENT_BINARY_DIR}/juce_binarydata_JMAssets/JuceLibraryCode")
 target_compile_definitions(MirekuValidation PRIVATE

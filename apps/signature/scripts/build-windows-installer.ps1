@@ -70,7 +70,11 @@ if (-not $SkipBuild) {
     # Every installer is a PLAYER build (2026-11-04): release mode pinned, no
     # authoring tools, the library sealed. The studio's own build stays OFF.
     $cfg = "-S `"$app`" -B `"$build`" -G Ninja -DCMAKE_BUILD_TYPE=Release -DMIREKU_PLAYER_BUILD=ON"
-    if ($Tester) { $cfg += " -DMIREKU_TESTER_BUILD=ON" }
+    # A RELEASE is the licensed product (License Integration Standard 1.1); a
+    # -Tester package is opened by its test key instead. Never both (R2), and each
+    # is stated explicitly so a build folder reused for the other kind is corrected.
+    if ($Tester) { $cfg += " -DMIREKU_TESTER_BUILD=ON -DMIREKU_LICENSED_BUILD=OFF" }
+    else         { $cfg += " -DMIREKU_TESTER_BUILD=OFF -DMIREKU_LICENSED_BUILD=ON" }
     $vcvars = "$vs\VC\Auxiliary\Build\vcvars64.bat"
     & cmd /c "`"$vcvars`" >nul && `"$cmake`" $cfg"
     if ($LASTEXITCODE -ne 0) { throw "configure failed" }
@@ -127,6 +131,26 @@ if (-not $Tester -and $carries) {
     throw "RELEASE REFUSED: the binary contains the test-key modulus. Build the release in a clean folder without MIREKU_TESTER_BUILD."
 }
 Write-Host "  key check: $(if ($Tester) { 'tester binary carries the key, as it must' } else { 'release binary carries no key' })" -ForegroundColor Green
+
+# ---- the licence check (Licence Standard acceptance A11 and A12), in the bytes
+# of BOTH shipped binaries. A release must be gated, must carry the studio public
+# key exactly once, and must name the live server. A -Tester package is not
+# licensed and is not checked.
+if (-not $Tester) {
+    if (-not (Select-String -Path (Join-Path $build "CMakeCache.txt") -Pattern 'MIREKU_LICENSED_BUILD:BOOL=ON' -Quiet)) {
+        throw "RELEASE REFUSED: $build was not configured with MIREKU_LICENSED_BUILD=ON, so it has no licence gate."
+    }
+    $latin = [System.Text.Encoding]::GetEncoding(28591)
+    $needle = $latin.GetString([byte[]](0xcd,0xa5,0x7d,0x1c,0xc8,0xa6,0xe2,0x71))
+    foreach ($bin in @($exe, $vst3Binary)) {
+        $raw = $latin.GetString([System.IO.File]::ReadAllBytes($bin))
+        $hits = ([regex]::Matches($raw, [regex]::Escape($needle))).Count
+        if ($hits -ne 1) { throw "RELEASE REFUSED (A11): $bin contains the studio licence key $hits time(s); exactly 1 is required." }
+        if (-not $raw.Contains("https://amanorsac.studio")) { throw "RELEASE REFUSED (A12): $bin does not name https://amanorsac.studio." }
+        if ($raw.Contains("127.0.0.1")) { throw "RELEASE REFUSED (A12): $bin contains 127.0.0.1." }
+    }
+    Write-Host "  licence check: gated; studio key present once; server https://amanorsac.studio (A11, A12)" -ForegroundColor Green
+}
 
 # ---- sign
 $signCmd = ""

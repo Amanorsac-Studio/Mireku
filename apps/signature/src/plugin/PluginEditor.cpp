@@ -141,6 +141,15 @@ JMSignatureEditor::JMSignatureEditor (JMSignatureProcessor& p)
         gate_->setVisible (TesterGatePanel::shouldShow (proc_));
         gate_->setBounds (getLocalBounds());
     }
+    // RELEASE PACKAGES ONLY: the activation screen, frontmost for the same
+    // reason. It shows and hides itself on the licence flag.
+    if (proc_.licenceGated())
+    {
+        licenceGate_ = std::make_unique<LicenceGatePanel> (proc_);
+        addChildComponent (*licenceGate_);
+        licenceGate_->setBounds (getLocalBounds());
+        licenceGate_->setVisible (LicenceGatePanel::shouldShow (proc_));
+    }
 
     startTimerHz (15);
 
@@ -382,6 +391,7 @@ void JMSignatureEditor::resized()
     // child of it, so it fills the window at 1:1 and is not letterboxed with the
     // chassis.
     if (gate_ != nullptr) gate_->setBounds (getLocalBounds());
+    if (licenceGate_ != nullptr) licenceGate_->setBounds (getLocalBounds());
 }
 
 } // namespace jm

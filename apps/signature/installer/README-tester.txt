@@ -1,8 +1,14 @@
-MIREKU 1.1.3 - test build
+MIREKU 1.2.0 - test build
 Amanorsac Studio
 
 
-0. WHAT CHANGED IN 1.1.3
+0. WHAT CHANGED IN 1.2.0
+
+   Nothing in how a test build plays. The RELEASE of MIREKU now asks for a
+   licence key and activates online. A test build does not: it is opened
+   by its test key, as before, and makes no network request.
+
+   WHAT CHANGED IN 1.1.3
 
    Installs over any 1.1 build. Presets, performances, the setlist, the
    library and the test key are kept.

@@ -65,8 +65,9 @@ beside James's.
 **The library is sealed.** Each instrument is one encrypted file that only MIREKU can
 open. Your presets, performances and setlists are saved the same way, as .jmi files.
 
-**Nothing leaves your computer.** MIREKU has no account and makes no network request
-of any kind.
+**Your music stays on your computer.** One licence key, typed once. MIREKU then works
+with no internet for up to 30 days at a time, and contacts amanorsac.studio only to
+renew the licence. No audio, presets or usage data are ever sent.
 
 ## Features (bullet list)
 

@@ -13,16 +13,6 @@
 
 namespace jm {
 
-/// The footer's licence lamp. A PLAYER build has no licence (its README says
-/// "No licence key and no account are required"), so the red UNLICENSED it
-/// used to show every customer was untrue; it is not drawn there. The studio
-/// build keeps it, and the marketing renders switch it off.
-#if MIREKU_PLAYER_BUILD
-inline bool gShowLicenceLamp = false;
-#else
-inline bool gShowLicenceLamp = true;
-#endif
-
 //==============================================================================
 // A Perform slot. Two layouts, one component and one behaviour set:
 //   Row  — the dock strip (550x78)   Card — the centre 2x2 grid cell (321x118)
@@ -1840,7 +1830,7 @@ public:
     }
 
 private:
-    /// Item C: the key icon opens the (UI-shell-only) activation panel.
+    /// The key icon opens the licence panel (status and Deactivate this device).
     void showLicence()
     {
         if (auto* host = OverlayHost::find (this))
@@ -1872,11 +1862,13 @@ private:
                                                         : "Authoring mode (off - release build)...");
         m.addSeparator();
 #endif
-#if ! MIREKU_PLAYER_BUILD
-        // the player needs no licence (its README says so), so it is not offered one
-        m.addSectionHeader ("Licence");
-        m.addItem (4, proc_.state.library.hasLicenseKey() ? "Licence (active)..." : "Activate licence...");
-#endif
+        // A release is licensed: the panel reports the licence and holds
+        // "Deactivate this device". Other builds have nothing to offer here.
+        if (proc_.licenceGated())
+        {
+            m.addSectionHeader ("Licence");
+            m.addItem (4, "Licence...");
+        }
         m.showMenuAsync (styledMenu (m, *gearBtn_), [this] (int r)
         {
             if (r == 1)
@@ -2191,14 +2183,17 @@ public:
                            : "TEST KEY NEEDED",
                         100, 0, 180, getHeight(), juce::Justification::centredLeft, false);
         }
-        else if (gShowLicenceLamp)
+        else if (auto* lic = proc_.licenceService())
         {
-            const bool lic = proc_.state.library.hasLicenseKey();
-            g.setColour (lic ? Theme::okGreen : Theme::warnRed);
+            // A release: the lamp reads the verified proof, nothing else. Past
+            // expiresAt and inside the grace window it asks, quietly, for a
+            // connection (Licence Standard section 5).
+            const auto i = lic->info();
+            g.setColour (! i.licensed ? Theme::warnRed : i.connectSoon ? Theme::gold : Theme::okGreen);
             g.fillEllipse (86.0f, r.getCentreY() - 4.0f, 8.0f, 8.0f);
-            g.setColour (lic ? Theme::goldHi : Theme::muted);
-            g.drawText (lic ? "LICENSE ACTIVE" : "UNLICENSED",
-                        100, 0, 130, getHeight(), juce::Justification::centredLeft, false);
+            g.setColour (i.licensed ? Theme::goldHi : Theme::muted);
+            g.drawText (! i.licensed ? "NOT ACTIVATED" : i.connectSoon ? "CONNECT TO THE INTERNET SOON" : "LICENCE ACTIVE",
+                        100, 0, 240, getHeight(), juce::Justification::centredLeft, false);
         }
         if (proc_.state.library.usedFallback())
         {

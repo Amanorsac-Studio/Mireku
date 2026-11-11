@@ -9,6 +9,7 @@
 #include "../engine/Limiter.h"
 #include "../engine/MidiRouting.h"
 #include "TesterGate.h"
+#include "../license/Licence.h"
 
 namespace jm {
 
@@ -518,6 +519,18 @@ public:
     /// that expires mid-session without polling.
     juce::ChangeBroadcaster testerChanged;
 
+    //==========================================================================
+    // THE LICENCE (release packages: MIREKU_LICENSED_BUILD). Until a proof from
+    // amanorsac.studio verifies, the instrument is silent and the editor shows
+    // the activation screen (ui/LicenceGatePanel.h). In every other build
+    // `licenceGated()` is constexpr false, no service is created and no network
+    // request is ever made. See license/Licence.h.
+    bool licenceGated() const noexcept { return licence::kEnabled; }
+    /// Audio-thread safe. Always true in a build that is not gated.
+    bool licensed() const noexcept { return licence_ == nullptr || licence_->isLicensed(); }
+    /// Null in a build that is not gated.
+    licence::Service* licenceService() const noexcept { return licence_.get(); }
+
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 
     /// ModApplier — audio thread. Pushes one modulated NORMALISED value into the
@@ -540,6 +553,12 @@ private:
         testerOpen_.store (c.status == tester::Status::ok, std::memory_order_relaxed);
         testerChanged.sendChangeMessage();
     }
+
+    //-------------------------------------------------------------- licence
+    /// One service for every instance in the process, so a key typed in one
+    /// opens them all. Never created in a build that is not gated.
+    std::shared_ptr<licence::Service> licence_ { licence::kEnabled ? licence::Service::shared()
+                                                                   : std::shared_ptr<licence::Service>() };
 
     void timerCallback() override;
     /// The processor listens to its OWN stateChanged broadcast so that anything

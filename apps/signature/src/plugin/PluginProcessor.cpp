@@ -860,6 +860,11 @@ void JMSignatureProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     // A release build compiles this out entirely (kEnabled is constexpr false).
     if constexpr (tester::kEnabled)
         if (! testerOpen_.load (std::memory_order_relaxed)) { midi.clear(); return; }
+    // RELEASE PACKAGES ONLY. The same silence until a licence proof verifies, and
+    // again once its 30-day offline window has passed (Licence Standard R8).
+    // One atomic read; compiled out of every build that is not gated.
+    if constexpr (licence::kEnabled)
+        if (! licensed()) { midi.clear(); return; }
     if (slotBuf.getNumSamples() < n) slotBuf.setSize (2, n, false, false, true);
     for (auto& b : outBufs)
     {

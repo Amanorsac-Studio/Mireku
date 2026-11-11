@@ -1,4 +1,4 @@
-MIREKU 1.1.3
+MIREKU 1.2.0
 Amanorsac Studio
 
 
@@ -7,7 +7,22 @@ Amanorsac Studio
      Standalone application   C:\Program Files\Amanorsac Studio\MIREKU
      VST3 plug-in             C:\Program Files\Common Files\VST3\MIREKU.vst3
 
-   No licence key and no account are required.
+   ACTIVATION. MIREKU asks for its licence key the first time it opens.
+   The key is under My Apps at amanorsac.studio and in Amanorsac Hub. Type
+   or paste it and select ACTIVATE. This needs an internet connection. The
+   standalone and the plug-in share one activation: activate either and
+   both are open on this computer.
+
+   WITH NO INTERNET. Once activated, MIREKU works with no connection for up
+   to 30 days at a time, and renews this by itself whenever it is open and
+   online. After 30 days with no connection it makes no sound until it
+   reaches the internet again. Before a tour or any long spell offline,
+   open MIREKU once while connected.
+
+   MOVING TO ANOTHER COMPUTER. Select the key icon at the top right, then
+   DEACTIVATE THIS DEVICE, and select it again to confirm. The key is then
+   free to use on the other computer. My Apps lists the computers a key is
+   active on and can remove one that is no longer to hand.
 
 
 2. THE SAMPLE LIBRARY
@@ -97,8 +112,13 @@ Amanorsac Studio
 
 5. PRIVACY
 
-   MIREKU makes no network request of any kind. Nothing is collected and
-   nothing is reported.
+   MIREKU contacts amanorsac.studio for one purpose, the licence: when
+   you activate, about once an hour while it is open, and when you
+   deactivate. It sends the licence key, a random number that identifies
+   this installation, and this computer's name so that you can recognise
+   it under My Apps. Nothing else is sent. Your audio, songs, presets and
+   playing never leave this computer, and there is no analytics or usage
+   reporting.
 
 
 6. SUPPORT

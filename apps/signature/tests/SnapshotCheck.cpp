@@ -274,8 +274,6 @@ static int renderMarketing (const juce::File& libDir, const juce::File& outDir,
         proc.setlist.currentScene = 1;
     }
 
-    gShowLicenceLamp = false;                 // the customer's build has no licence lamp
-
     // a chord held through every shot, so the meters show a playing instrument
     auto play = [&] (int blocks)
     {
@@ -546,6 +544,113 @@ int main (int argc, char** argv)
     JMSignatureProcessor::persistMidiMap() = false;       // never write the player's own controller map
     if (argc >= 3 && juce::String (argv[1]) == "--check-performances")
         return checkPerformances (juce::File (juce::String::fromUTF8 (argv[2])));
+    // MirekuSnapshot --licence [KEY | --deactivate]: the licence gate against the
+    // LIVE server, offscreen. Only in a build configured with
+    // -DMIREKU_LICENSED_BUILD=ON; it is a rehearsal of acceptance checks A1, A2,
+    // A3 and A9 (Licence Standard section 9), not a substitute for running them
+    // with the installed release. With no key it stops after the wrong-key check.
+    if (argc >= 2 && juce::String (argv[1]) == "--licence")
+    {
+        if (! licence::kEnabled)
+        {
+            std::printf ("this is not a licensed build (configure with -DMIREKU_LICENSED_BUILD=ON)\n");
+            return 2;
+        }
+        const juce::String arg (argc >= 3 ? juce::String::fromUTF8 (argv[2]) : juce::String());
+       #if JUCE_WINDOWS
+        const auto base = juce::File::getSpecialLocation (juce::File::windowsLocalAppData);
+       #else
+        const auto base = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+                              .getChildFile ("Application Support");
+       #endif
+        const auto dir = base.getChildFile ("Amanorsac Studio").getChildFile ("MIREKU");
+        const auto proofFile = dir.getChildFile ("license-proof.dat");
+        const auto keyFile = dir.getChildFile ("license-key.dat");
+
+        JMSignatureProcessor proc;
+        proc.prepareToPlay (48000.0, 256);
+        std::unique_ptr<juce::AudioProcessorEditor> ed (proc.createEditor());
+        ed->setSize (1440, 900);
+        auto* gate = dynamic_cast<LicenceGatePanel*> (ed->findChildWithID ("licenceGate"));
+        int fails = 0;
+        auto check = [&fails] (bool ok, const juce::String& what)
+        {
+            std::printf ("    [%s] %s\n", ok ? "PASS" : "FAIL", what.toRawUTF8());
+            if (! ok) ++fails;
+        };
+        auto pump = [] (int ms) { juce::MessageManager::getInstance()->runDispatchLoopUntil (ms); };
+        auto waitFor = [&pump] (std::function<bool()> done, int seconds)
+        {
+            for (int i = 0; i < seconds * 10 && ! done(); ++i) pump (100);
+            return done();
+        };
+        auto silent = [&proc]
+        {
+            juce::AudioBuffer<float> buf (2, 256);
+            juce::MidiBuffer midi;
+            midi.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+            proc.processBlock (buf, midi);
+            return buf.getMagnitude (0, 256) == 0.0f && midi.isEmpty();
+        };
+
+        std::printf ("\n== LICENCE GATE, live server ==\n    folder: %s\n", dir.getFullPathName().toRawUTF8());
+        check (gate != nullptr, "the editor of a licensed build carries the activation screen");
+        if (gate == nullptr) return 1;
+
+        if (arg == "--deactivate")
+        {
+            pump (300);
+            check (proc.licensed(), "A9: this computer is licensed before the deactivation");
+            bool finished = false; licence::Result res;
+            proc.licenceService()->deactivate ([&] (licence::Result r) { res = r; finished = true; });
+            waitFor ([&] { return finished; }, 25);
+            std::printf ("    deactivate: %s %s\n", res.ok ? "ok" : "failed", res.message.toRawUTF8());
+            pump (600);
+            check (res.ok, "A9: the server freed the seat");
+            check (! proc.licensed() && gate->isVisible(), "A9: the activation screen returns");
+            check (! proofFile.existsAsFile() && ! keyFile.existsAsFile(), "A9: the key and proof files are gone");
+            savePng (*ed, "licence-A9-deactivated.png");
+            return fails == 0 ? 0 : 1;
+        }
+
+        if (! proc.licensed())
+        {
+            pump (300);
+            check (gate->isVisible(), "A1: with no proof the activation screen is shown");
+            check (silent(), "A1: and the instrument makes no sound and consumes no MIDI");
+            savePng (*ed, "licence-A1-activation-screen.png");
+
+            gate->setKeyText ("MIRE-0000-0000-0000");
+            gate->pressActivate();
+            waitFor ([&] { return gate->statusText() != "Checking..."; }, 25);
+            std::printf ("    wrong key -> \"%s\"\n", gate->statusText().toRawUTF8());
+            check (gate->statusText().startsWith ("Key not found"), "A2: a wrong key is answered \"Key not found\"");
+            check (! proofFile.existsAsFile() && ! keyFile.existsAsFile(), "A2: nothing is stored");
+            check (gate->isVisible() && ! proc.licensed(), "A2: the screen stays, the instrument stays shut");
+            savePng (*ed, "licence-A2-wrong-key.png");
+        }
+        else
+            std::printf ("    this computer already holds a verified proof; A1 and A2 skipped\n");
+
+        if (arg.isNotEmpty())
+        {
+            if (! proc.licensed())
+            {
+                gate->setKeyText (arg);
+                gate->pressActivate();
+                waitFor ([&] { return proc.licensed() || gate->statusText() != "Checking..."; }, 25);
+                if (! proc.licensed()) std::printf ("    real key -> \"%s\"\n", gate->statusText().toRawUTF8());
+            }
+            pump (600);       // the panel follows the flag four times a second
+            check (proc.licensed(), "A3: the real key verifies and the device is licensed");
+            check (! gate->isVisible(), "A3: the main interface appears without reopening");
+            check (proofFile.existsAsFile(), "A3: license-proof.dat exists");
+            const auto i = proc.licenceService()->info();
+            std::printf ("    key %s, offline for %d days\n", i.key.toRawUTF8(), i.offlineDays);
+            savePng (*ed, "licence-A3-activated.png");
+        }
+        return fails == 0 ? 0 : 1;
+    }
     // MirekuSnapshot --install-pack <file.mirekupack> <folder>: what the INSTALL
     // LIBRARY panel does, without the panel; prints the result and the time.
     if (argc >= 4 && juce::String (argv[1]) == "--install-pack")

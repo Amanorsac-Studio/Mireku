@@ -775,7 +775,6 @@ public:
                                 if (auto c = tags::canonical (t.toString()); c.isNotEmpty()) list.addIfNotAlreadyThere (c);
                         userTags_[prop.name.toString().toLowerCase()] = list;
                     }
-                licenseKey_ = o->getProperty ("licenseKey").toString();
                 // THE PLAYER'S CONTROLLER MAP (2026-11-10): MIDI learn belongs
                 // to the player and his keyboard, so it lives here and not in
                 // a performance, which used to replace it on every load.
@@ -833,7 +832,6 @@ public:
             }
             o->setProperty ("tags", juce::var (to));
         }
-        o->setProperty ("licenseKey", licenseKey_);
         if (midiMap_.isObject()) o->setProperty ("midiMap", midiMap_);
         o->setProperty ("mode", authoring::modeId (settingsMode_));
         o->setProperty ("velocityCurve", velCurve_.isEmpty() ? "normal" : velCurve_);
@@ -852,15 +850,9 @@ public:
         saveSettings();
     }
 
-    // ---------------------------------------------------------- licence (UI shell)
-    // JM-BUILD-SPEC.md §8 puts copy protection/licensing explicitly OUT OF SCOPE
-    // and the client said "we'll work more on the license later". This stores and
-    // reports the entered key and NOTHING else: no validation, no checksum, no
-    // cryptography, no server activation, no obfuscation, no enforcement. Nothing
-    // in the plugin is gated on it. See DECISIONS-signature.md, round 3 item C.
-    const juce::String& licenseKey() const { return licenseKey_; }
-    bool hasLicenseKey() const { return licenseKey_.trim().isNotEmpty(); }
-    void setLicenseKey (const juce::String& k) { licenseKey_ = k.trim(); saveSettings(); }
+    // (The licence is not here. Until 1.1.3 a typed key was kept in settings.json
+    // and nothing checked it; the real licence is license/Licence.h, and its key
+    // and proof live encrypted in the OS key store, never in this file.)
 
     bool isFavorite (const juce::String& key) const { return favorites_.contains (key); }
     /// AUTHORING WORKFLOW (2026-10-26): a browser row's favourite key is
@@ -1215,7 +1207,6 @@ private:
     juce::StringArray favorites_;
     std::map<juce::String, juce::StringArray> userTags_;     // tagKey -> the artist's tags
     mutable std::map<juce::String, std::pair<juce::int64, juce::StringArray>> perfTagCache_;   // path -> (mtime, tags)
-    juce::String licenseKey_;
     juce::String velCurve_;                 // empty == "normal"
     int velFixed_ = 100;
     bool usedFallback_ = false;

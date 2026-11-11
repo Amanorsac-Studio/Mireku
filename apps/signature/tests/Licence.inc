@@ -13,6 +13,18 @@
 static void testLicenceProof()
 {
     std::printf ("\n== LICENCE PROOF (Standard 1.1 section 5) ==\n");
+
+    // ---- only MIREKU's own keys (the server accepts any product's)
+    using jm::licence::isMirekuKey;
+    CHECK (isMirekuKey ("MIRE-1A2B-3C4D-5E6F"), "a MIREKU key is accepted");
+    CHECK (isMirekuKey ("  mire-1a2b-\r\n 3c4d-5e6f "), "as typed or wrapped by an email: spaces dropped, upper-cased");
+    CHECK (! isMirekuKey ("SECO-610E-6070-3493"), "a SecondOut key is refused before anything is sent");
+    CHECK (! isMirekuKey ("PERF-1A2B-3C4D-5E6F"), "so is any other product's");
+    CHECK (! isMirekuKey ("MIRE-1A2B-3C4D-5E6"), "a key one character short is refused");
+    CHECK (! isMirekuKey ("MIRE-1A2B-3C4D-5E6G"), "a key with a letter past F is refused");
+    CHECK (! isMirekuKey ("MIRE1A2B-3C4D-5E6F0"), "a key without its hyphens is refused");
+    CHECK (! isMirekuKey (""), "an empty box is not a key");
+
     using jm::licence::evaluateProof;
     const juce::String dev (kLicenceTestDevice), key (kLicenceTestLicence);
     const juce::int64 H = 3600LL * 1000LL, D = 24 * H;

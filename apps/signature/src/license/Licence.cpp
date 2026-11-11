@@ -84,6 +84,12 @@ ProofVerdict evaluateProof (const juce::String& proof, const juce::String& devic
     return v;
 }
 
+bool isMirekuKey (const juce::String& typed)
+{
+    using C = amanorsacstudio::LicenseClient;
+    return C::isProductKey (C::normaliseKey (typed));
+}
+
 bool secretStoreRoundTrips()
 {
     namespace lc = amanorsacstudio::licensecrypto;

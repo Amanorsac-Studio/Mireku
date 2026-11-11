@@ -77,6 +77,11 @@ struct ProofVerdict
     bool signatureOk = false, bound = false, licensed = false;
     juce::int64 issuedAt = 0, expiresAt = 0, graceUntil = 0;
 };
+/// True for a MIREKU key (MIRE-XXXX-XXXX-XXXX, hex), after the spaces and
+/// line breaks an email adds are dropped and it is upper-cased. Another
+/// product's key is false: the server would accept it, so MIREKU refuses it.
+bool isMirekuKey (const juce::String& typed);
+
 ProofVerdict evaluateProof (const juce::String& proof, const juce::String& deviceKey,
                             const juce::String& licenceKey, juce::int64 nowMs,
                             const juce::uint8* publicKey65);

@@ -238,7 +238,8 @@ export const FILES = {
   windows: { key: 'MIREKU/Mireku-1.2.1-Windows.exe', name: 'Mireku-1.2.1-Windows.exe', type: 'application/vnd.microsoft.portable-executable', label: 'Windows installer', version: '1.2.1' },
   mac:     { key: 'MIREKU/Mireku-1.2.1-macOS.pkg',   name: 'Mireku-1.2.1-macOS.pkg',   type: 'application/octet-stream', label: 'Mac installer', version: '1.2.1' },
   library: { key: 'MIREKU/MIREKU-Library.mirekupack', name: 'MIREKU-Library.mirekupack', type: 'application/octet-stream', label: 'Sound library', version: '1.0' },
-  guide:   { key: 'MIREKU/MIREKU-Installation-Guide.pdf', name: 'MIREKU-Installation-Guide.pdf', type: 'application/pdf', label: 'Installation guide', version: '1.2.1' }
+  guide:   { key: 'MIREKU/MIREKU-Installation-Guide.pdf', name: 'MIREKU-Installation-Guide.pdf', type: 'application/pdf', label: 'Installation guide', version: '1.2.1' },
+  readme:  { key: 'MIREKU/MIREKU-Read-Me.pdf', name: 'MIREKU-Read-Me.pdf', type: 'application/pdf', label: 'Read me', version: '1.2.1' }
 };
 const TICKET_HOURS = 24;   // long enough to finish, and to resume, a 5.8 GB download on a slow line
 
@@ -343,7 +344,7 @@ export default {
       try { return await downloadTicket(request, env, ctx); }
       catch (e) { console.error('download:', e && e.message); return fail(500, 'Something went wrong.'); }
     }
-    const dl = url.pathname.match(/^\/download\/(windows|mac|library|guide)$/);
+    const dl = url.pathname.match(/^\/download\/(windows|mac|library|guide|readme)$/);
     if (dl && (request.method === 'GET' || request.method === 'HEAD')) {
       try { return await serveFile(request, env, dl[1], url); }
       catch (e) { console.error('serve:', e && e.message); return new Response('Something went wrong. Try again.', { status: 500 }); }

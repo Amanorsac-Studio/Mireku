@@ -98,7 +98,7 @@ create index if not exists mireku_downloads_at on public.mireku_downloads (at de
 alter table public.mireku_downloads drop constraint if exists mireku_downloads_file_check;
 alter table public.mireku_downloads drop constraint if exists mireku_downloads_file_known;
 alter table public.mireku_downloads add constraint mireku_downloads_file_known
-  check (file in ('windows', 'mac', 'library', 'guide'));
+  check (file in ('windows', 'mac', 'library', 'guide', 'readme'));
 alter table public.mireku_downloads enable row level security;
 drop policy if exists mireku_downloads_add on public.mireku_downloads;
 create policy mireku_downloads_add on public.mireku_downloads for insert to authenticated

@@ -1,5 +1,11 @@
-# Closed until launch. On launch day replace this with:
-#   User-agent: *
-#   Allow: /
+# jamesmireku.com: MIREKU, James Mireku's keyboard sounds.
 User-agent: *
-Disallow: /
+Allow: /
+Disallow: /account
+Disallow: /admin
+Disallow: /mireku
+Disallow: /api/
+Disallow: /download/
+Disallow: /auth/
+
+Sitemap: https://jamesmireku.com/sitemap.xml

@@ -274,7 +274,8 @@
      works for a day and can be resumed, which a 5.8 GB library needs. */
   var FILES = [
     { id: 'windows', label: 'Windows installer', size: '44 MB' },
-    { id: 'mac',     label: 'Mac installer',     size: '136 MB' },
+    { id: 'mac',     label: 'Mac installer (macOS 11 or later)', size: '136 MB' },
+    { id: 'mac-older', label: 'Mac installer for older Macs (macOS 10.13 to 10.15, Intel)', size: '71 MB' },
     { id: 'library', label: 'Sound library', size: '5.8 GB' },
     { id: 'guide',   label: 'Installation guide', size: '9 MB' },
     { id: 'readme',  label: 'Read me', size: '3 MB' }
@@ -296,7 +297,8 @@
       box.appendChild(all);
       var note = document.createElement('p');
       note.className = 'muted small-note';
-      note.textContent = 'The installer, the sound library (5.8 GB), the installation guide and the read me. Use Wi-Fi if you can.';
+      note.textContent = 'The installer, the sound library (5.8 GB), the installation guide and the read me. Use Wi-Fi if you can.' +
+        (plat === 'mac' ? ' On macOS 10.13 to 10.15? Take the installer for older Macs under "Download files separately" instead.' : '');
       box.appendChild(note);
     } else {
       var p = document.createElement('p');

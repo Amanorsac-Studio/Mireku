@@ -94,11 +94,12 @@ create table if not exists public.mireku_downloads (
   country  text check (country is null or country ~ '^[A-Z]{2}$')
 );
 create index if not exists mireku_downloads_at on public.mireku_downloads (at desc);
--- The files there are; widened when a file is added (a rerun replaces the rule).
+-- Any short file id the site's Worker uses (it only ever sends its own list),
+-- so a new download needs no change here.
 alter table public.mireku_downloads drop constraint if exists mireku_downloads_file_check;
 alter table public.mireku_downloads drop constraint if exists mireku_downloads_file_known;
 alter table public.mireku_downloads add constraint mireku_downloads_file_known
-  check (file in ('windows', 'mac', 'library', 'guide', 'readme'));
+  check (file ~ '^[a-z0-9-]{1,30}$');
 alter table public.mireku_downloads enable row level security;
 drop policy if exists mireku_downloads_add on public.mireku_downloads;
 create policy mireku_downloads_add on public.mireku_downloads for insert to authenticated

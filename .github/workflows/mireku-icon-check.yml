@@ -1,0 +1,51 @@
+# MIREKU icon check - shows how macOS itself draws the app icon.
+#
+# macOS 26 shrinks an icon whose shape it does not accept and sets it on a pale
+# plate. This job wraps each candidate image in an empty app, asks macOS for
+# that app's icon, and saves what macOS returns on a blue background, so a plate
+# or a margin is plain to see. Nothing is built, signed or released.
+#
+# It runs only on a push to a branch named icon-check/...
+name: MIREKU icon check
+
+on:
+  push:
+    branches: ["icon-check/**"]
+
+jobs:
+  render:
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ask macOS for each candidate's icon
+        run: |
+          set -euo pipefail
+          sw_vers
+          BRAND=apps/signature/resources/brand
+          OUT="$RUNNER_TEMP/icons"; mkdir -p "$OUT"
+          render() {  # name, source png
+            local NAME="$1" SRC="$2" SET="$RUNNER_TEMP/$1.iconset" APP="$RUNNER_TEMP/$1/Check$1.app"
+            mkdir -p "$SET" "$APP/Contents/MacOS" "$APP/Contents/Resources"
+            for S in 16 32 128 256 512; do
+              sips -z $S $S "$SRC" --out "$SET/icon_${S}x${S}.png" >/dev/null
+              D=$((S*2)); sips -z $D $D "$SRC" --out "$SET/icon_${S}x${S}@2x.png" >/dev/null
+            done
+            iconutil -c icns "$SET" -o "$APP/Contents/Resources/Icon.icns"
+            printf '#!/bin/sh\nexit 0\n' > "$APP/Contents/MacOS/Check$NAME"; chmod +x "$APP/Contents/MacOS/Check$NAME"
+            /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string com.mireku.iconcheck.$NAME" \
+              -c "Add :CFBundleName string Check$NAME" -c "Add :CFBundleExecutable string Check$NAME" \
+              -c "Add :CFBundlePackageType string APPL" -c "Add :CFBundleIconFile string Icon" \
+              "$APP/Contents/Info.plist" >/dev/null
+            swift apps/signature/scripts/render-app-icon.swift "$APP" "$OUT/$NAME.png"
+          }
+          render windows-rounded "$BRAND/rounded/MIREKU-1024.png"
+          render square          "$BRAND/MIREKU-1024.png"
+          render mac             "$BRAND/mac/MIREKU-1024.png"
+          ls -l "$OUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MIREKU-icon-check
+          path: ${{ runner.temp }}/icons

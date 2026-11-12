@@ -38,6 +38,10 @@
    ===================================================================== */
 
 const SITE = 'https://jamesmireku.com';
+
+/* Apple Pay's domain association file, as supplied by the payment provider.
+   It holds the provider's public id for this domain: not a secret. */
+const APPLE_PAY_DOMAIN_FILE = '7b2276657273696f6e223a312c227073704964223a2234424538444645374337303544443538353133393637344446363439463242374446383942343435393143433236323435423834384542323538364530383742222c22637265617465644f6e223a313738363534363038323435387d';
 const SUPABASE_URL = 'https://kdxckigyhpnwhwgjdgqq.supabase.co';
 const FROM = 'MIREKU <hello@jamesmireku.com>';
 const REPLY_TO = 'hello@amanorsac.studio';
@@ -505,6 +509,11 @@ export default {
       const to = confirmRedirect(url);
       if (!to) return new Response('This link is not valid. Ask for a new one at jamesmireku.com/account.', { status: 400, headers: { 'content-type': 'text/plain; charset=utf-8' } });
       return new Response(null, { status: 302, headers: { location: to, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } });
+    }
+    // Apple Pay asks for this file, unchanged, at this exact address, to
+    // confirm that the payment provider may offer Apple Pay on this domain.
+    if (url.pathname === '/.well-known/apple-developer-merchantid-domain-association') {
+      return new Response(APPLE_PAY_DOMAIN_FILE, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'public, max-age=3600' } });
     }
     if (url.pathname === '/api/announce') {
       if (request.method !== 'POST') return fail(405, 'Use POST.');

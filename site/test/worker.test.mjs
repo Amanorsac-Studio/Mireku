@@ -199,4 +199,7 @@ r = await worker.fetch(new Request('https://jamesmireku.com/auth/confirm?token=a
 check(r.status === 302 && r.headers.get('location').startsWith('https://kdxckigyhpnwhwgjdgqq.supabase.co/auth/v1/verify?token=abc123xyz&type=recovery'), 'the page answers with a redirect');
 r = await worker.fetch(new Request('https://jamesmireku.com/auth/confirm?token=x'), env); check(r.status === 400, 'a broken link gets a plain explanation');
 
+r = await worker.fetch(new Request('https://jamesmireku.com/.well-known/apple-developer-merchantid-domain-association'), env);
+check(r.status === 200 && (await r.text()) === '7b2276657273696f6e223a312c227073704964223a2234424538444645374337303544443538353133393637344446363439463242374446383942343435393143433236323435423834384542323538364530383742222c22637265617465644f6e223a313738363534363038323435387d', 'the Apple Pay domain file is served unchanged');
+
 console.log(fails ? fails + ' FAILED' : 'ALL PASSED'); process.exitCode = fails ? 1 : 0;

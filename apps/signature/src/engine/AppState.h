@@ -387,19 +387,42 @@ struct ModState
 };
 
 //==============================================================================
-struct MidiMap                       // CC → learnable parameter path
+struct MidiMap                       // controller (+ channel) → learnable parameter path
 {
-    std::map<int, juce::String> ccToPath;
+    // THE KEY. A keyboard such as the Yamaha MODX sends the SAME controller
+    // number from every fader (CC 7) and tells them apart only by MIDI channel,
+    // so an assignment remembers the channel it was learned on:
+    //     key = channel * 128 + controller,   channel 1..16
+    // Channel 0 means "any channel": every assignment made before channels were
+    // remembered (the settings file stores those as a bare number, "7").
+    // A message is matched to (1) its own channel, then (2) an any-channel
+    // assignment, then (3) the controller's ONLY assignment, whatever channel
+    // that was learned on, so a player who changes the keyboard's transmit
+    // channel keeps every assignment that was never ambiguous.
+    static int keyOf (int channel, int cc) noexcept { return juce::jlimit (0, 16, channel) * 128 + (cc & 127); }
+    static int ccOf (int key) noexcept      { return key & 127; }
+    static int channelOf (int key) noexcept { return key >> 7; }
+    /// "CC 7" for an any-channel assignment, "CC 7, channel 2" for one channel.
+    static juce::String describe (int key)
+    {
+        return "CC " + juce::String (ccOf (key))
+             + (channelOf (key) > 0 ? ", channel " + juce::String (channelOf (key)) : juce::String());
+    }
+
+    std::map<int, juce::String> ccToPath;        // key (see above) → path
     juce::CriticalSection lock;
     /// Set by every change; the processor's timer saves the map when it sees it.
     std::atomic<bool> dirty { false };
-    /// Which controller numbers are learned, readable by the AUDIO thread
-    /// without the lock: a learned controller always wins over a built-in one.
+    /// Which controller numbers are learned (on any channel), readable by the
+    /// AUDIO thread without the lock: a learned controller always wins over a
+    /// built-in one.
     std::array<std::atomic<bool>, 128> learned {};
     bool isLearned (int cc) const noexcept { return cc >= 0 && cc < 128 && learned[(size_t) cc].load (std::memory_order_relaxed); }
     void refreshLearned()                // call with `lock` held
     {
-        for (int i = 0; i < 128; ++i) learned[(size_t) i].store (ccToPath.count (i) > 0, std::memory_order_relaxed);
+        std::array<bool, 128> on {};
+        for (auto& [key, p] : ccToPath) on[(size_t) ccOf (key)] = true;
+        for (int i = 0; i < 128; ++i) learned[(size_t) i].store (on[(size_t) i], std::memory_order_relaxed);
         dirty.store (true);
     }
     void clear()
@@ -409,30 +432,46 @@ struct MidiMap                       // CC → learnable parameter path
         refreshLearned();
     }
     int size() const { const juce::ScopedLock sl (lock); return (int) ccToPath.size(); }
+    /// Every assignment as (key, path); see keyOf / describe.
     std::vector<std::pair<int, juce::String>> list() const
     {
         const juce::ScopedLock sl (lock);
         return { ccToPath.begin(), ccToPath.end() };
     }
 
-    juce::String pathForCc (int cc) const
+    /// The any-channel assignment of a controller number (or of a whole key).
+    juce::String pathForCc (int key) const
     {
         const juce::ScopedLock sl (lock);
-        auto it = ccToPath.find (cc);
+        auto it = ccToPath.find (key);
         return it == ccToPath.end() ? juce::String() : it->second;
     }
-    void set (int cc, const juce::String& path)
+    /// What an incoming controller message moves; "" when it moves nothing.
+    juce::String pathFor (int channel, int cc) const
     {
         const juce::ScopedLock sl (lock);
-        for (auto it = ccToPath.begin(); it != ccToPath.end();)   // one path per CC & vice versa
+        if (channel > 0)
+            if (auto it = ccToPath.find (keyOf (channel, cc)); it != ccToPath.end()) return it->second;
+        if (auto it = ccToPath.find (keyOf (0, cc)); it != ccToPath.end()) return it->second;
+        const juce::String* only = nullptr;
+        int found = 0;
+        for (auto& [key, p] : ccToPath) if (ccOf (key) == (cc & 127)) { only = &p; ++found; }
+        return found == 1 ? *only : juce::String();
+    }
+    void set (int key, const juce::String& path)
+    {
+        const juce::ScopedLock sl (lock);
+        for (auto it = ccToPath.begin(); it != ccToPath.end();)   // one path per controller & vice versa
             it = it->second == path ? ccToPath.erase (it) : std::next (it);
-        ccToPath[cc] = path;
+        ccToPath[key] = path;
         refreshLearned();
     }
-    void removeCc (int cc)
+    /// Learn from a message: remembers the channel it arrived on.
+    void set (int channel, int cc, const juce::String& path) { set (keyOf (channel, cc), path); }
+    void removeCc (int key)
     {
         const juce::ScopedLock sl (lock);
-        ccToPath.erase (cc);
+        ccToPath.erase (key);
         refreshLearned();
     }
     void removePath (const juce::String& path)
@@ -442,17 +481,32 @@ struct MidiMap                       // CC → learnable parameter path
             it = it->second == path ? ccToPath.erase (it) : std::next (it);
         refreshLearned();
     }
+    /// The controller NUMBER a control is learned to, or -1.
     int ccForPath (const juce::String& path) const
     {
+        const int key = keyForPath (path);
+        return key < 0 ? -1 : ccOf (key);
+    }
+    int keyForPath (const juce::String& path) const
+    {
         const juce::ScopedLock sl (lock);
-        for (auto& [cc, p] : ccToPath) if (p == path) return cc;
+        for (auto& [key, p] : ccToPath) if (p == path) return key;
         return -1;
     }
+    /// For a menu or a tooltip: "CC 7, channel 2", or "" when nothing is learned.
+    juce::String labelForPath (const juce::String& path) const
+    {
+        const int key = keyForPath (path);
+        return key < 0 ? juce::String() : describe (key);
+    }
+    // settings.json: "7" is an any-channel assignment, "2:7" is channel 2, CC 7.
     juce::var toVar() const
     {
         const juce::ScopedLock sl (lock);
         auto* o = new juce::DynamicObject();
-        for (auto& [cc, p] : ccToPath) o->setProperty (juce::String (cc), p);
+        for (auto& [key, p] : ccToPath)
+            o->setProperty ((channelOf (key) > 0 ? juce::String (channelOf (key)) + ":" : juce::String())
+                                + juce::String (ccOf (key)), p);
         return juce::var (o);
     }
     void fromVar (const juce::var& v)
@@ -461,7 +515,14 @@ struct MidiMap                       // CC → learnable parameter path
         ccToPath.clear();
         if (auto* o = v.getDynamicObject())
             for (auto& prop : o->getProperties())
-                ccToPath[prop.name.toString().getIntValue()] = prop.value.toString();
+            {
+                const auto name = prop.name.toString();
+                const bool hasChannel = name.containsChar (':');
+                const int channel = hasChannel ? name.upToFirstOccurrenceOf (":", false, false).getIntValue() : 0;
+                const int cc = (hasChannel ? name.fromFirstOccurrenceOf (":", false, false) : name).getIntValue();
+                if (cc >= 0 && cc < 128 && channel >= 0 && channel <= 16)
+                    ccToPath[keyOf (channel, cc)] = prop.value.toString();
+            }
         refreshLearned();
     }
 };

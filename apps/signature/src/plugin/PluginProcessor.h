@@ -591,7 +591,7 @@ private:
     void handleRoutedMessage (const juce::MidiMessage& m, juce::uint8 mask, int offset);
     void enforceSolo (int enabledSlot);
 
-    struct CcEvent { int cc; int value; };
+    struct CcEvent { int cc; int value; int channel; };
     juce::AbstractFifo ccFifo { 256 };
     std::atomic<bool> softPedal_ { false };       // CC 67
     std::atomic<int> bankMsb_ { 0 };              // CC 0, for program change to a song

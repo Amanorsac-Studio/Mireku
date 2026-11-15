@@ -165,7 +165,7 @@ private:
             };
             addAndMakeVisible (clear_);
         }
-        juce::String text() const { return label + " | CC " + juce::String (cc); }
+        juce::String text() const { return label + " | " + MidiMap::describe (cc); }
         void resized() override { clear_.setBounds (getWidth() - 96, 3, 84, getHeight() - 6); }
         void paint (juce::Graphics& g) override
         {
@@ -177,10 +177,10 @@ private:
             g.drawText (label, 12, 0, getWidth() - 280, getHeight(), juce::Justification::centredLeft, true);
             g.setColour (Theme::goldHi);
             g.setFont (Theme::value (13.0f));
-            g.drawText ("CC " + juce::String (cc), getWidth() - 250, 0, 110, getHeight(), juce::Justification::centredLeft, false);
+            g.drawText (MidiMap::describe (cc), getWidth() - 250, 0, 150, getHeight(), juce::Justification::centredLeft, false);
         }
         MidiControlsPanel& owner;
-        int cc;
+        int cc;                       // the map KEY: controller and channel (MidiMap::keyOf)
         juce::String path, label;
         ux::PlateButton clear_;
     };
@@ -206,8 +206,8 @@ private:
                                            + juce::String::charToString ((juce::juce_wchar) ('A' + p.getLastCharacters (1).getIntValue()))
                                    : "MIREKU";
             if (sec != section) { m.addSectionHeader (sec); section = sec; }
-            const int cc = proc_.state.midiMap.ccForPath (p);
-            m.addItem (id++, proc_.paramDisplayName (p) + (cc >= 0 ? "   (CC " + juce::String (cc) + ")" : juce::String()));
+            const auto learnedTo = proc_.state.midiMap.labelForPath (p);
+            m.addItem (id++, proc_.paramDisplayName (p) + (learnedTo.isNotEmpty() ? "   (" + learnedTo + ")" : juce::String()));
         }
         m.showMenuAsync (styledMenu (m, learn_), [this] (int r)
         {

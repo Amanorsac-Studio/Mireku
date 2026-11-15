@@ -2782,8 +2782,9 @@ int main (int argc, char** argv)
                     CHECK (page.learnText().contains ("move a knob"), "LEARN A CONTROL asks for a knob to be moved");
                     send (juce::MidiMessage::controllerEvent (1, 21, 90));
                     pumpMs (200);
-                    CHECK (proc.state.midiMap.pathForCc (21) == "host.superKnob" && page.rowCount() == 3,
+                    CHECK (proc.state.midiMap.pathFor (1, 21) == "host.superKnob" && page.rowCount() == 3,
                            "moving a knob assigns it, and the page shows the new row");
+                    CHECK (page.rowText (2).contains ("CC 21, channel 1"), "a learned row names the channel it was learned on");
                     CHECK (page.monitorText().startsWith ("CC 21"), "the page's monitor line shows what arrived");
                     savePng (page, "release112-midi-page.png");
                     page.pressClear (0);

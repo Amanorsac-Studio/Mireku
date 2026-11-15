@@ -196,4 +196,37 @@ static void testMidiMapFlags()
     CHECK (! n.isLearned (7) && n.size() == 1, "CLEAR removes one assignment");
     n.clear();
     CHECK (n.size() == 0 && ! n.isLearned (75), "CLEAR ALL empties it");
+
+    // A Yamaha MODX: every fader sends CC 7, each on its own channel.
+    std::printf ("\n== CONTROLLER MAP: the same controller on different channels ==\n");
+    MidiMap x;
+    x.set (1, 7, "host.slotVol0");
+    CHECK (x.pathFor (1, 7) == "host.slotVol0" && x.pathFor (5, 7) == "host.slotVol0",
+           "a controller learned once answers on every channel");
+    x.set (2, 7, "host.slotVol1");
+    x.set (3, 7, "host.slotVol2");
+    x.set (4, 7, "host.slotVol3");
+    CHECK (x.size() == 4 && x.pathFor (1, 7) == "host.slotVol0" && x.pathFor (2, 7) == "host.slotVol1"
+               && x.pathFor (3, 7) == "host.slotVol2" && x.pathFor (4, 7) == "host.slotVol3",
+           "four faders that all send CC 7 move four different controls");
+    CHECK (x.pathFor (9, 7).isEmpty() && x.isLearned (7), "a fader on a channel nobody learned moves nothing");
+    CHECK (x.ccForPath ("host.slotVol1") == 7 && x.labelForPath ("host.slotVol1") == "CC 7, channel 2",
+           "a control reports its controller number and its channel");
+    MidiMap y;
+    y.fromVar (x.toVar());
+    CHECK (y.size() == 4 && y.pathFor (3, 7) == "host.slotVol2", "channels survive the settings file");
+    x.set (2, 7, "host.macro1");
+    CHECK (x.size() == 4 && x.pathFor (2, 7) == "host.macro1" && x.keyForPath ("host.slotVol1") < 0,
+           "re-learning one fader replaces only that fader");
+
+    // a settings file written before channels were remembered: "7" means any channel
+    auto* old = new juce::DynamicObject();
+    old->setProperty ("7", "host.slotVol0");
+    MidiMap z;
+    z.fromVar (juce::var (old));
+    CHECK (z.pathFor (1, 7) == "host.slotVol0" && z.pathFor (8, 7) == "host.slotVol0" && z.labelForPath ("host.slotVol0") == "CC 7",
+           "an older assignment still answers on every channel");
+    z.set (2, 7, "host.slotVol1");
+    CHECK (z.pathFor (2, 7) == "host.slotVol1" && z.pathFor (1, 7) == "host.slotVol0" && z.pathFor (6, 7) == "host.slotVol0",
+           "a fader learned on its own channel wins there; the older assignment keeps the rest");
 }

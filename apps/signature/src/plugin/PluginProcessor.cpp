@@ -497,7 +497,7 @@ void JMSignatureProcessor::handleRoutedMessage (const juce::MidiMessage& m, juce
                 state.learn.lastIncomingCc.store (cc);
                 int s1, n1, s2, n2;
                 ccFifo.prepareToWrite (1, s1, n1, s2, n2);
-                if (n1 > 0) ccEvents[(size_t) s1] = { cc, val };
+                if (n1 > 0) ccEvents[(size_t) s1] = { cc, val, m.getChannel() };
                 ccFifo.finishedWrite (n1);
             }
         }
@@ -1197,14 +1197,15 @@ void JMSignatureProcessor::timerCallback()
     {
         if (state.learn.midiLearnArmed.load() && state.learn.pendingMidiPath.isNotEmpty())
         {
-            state.midiMap.set (e.cc, state.learn.pendingMidiPath);
+            state.midiMap.set (e.channel, e.cc, state.learn.pendingMidiPath);   // remembers the channel
             state.learn.pendingMidiPath.clear();
             state.learn.midiLearnArmed.store (false);
             stateChanged.sendChangeMessage();
             return;
         }
-        auto path = state.midiMap.pathForCc (e.cc);
-        if (path.isEmpty()) path = builtInControllerPath (e.cc);     // standard controllers, unless re-learned
+        auto path = state.midiMap.pathFor (e.channel, e.cc);
+        if (path.isEmpty() && ! state.midiMap.isLearned (e.cc))
+            path = builtInControllerPath (e.cc);                     // standard controllers, unless re-learned
         if (path.isNotEmpty())
             setParamNormalized (path, (float) e.value / 127.0f);
     };

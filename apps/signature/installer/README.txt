@@ -1,4 +1,4 @@
-MIREKU 1.2.1
+MIREKU 1.2.2
 Amanorsac Studio
 
 

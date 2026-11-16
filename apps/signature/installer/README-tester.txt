@@ -1,4 +1,4 @@
-MIREKU 1.2.1 - test build
+MIREKU 1.2.2 - test build
 Amanorsac Studio
 
 

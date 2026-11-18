@@ -445,3 +445,7 @@ footer nav { display: flex; gap: 18px; flex-wrap: wrap; }
 .faq details[open] summary::after { content: "\2212"; }
 .faq summary:hover { color: var(--gold-hi); }
 .faq p { margin: 0 0 20px; color: var(--muted); max-width: 68ch; }
+#gift form { margin-top: 14px; }
+#gift .code-field { margin-bottom: 12px; }
+#gift .small-note { margin: 10px 0 0; }
+#gift .msg:empty { display: none; }

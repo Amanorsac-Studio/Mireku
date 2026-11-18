@@ -219,6 +219,43 @@
   }
   $('buy').addEventListener('click', startBuy);
 
+  /* A code that gives MIREKU (made on the studio's Codes page). The database
+     decides everything: redeem_code checks the code, spends it and writes
+     the purchase, whose licence key is minted there. The page only asks. */
+  var GIFT_WORDS = {
+    not_a_code: 'That does not look like a code. Check it and try again.',
+    no_such_code: 'No code like that. Check for a typo: codes never contain the letter O or the digit 0.',
+    disabled: 'That code has been switched off. Ask whoever gave it to you.',
+    expired: 'That code has passed its date.',
+    all_used: 'That code has already been used.',
+    already_used_by_you: 'You have already used that code.',
+    already_owned: 'MIREKU is already on this account.',
+    wrong_app: 'That code is for a different product, not MIREKU.',
+    sign_in: 'Your session has ended. Sign in again, then redeem.'
+  };
+  $('f-gift').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var msg = $('gift-msg'), code = M.cleanCode($('gift-code').value);
+    if (code.length < 6) return say(msg, 'Type the code you were sent.', 'err');
+    if (/^MIRE-/.test(code)) return say(msg, 'That is a licence key, not a code. Paste it into MIREKU itself when it asks.', 'err');
+    $('gift-go').disabled = true;
+    say(msg, 'Checking…');
+    sb.rpc('redeem_code', { p_code: code, p_app: C.APP }).then(function (r) {
+      $('gift-go').disabled = false;
+      var d = r.data || {};
+      if (r.error) return say(msg, 'The code could not be checked just now. Try again shortly.', 'err');
+      if (!d.ok) return say(msg, GIFT_WORDS[d.error] || 'That code could not be used.', 'err');
+      if (d.kind === 'discount') {
+        // A money-off code: it belongs in the box above the Buy button.
+        $('code').value = code; $('code-row').hidden = false;
+        return say(msg, 'That code takes money off rather than giving MIREKU. It is now in the Discount code box: press Buy to use it.', 'ok');
+      }
+      say(msg, 'Done. MIREKU is on your account.', 'ok');
+      if (window.mirekuTrack) window.mirekuTrack('account_created', 'code redeemed');
+      load();
+    }, function () { $('gift-go').disabled = false; say(msg, 'The code could not be checked. Check your connection.', 'err'); });
+  });
+
   function owned(row) {
     if (params.get('purchased')) history.replaceState(null, '', '/account');
     $('notowned').hidden = true;

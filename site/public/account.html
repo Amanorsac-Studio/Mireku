@@ -107,6 +107,18 @@
       </div>
       <button class="btn" type="button" id="buy" disabled>Coming soon</button>
       <p class="msg" id="buy-msg" role="status"></p>
+      <details class="more" id="gift">
+        <summary>Have a code that gives you MIREKU?</summary>
+        <form id="f-gift" novalidate>
+          <div class="field code-field">
+            <label for="gift-code">Your code</label>
+            <input id="gift-code" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="40" placeholder="AMAN-XXXX-XXXX-XXXX">
+          </div>
+          <button class="btn ghost small" type="submit" id="gift-go">Redeem</button>
+          <p class="msg" id="gift-msg" role="status"></p>
+        </form>
+        <p class="small-note">This is the code you were sent, not a licence key. Redeeming it puts MIREKU on this account, and your licence key then appears here.</p>
+      </details>
     </section>
   </div>
 </main>
